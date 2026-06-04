@@ -1,0 +1,81 @@
+{
+  "name": "nika",
+  "displayName": "Nika",
+  "description": "DeepSeek language model provider for VS Code Copilot Chat, with Gemini-powered vision preprocessing",
+  "version": "0.1.0",
+  "publisher": "nika",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Chat",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onLanguageModelChatProvider:nika"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "nika",
+        "displayName": "Nika",
+        "managementCommand": "nika.manage"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nika.chooseProvider",
+        "title": "Nika: Choose Provider",
+        "category": "Nika"
+      },
+      {
+        "command": "nika.manage",
+        "title": "Manage Nika Models",
+        "category": "Nika",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "configuration": {
+      "title": "Nika",
+      "properties": {
+        "nika.selectedModel": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "enum": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro"
+          ],
+          "description": "The DeepSeek model to use for chat"
+        },
+        "nika.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "minimum": 1,
+          "maximum": 8192,
+          "description": "Maximum output tokens per response"
+        },
+        "nika.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Temperature for response generation"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/vscode": "^1.109.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
+  }
+}

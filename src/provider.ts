@@ -1,0 +1,217 @@
+import * as vscode from 'vscode';
+import { SecretStore } from './secrets.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature } from './config.js';
+import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
+import { streamDeepSeekChat } from './api/deepseek.js';
+import { preprocessVision } from './vision/pipeline.js';
+import type { DeepSeekRequest, DeepSeekTool } from './api/types.js';
+
+/**
+ * NikaChatProvider — a VS Code LanguageModelChatProvider for DeepSeek.
+ *
+ * Registered via vscode.lm.registerLanguageModelChatProvider('nika', provider).
+ * Models appear in Copilot Chat's model picker dropdown.
+ */
+export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation> {
+    private readonly secrets: SecretStore;
+
+    constructor(context: vscode.ExtensionContext) {
+        this.secrets = new SecretStore(context.secrets);
+    }
+
+    /**
+     * Returns the list of available models. Called by VS Code when the model picker opens.
+     * When `silent: true` and no API key is configured, returns an empty array
+     * (to avoid prompting during startup).
+     */
+    async provideLanguageModelChatInformation(
+        options: { silent: boolean },
+        _token: vscode.CancellationToken
+    ): Promise<vscode.LanguageModelChatInformation[]> {
+        const apiKey = await this.secrets.getDeepSeekApiKey();
+
+        if (!apiKey) {
+            if (!options.silent) {
+                vscode.window.showWarningMessage(
+                    'Nika: DeepSeek API key not configured. The Nika models will not appear in the model picker until the key is set.'
+                );
+            }
+            return [];
+        }
+
+        return DEEPSEEK_MODELS.map(m => ({
+            id: m.id,
+            name: m.name,
+            family: m.family,
+            version: m.version,
+            maxInputTokens: m.maxInputTokens,
+            maxOutputTokens: m.maxOutputTokens,
+            capabilities: m.capabilities,
+            detail: m.detail,
+        })) as vscode.LanguageModelChatInformation[];
+    }
+
+    /**
+     * Handle a chat request. This is the core method — it:
+     * 1. Gets the API key
+     * 2. Transforms VS Code messages to DeepSeek format
+     * 3. Preprocesses any images via Gemini vision
+     * 4. Streams the response back via `progress.report()`
+     */
+    async provideLanguageModelChatResponse(
+        model: vscode.LanguageModelChatInformation,
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+        options: vscode.ProvideLanguageModelChatResponseOptions,
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+        token: vscode.CancellationToken
+    ): Promise<void> {
+        const apiKey = await this.secrets.getDeepSeekApiKey();
+        if (!apiKey) {
+            throw new Error(
+                'DeepSeek API key not configured. Run "Nika: Input Deepseek userToken" from the command palette (F1).'
+            );
+        }
+
+        // Check for cancellation
+        if (token.isCancellationRequested) return;
+
+        // Transform messages to DeepSeek format
+        let deepseekMessages = vscodeMessagesToDeepSeek(messages);
+
+        // Vision preprocessing — if images are present, send to Gemini
+        if (hasImageParts(messages)) {
+            const result = await preprocessVision(messages, deepseekMessages, this.secrets, progress, token);
+            deepseekMessages = result.messages;
+
+            if (result.errors.length > 0 && result.errors.length === result.errors.length) {
+                // All images failed — warn and proceed with text-only
+                progress.report(
+                    new vscode.LanguageModelTextPart(
+                        `\n\n⚠️ Unable to process images: ${result.errors.join('; ')}\n\n`
+                    )
+                );
+            }
+        }
+
+        if (token.isCancellationRequested) return;
+
+        // Build the API request
+        const config = getConfig();
+        const modelId = model.id ?? config.get<string>('selectedModel') ?? 'deepseek-v4-flash';
+
+        const request: DeepSeekRequest = {
+            model: modelId,
+            messages: deepseekMessages,
+            temperature: getTemperature(),
+            max_tokens: getMaxTokens(),
+            stream: true,
+            stream_options: { include_usage: true },
+        };
+
+        // Add tools if provided in options
+        if (options.tools && options.tools.length > 0) {
+            request.tools = options.tools.map(mapTool);
+            request.tool_choice = 'auto';
+        }
+
+        // Create an AbortController for cancellation
+        const abortController = new AbortController();
+        const cancelDisposable = token.onCancellationRequested(() => {
+            abortController.abort();
+        });
+
+        try {
+            await streamDeepSeekChat(
+                request,
+                apiKey,
+                abortController.signal,
+                // onText — report each chunk to VS Code
+                (text: string) => {
+                    progress.report(new vscode.LanguageModelTextPart(text));
+                },
+                // onToolCalls — report tool calls
+                (toolCalls) => {
+                    for (const tc of toolCalls) {
+                        progress.report(
+                            new vscode.LanguageModelToolCallPart(tc.id, tc.name, tc.arguments)
+                        );
+                    }
+                },
+                // onComplete
+                (_usage) => {
+                    // Token usage could be logged or shown, but VS Code handles this
+                }
+            );
+        } catch (err) {
+            if (abortController.signal.aborted) {
+                // Cancelled by user — silently stop
+                return;
+            }
+            // Report error to the chat
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
+            throw err;
+        } finally {
+            cancelDisposable.dispose();
+        }
+    }
+
+    /**
+     * Rough token count estimation.
+     * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
+     */
+    async provideTokenCount(
+        _model: vscode.LanguageModelChatInformation,
+        text: string | vscode.LanguageModelChatRequestMessage,
+        _token: vscode.CancellationToken
+    ): Promise<number> {
+        if (typeof text === 'string') {
+            return Math.ceil(text.length / 4);
+        }
+
+        const content = typeof text.content === 'string'
+            ? text.content
+            : text.content
+                .map(part => {
+                    if (part instanceof vscode.LanguageModelTextPart) return part.value;
+                    if (part instanceof vscode.LanguageModelDataPart) return `[image:${part.mimeType}]`;
+                    return '';
+                })
+                .join('');
+
+        return Math.ceil(content.length / 4);
+    }
+}
+
+/**
+ * Map a VS Code LanguageModelChatTool to DeepSeek tool format.
+ * DeepSeek requires every tool parameter schema to be a valid JSON Schema
+ * with `type: "object"`. VS Code tools may have null or bare schemas,
+ * so we sanitize here.
+ */
+const FALLBACK_SCHEMA = { type: 'object' as const, properties: {} };
+
+function mapTool(tool: vscode.LanguageModelChatTool): DeepSeekTool {
+    const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
+    const parameters = sanitizeSchema(rawSchema);
+
+    return {
+        type: 'function',
+        function: {
+            name: tool.name,
+            description: tool.description ?? '',
+            parameters,
+        },
+    };
+}
+
+function sanitizeSchema(schema: Record<string, unknown> | null | undefined): Record<string, unknown> {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return FALLBACK_SCHEMA;
+    }
+    // Ensure it has `type: "object"` at minimum
+    if (!schema.type || schema.type !== 'object') {
+        return { ...schema, type: 'object' };
+    }
+    return schema;
+}
