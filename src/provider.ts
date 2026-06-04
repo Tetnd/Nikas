@@ -55,7 +55,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
      * Handle a chat request. This is the core method — it:
      * 1. Gets the API key
      * 2. Transforms VS Code messages to DeepSeek format
-     * 3. Preprocesses any images via Gemini vision
+     * 3. Preprocesses any images via the configured vision model (Gemma 4 / Gemini)
      * 4. Streams the response back via `progress.report()`
      */
     async provideLanguageModelChatResponse(

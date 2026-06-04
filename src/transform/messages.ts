@@ -90,6 +90,8 @@ function buildAssistantToolCallParts(
 /**
  * After vision preprocessing, inject text descriptions back into messages.
  * Replaces image parts with text descriptions.
+ * Messages without descriptions that still contain image_url parts are stripped
+ * (replaced with a placeholder) so DeepSeek never sees unsupported image_url parts.
  */
 export function injectVisionDescriptions(
     messages: DeepSeekMessage[],
@@ -97,15 +99,51 @@ export function injectVisionDescriptions(
 ): DeepSeekMessage[] {
     return messages.map((msg, i) => {
         const desc = descriptions.get(i);
-        if (!desc) return msg;
+        if (desc) {
+            // Inject the description
+            const content = typeof msg.content === 'string' ? msg.content : '';
+            const prefix = content ? content + '\n\n' : '';
+            return {
+                ...msg,
+                content: `${prefix}[Image description provided by vision model: ${desc}]`,
+            };
+        }
 
-        const content = typeof msg.content === 'string' ? msg.content : '';
-        const prefix = content ? content + '\n\n' : '';
-        return {
-            ...msg,
-            content: `${prefix}[Image description provided by vision model: ${desc}]`,
-        };
+        // No description for this message — strip any lingering image_url parts
+        if (hasImageContent(msg)) {
+            return stripImageParts(msg);
+        }
+
+        return msg;
     });
+}
+
+/**
+ * Check if a DeepSeek message contains image_url content parts.
+ */
+function hasImageContent(msg: DeepSeekMessage): boolean {
+    if (!msg.content || typeof msg.content === 'string') return false;
+    return msg.content.some(p => p.type === 'image_url');
+}
+
+/**
+ * Strip image_url parts from a message, leaving only text.
+ * Adds a placeholder so the conversation flow isn't broken.
+ */
+function stripImageParts(msg: DeepSeekMessage): DeepSeekMessage {
+    if (!msg.content || typeof msg.content === 'string') return msg;
+
+    const textParts = msg.content
+        .filter(p => p.type === 'text')
+        .map(p => (p as { type: 'text'; text: string }).text);
+
+    const textContent = textParts.join('\n');
+    const placeholder = '[An image was sent but could not be processed by the vision model]';
+
+    return {
+        ...msg,
+        content: textContent ? `${textContent}\n\n${placeholder}` : placeholder,
+    };
 }
 
 /**

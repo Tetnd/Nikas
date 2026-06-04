@@ -1,3 +1,5 @@
+import type { VisionResult } from './types.js';
+
 /**
  * Gemini vision API — free tier image description.
  *
@@ -42,11 +44,7 @@ interface GeminiCandidate {
     finishReason?: string;
 }
 
-export interface VisionResult {
-    description: string;
-    success: boolean;
-    error?: string;
-}
+export type { VisionResult };
 
 /**
  * Describe a single image using Gemini 2.5 Flash (free tier).

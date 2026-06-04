@@ -1,8 +1,8 @@
 {
   "name": "nika",
   "displayName": "Nika",
-  "description": "DeepSeek language model provider for VS Code Copilot Chat, with Gemini-powered vision preprocessing",
-  "version": "0.1.0",
+  "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
+  "version": "0.2.0",
   "publisher": "nika",
   "license": "MIT",
   "engines": {
@@ -28,6 +28,11 @@
       {
         "command": "nika.chooseProvider",
         "title": "Nika: Choose Provider",
+        "category": "Nika"
+      },
+      {
+        "command": "nika.chooseVisionModel",
+        "title": "Nika: Choose Vision Model",
         "category": "Nika"
       },
       {
@@ -62,6 +67,20 @@
           "minimum": 0,
           "maximum": 2,
           "description": "Temperature for response generation"
+        },
+        "nika.visionModel": {
+          "type": "string",
+          "default": "ollama-gemma4",
+          "enum": [
+            "ollama-gemma4",
+            "gemini"
+          ],
+          "description": "Vision model for image preprocessing. Gemma 4 runs locally via Ollama (no API key needed). Gemini uses Google AI Studio (free tier, needs API key)."
+        },
+        "nika.ollamaBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama server URL (used when vision model is Gemma 4)"
         }
       }
     }

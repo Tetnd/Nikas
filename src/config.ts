@@ -11,6 +11,23 @@ export const SECRET_KEYS = {
     geminiApiKey: 'nika.gemini.apiKey',
 } as const;
 
+export const VISION_MODELS = [
+    {
+        id: 'ollama-gemma4',
+        name: 'Gemma 4 (Ollama)',
+        description: 'Local Gemma 4 vision model via Ollama',
+        requiresApiKey: false,
+    },
+    {
+        id: 'gemini',
+        name: 'Gemini 2.5 Flash',
+        description: 'Google Gemini 2.5 Flash (free tier)',
+        requiresApiKey: true,
+    },
+] as const;
+
+export type VisionModelId = (typeof VISION_MODELS)[number]['id'];
+
 export const DEEPSEEK_MODELS = [
     {
         id: 'deepseek-v4-flash',
@@ -48,4 +65,12 @@ export function getMaxTokens(): number {
 
 export function getTemperature(): number {
     return getConfig().get<number>('temperature') ?? 0.7;
+}
+
+export function getVisionModel(): VisionModelId {
+    return (getConfig().get<string>('visionModel') as VisionModelId) ?? 'ollama-gemma4';
+}
+
+export function getOllamaBaseUrl(): string {
+    return getConfig().get<string>('ollamaBaseUrl') ?? 'http://localhost:11434';
 }

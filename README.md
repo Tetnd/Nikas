@@ -1,35 +1,37 @@
 # Nika
 
-**DeepSeek language model provider for VS Code Copilot Chat**, with Gemini-powered vision preprocessing.
+**DeepSeek language model provider for VS Code Copilot Chat**, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini).
 
 Adds DeepSeek V4 models to Copilot Chat's model picker. Bring your own API key — no GitHub Copilot subscription required.
 
 ## Features
 
 - **DeepSeek V4 Flash & Pro** — fast and powerful models in the Copilot Chat model picker
-- **Gemini-powered vision** — send images in chat and they're automatically described by Gemini 2.5 Flash (free tier), then forwarded to DeepSeek
+- **Vision preprocessing** — send images in chat and they're automatically described by Gemma 4 (local, via Ollama) or Gemini 2.5 Flash (free tier), then forwarded to DeepSeek
 - **Streaming responses** — real-time token-by-token output
 - **Tool calling** — full support for VS Code's built-in tools (read files, run terminal commands, search, etc.)
 - **Secure key storage** — API keys stored in your OS keychain, never in plaintext settings
+- **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
 
 ### 1. Install
 
 ```bash
-code --install-extension nika-0.1.0.vsix
+code --install-extension nika-0.2.0.vsix
 ```
 
 Or download from [Releases](https://github.com/alive2/nika/releases).
 
 ### 2. Configure
 
-You need two API keys:
+You need a DeepSeek API key. For vision/image support, choose one vision provider:
 
-| Key | Where to get it | Purpose |
+| Key / Setup | Where to get it | Purpose |
 |---|---|---|
 | DeepSeek API key | [platform.deepseek.com](https://platform.deepseek.com/) | Chat responses |
-| Gemini API key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free) | Vision/image preprocessing |
+| Gemma 4 via Ollama | `ollama pull gemma4:31b` | Vision preprocessing (local, default) |
+| Gemini API key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free) | Vision preprocessing (cloud, alternative) |
 
 Store the DeepSeek key:
 
@@ -38,38 +40,53 @@ Store the DeepSeek key:
 "nika.deepseekApiKey": "sk-..."
 ```
 
-Set the Gemini key via the command palette:
+#### Set up Gemma 4 (default)
+
+Install Ollama and pull the model — no API key needed:
+
+```bash
+# Install Ollama from https://ollama.com, then:
+ollama pull gemma4:31b
+```
+
+Nika connects to Ollama at `http://localhost:11434` automatically. Customize via `nika.ollamaBaseUrl` if needed.
+
+#### Set up Gemini (alternative)
+
+Only needed if you switch vision models to Gemini:
 
 1. `F1` → `Manage Nika Models` → `Input Gemini API Key`
 2. Paste your Gemini API key (`AIza...`)
+3. `F1` → `Manage Nika Models` → `Choose Vision Model` → pick **Gemini 2.5 Flash**
 
-### 3. Select a model
+### 3. Select a chat model
 
 1. Open Copilot Chat (`Ctrl+Shift+I`)
 2. Click the model picker dropdown at the top
 3. Select **DeepSeek V4 Flash** or **DeepSeek V4 Pro**
 4. Start chatting
 
-### 4. Enable vision (optional)
+### 4. Switch vision model
 
-To send images to DeepSeek:
-
-1. `F1` → `Manage Nika Models` → `Input Gemini API Key`
-2. Get a free key at [Google AI Studio](https://aistudio.google.com/apikey)
-3. Paste it in — images are now automatically described before reaching DeepSeek
+1. `F1` → `Manage Nika Models` → `Choose Vision Model`
+2. Pick **Gemma 4 (Ollama)** (local, default) or **Gemini 2.5 Flash** (cloud, needs key)
+3. Images are now automatically described before reaching DeepSeek
 
 ## Commands
 
 | Command | Description |
 |---|---|
 | `Nika: Choose Provider` | Select which DeepSeek model to use |
-| `Manage Nika Models` | Manage API keys and model selection |
+| `Nika: Choose Vision Model` | Select which vision model preprocesses images (Gemma 4 or Gemini) |
+| `Manage Nika Models` | Manage API keys, model selection, and vision provider |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `nika.selectedModel` | `deepseek-v4-flash` | Active model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
+| `nika.selectedModel` | `deepseek-v4-flash` | Active chat model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
+| `nika.visionModel` | `ollama-gemma4` | Vision model for image preprocessing (`ollama-gemma4` or `gemini`) |
+| `nika.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (used with Gemma 4 vision) |
 | `nika.maxTokens` | `8192` | Maximum output tokens per response |
 | `nika.temperature` | `0.7` | Response creativity (0–2) |
 
@@ -79,11 +96,12 @@ To send images to DeepSeek:
 You send a message (text + optional image)
         │
         ▼
-┌──────────────────────────┐
-│  Has images?             │
-│  YES → Gemini describes  │
-│  NO  → skip              │
-└──────────┬───────────────┘
+┌──────────────────────────────┐
+│  Has images?                 │
+│  YES → Vision model describes│
+│        (Gemma 4 or Gemini)   │
+│  NO  → skip                  │
+└──────────┬───────────────────┘
            │
            ▼
 ┌──────────────────────────┐
@@ -101,7 +119,7 @@ You send a message (text + optional image)
 
 - VS Code 1.109+
 - DeepSeek API key ([get one here](https://platform.deepseek.com/))
-- Gemini API key for vision ([free tier](https://aistudio.google.com/apikey))
+- For vision: [Ollama](https://ollama.com) with `gemma4:31b` (default, local) OR Gemini API key ([free tier](https://aistudio.google.com/apikey))
 
 ## Development
 

@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
+import { VISION_MODELS, getConfig } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
  *
  * Provides:
  * - DeepSeek models in Copilot Chat's model picker (V4 Flash, V4 Pro)
- * - Gemini-powered vision preprocessing for images
+ * - Configurable vision preprocessing for images (Gemma 4 / Gemini)
  * - Commands: Nika: Choose Provider, Nika: Manage
  */
 export function activate(context: vscode.ExtensionContext) {
@@ -21,12 +22,17 @@ export function activate(context: vscode.ExtensionContext) {
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nika.chooseProvider', () => chooseProvider()),
+        vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
                 [
                     {
                         label: '$(list-tree) Choose Provider',
                         description: 'Select which DeepSeek model to use',
+                    },
+                    {
+                        label: '$(eye) Choose Vision Model',
+                        description: 'Select which vision model preprocesses images',
                     },
                     {
                         label: '$(key) Input Gemini API Key',
@@ -44,6 +50,9 @@ export function activate(context: vscode.ExtensionContext) {
                     case '$(list-tree) Choose Provider':
                         vscode.commands.executeCommand('nika.chooseProvider');
                         break;
+                    case '$(eye) Choose Vision Model':
+                        vscode.commands.executeCommand('nika.chooseVisionModel');
+                        break;
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
                         break;
@@ -56,6 +65,35 @@ export function activate(context: vscode.ExtensionContext) {
             });
         })
     );
+}
+
+/**
+ * Vision model picker — lets user choose between Gemma 4 and Gemini.
+ */
+async function chooseVisionModel(): Promise<void> {
+    const config = getConfig();
+    const current = config.get<string>('visionModel') ?? 'ollama-gemma4';
+
+    const items: vscode.QuickPickItem[] = VISION_MODELS.map(m => ({
+        label: m.id === current ? `$(check) ${m.name}` : `$(blank) ${m.name}`,
+        description: m.description,
+        detail: m.requiresApiKey ? 'Requires Gemini API key' : 'Runs locally via Ollama — no API key needed',
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Choose Vision Model',
+        placeHolder: 'Select a vision model for image preprocessing',
+        matchOnDescription: true,
+    });
+
+    if (!selected) return;
+
+    const modelId = VISION_MODELS.find(m => selected.label.endsWith(m.name))?.id;
+    if (modelId) {
+        await config.update('visionModel', modelId, vscode.ConfigurationTarget.Global);
+        const modelName = VISION_MODELS.find(m => m.id === modelId)?.name ?? modelId;
+        vscode.window.showInformationMessage(`Nika: Selected ${modelName} for vision`);
+    }
 }
 
 /**
