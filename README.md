@@ -49,7 +49,12 @@ Install Ollama and pull the model — no API key needed:
 ollama pull gemma4:31b
 ```
 
-Nika connects to Ollama at `http://localhost:11434` automatically. Customize via `nika.ollamaBaseUrl` if needed.
+Nika connects to Ollama at `http://localhost:11434` by default. To use a remote Ollama instance:
+
+- `F1` → `Manage Nika Models` → `Set Ollama Host`, or
+- `F1` → `Nika: Set Ollama Host`
+
+Enter the remote URL (e.g., `http://192.168.1.100:11434`).
 
 #### Set up Gemini (alternative)
 
@@ -78,7 +83,8 @@ Only needed if you switch vision models to Gemini:
 |---|---|
 | `Nika: Choose Provider` | Select which DeepSeek model to use |
 | `Nika: Choose Vision Model` | Select which vision model preprocesses images (Gemma 4 or Gemini) |
-| `Manage Nika Models` | Manage API keys, model selection, and vision provider |
+| `Nika: Set Ollama Host` | Configure Ollama server URL (supports remote instances) |
+| `Manage Nika Models` | Manage API keys, model selection, vision provider, and Ollama host |
 
 ## Settings
 
@@ -86,7 +92,7 @@ Only needed if you switch vision models to Gemini:
 |---|---|---|
 | `nika.selectedModel` | `deepseek-v4-flash` | Active chat model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
 | `nika.visionModel` | `ollama-gemma4` | Vision model for image preprocessing (`ollama-gemma4` or `gemini`) |
-| `nika.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (used with Gemma 4 vision) |
+| `nika.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances, e.g. `http://192.168.1.100:11434`) |
 | `nika.maxTokens` | `8192` | Maximum output tokens per response |
 | `nika.temperature` | `0.7` | Response creativity (0–2) |
 

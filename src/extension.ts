@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
-import { VISION_MODELS, getConfig } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('nika.chooseProvider', () => chooseProvider()),
         vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
+        vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
                 [
@@ -37,6 +38,10 @@ export function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(key) Input Gemini API Key',
                         description: 'Set Gemini API key for vision/image support',
+                    },
+                    {
+                        label: '$(server) Set Ollama Host',
+                        description: 'Change Ollama server URL (for Gemma 4 vision)',
                     },
                     {
                         label: '$(link-external) Get Gemini API Key',
@@ -56,6 +61,9 @@ export function activate(context: vscode.ExtensionContext) {
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
                         break;
+                    case '$(server) Set Ollama Host':
+                        setOllamaHost();
+                        break;
                     case '$(link-external) Get Gemini API Key':
                         vscode.env.openExternal(
                             vscode.Uri.parse('https://aistudio.google.com/apikey')
@@ -65,6 +73,38 @@ export function activate(context: vscode.ExtensionContext) {
             });
         })
     );
+}
+
+/**
+ * Ollama host setter — lets user configure remote Ollama instances.
+ */
+async function setOllamaHost(): Promise<void> {
+    const config = getConfig();
+    const current = getOllamaBaseUrl();
+
+    const url = await vscode.window.showInputBox({
+        title: 'Nika: Ollama Host URL',
+        prompt: 'Enter the Ollama server URL (e.g., http://192.168.1.100:11434)',
+        value: current,
+        placeHolder: 'http://localhost:11434',
+        ignoreFocusOut: true,
+        validateInput: (value) => {
+            try {
+                const u = new URL(value);
+                if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+                    return 'URL must start with http:// or https://';
+                }
+                return null;
+            } catch {
+                return 'Invalid URL format';
+            }
+        },
+    });
+
+    if (!url) return;
+
+    await config.update('ollamaBaseUrl', url.trim().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(`Nika: Ollama host set to ${url.trim().replace(/\/$/, '')}`);
 }
 
 /**

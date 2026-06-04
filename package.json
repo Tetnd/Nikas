@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "nika",
   "license": "MIT",
   "repository": {
@@ -37,6 +37,11 @@
       {
         "command": "nika.chooseVisionModel",
         "title": "Nika: Choose Vision Model",
+        "category": "Nika"
+      },
+      {
+        "command": "nika.setOllamaHost",
+        "title": "Nika: Set Ollama Host",
         "category": "Nika"
       },
       {
@@ -84,7 +89,7 @@
         "nika.ollamaBaseUrl": {
           "type": "string",
           "default": "http://localhost:11434",
-          "description": "Ollama server URL (used when vision model is Gemma 4)"
+          "description": "Ollama server URL. Points to localhost by default, but can be any remote Ollama instance (e.g., http://192.168.1.100:11434). Used when vision model is Gemma 4."
         }
       }
     }
