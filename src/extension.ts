@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -38,6 +38,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
+        vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
                 [
@@ -52,6 +53,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(eye) Choose Vision Model',
                         description: 'Select which vision model preprocesses images',
+                    },
+                    {
+                        label: '$(symbol-parameter) Thinking Effort',
+                        description: 'Set reasoning depth for thinking-capable models',
                     },
                     {
                         label: '$(key) Input Gemini API Key',
@@ -82,6 +87,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(eye) Choose Vision Model':
                         vscode.commands.executeCommand('nika.chooseVisionModel');
+                        break;
+                    case '$(symbol-parameter) Thinking Effort':
+                        vscode.commands.executeCommand('nika.chooseThinkingEffort');
                         break;
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
@@ -210,6 +218,33 @@ async function inputGeminiToken(context: vscode.ExtensionContext): Promise<void>
     vscode.window.showInformationMessage(
         'Nika: Gemini API key saved! Image/vision support is now enabled.'
     );
+}
+
+/**
+ * Thinking effort picker — controls reasoning depth for models that support it.
+ */
+async function chooseThinkingEffort(): Promise<void> {
+    const config = getConfig();
+    const current = config.get<string>('thinkingEffort') ?? 'off';
+
+    const items: vscode.QuickPickItem[] = THINKING_EFFORTS.map(e => ({
+        label: e.id === current ? `$(check) ${e.label}` : `$(blank) ${e.label}`,
+        description: e.description,
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Thinking Effort',
+        placeHolder: 'Select reasoning depth (only applies to thinking-capable models)',
+        matchOnDescription: true,
+    });
+
+    if (!selected) return;
+
+    const effort = THINKING_EFFORTS.find(e => selected.label.endsWith(e.label))?.id;
+    if (effort) {
+        await config.update('thinkingEffort', effort, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`Nika: Thinking effort set to ${effort}`);
+    }
 }
 
 export function deactivate() {

@@ -74,3 +74,16 @@ export function getVisionModel(): VisionModelId {
 export function getOllamaBaseUrl(): string {
     return getConfig().get<string>('ollamaBaseUrl') ?? 'http://localhost:11434';
 }
+
+export type ThinkingEffort = 'off' | 'low' | 'medium' | 'high';
+
+export const THINKING_EFFORTS: { id: ThinkingEffort; label: string; description: string }[] = [
+    { id: 'off', label: 'Off', description: 'No thinking mode — fastest responses' },
+    { id: 'low', label: 'Low', description: 'Light thinking (1K token budget)' },
+    { id: 'medium', label: 'Medium', description: 'Moderate thinking (4K token budget)' },
+    { id: 'high', label: 'High', description: 'Deep thinking (8K token budget)' },
+];
+
+export function getThinkingEffort(): ThinkingEffort {
+    return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';
+}

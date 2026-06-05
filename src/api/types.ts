@@ -46,6 +46,10 @@ export interface DeepSeekRequest {
     stop?: string[];
     tools?: DeepSeekTool[];
     tool_choice?: 'none' | 'auto' | 'required';
+    thinking?: {
+        type: 'enabled' | 'disabled';
+    };
+    thinking_tokens?: number;
     stream_options?: {
         include_usage: boolean;
     };

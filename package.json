@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -32,22 +32,27 @@
     "commands": [
       {
         "command": "nika.chooseProvider",
-        "title": "Nika: Choose Provider",
+        "title": "Choose Provider",
         "category": "Nika"
       },
       {
         "command": "nika.chooseVisionModel",
-        "title": "Nika: Choose Vision Model",
+        "title": "Choose Vision Model",
         "category": "Nika"
       },
       {
         "command": "nika.setOllamaHost",
-        "title": "Nika: Set Ollama Host",
+        "title": "Set Ollama Host",
         "category": "Nika"
       },
       {
         "command": "nika.inputDeepseekToken",
-        "title": "Nika: Input DeepSeek API Key",
+        "title": "Input DeepSeek API Key",
+        "category": "Nika"
+      },
+      {
+        "command": "nika.chooseThinkingEffort",
+        "title": "Thinking Effort",
         "category": "Nika"
       },
       {
@@ -82,6 +87,23 @@
           "minimum": 0,
           "maximum": 2,
           "description": "Temperature for response generation"
+        },
+        "nika.thinkingEffort": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "enumDescriptions": [
+            "No thinking mode — fastest responses",
+            "Light thinking (1K token budget)",
+            "Moderate thinking (4K token budget)",
+            "Deep thinking (8K token budget)"
+          ],
+          "description": "Thinking/reasoning effort level. Only applicable when using a model that supports thinking (e.g., DeepSeek V4 Pro). Higher effort produces more thorough reasoning but slower responses."
         },
         "nika.visionModel": {
           "type": "string",

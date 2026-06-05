@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, getThinkingEffort, ThinkingEffort } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
@@ -104,12 +104,16 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const config = getConfig();
         const modelId = model.id ?? config.get<string>('selectedModel') ?? 'deepseek-v4-flash';
 
+        const thinkingEffort = getThinkingEffort();
+        const thinkingParams = buildThinkingParams(thinkingEffort);
+
         const request: DeepSeekRequest = {
             model: modelId,
             messages: deepseekMessages,
             temperature: getTemperature(),
             max_tokens: getMaxTokens(),
             stream: true,
+            ...thinkingParams,
             stream_options: { include_usage: true },
         };
 
@@ -219,4 +223,34 @@ function sanitizeSchema(schema: Record<string, unknown> | null | undefined): Rec
         return { ...schema, type: 'object' };
     }
     return schema;
+}
+
+/**
+ * Map thinking effort level to DeepSeek API thinking parameters.
+ *
+ * Effort levels:
+ *   off    → thinking disabled (default)
+ *   low    → thinking enabled, 1024 token budget
+ *   medium → thinking enabled, 4096 token budget
+ *   high   → thinking enabled, 8192 token budget
+ */
+const THINKING_TOKEN_BUDGET: Record<ThinkingEffort, number | null> = {
+    off: null,
+    low: 1024,
+    medium: 4096,
+    high: 8192,
+};
+
+function buildThinkingParams(effort: ThinkingEffort): Partial<DeepSeekRequest> {
+    if (effort === 'off') {
+        return {
+            thinking: { type: 'disabled' },
+        };
+    }
+
+    const thinkingTokens = THINKING_TOKEN_BUDGET[effort];
+    return {
+        thinking: { type: 'enabled' },
+        ...(thinkingTokens !== null ? { thinking_tokens: thinkingTokens } : {}),
+    };
 }
