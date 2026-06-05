@@ -21,7 +21,13 @@ export const VISION_MODELS = [
     {
         id: 'gemini',
         name: 'Gemini 2.5 Flash',
-        description: 'Google Gemini 2.5 Flash (free tier)',
+        description: 'Google Gemini 2.5 Flash (free tier) — best price-performance',
+        requiresApiKey: true,
+    },
+    {
+        id: 'gemini-flash-lite',
+        name: 'Gemini 2.5 Flash-Lite',
+        description: 'Google Gemini 2.5 Flash-Lite (free tier) — fastest, most cost-efficient',
         requiresApiKey: true,
     },
 ] as const;

@@ -1,15 +1,14 @@
 import type { VisionResult } from './types.js';
 
 /**
- * Gemini vision API — free tier image description.
+ * Gemini vision API — image description using Google AI Studio.
  *
- * Uses Google AI Studio's free tier (Gemini 2.5 Flash).
  * API key is obtained from: https://aistudio.google.com/apikey
  *
- * Endpoint: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+ * Supports multiple Gemini models via the modelName parameter.
  */
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 interface GeminiRequest {
     contents: GeminiContent[];
@@ -47,12 +46,19 @@ interface GeminiCandidate {
 export type { VisionResult };
 
 /**
- * Describe a single image using Gemini 2.5 Flash (free tier).
+ * Describe a single image using a Gemini model.
+ *
+ * @param imageData Raw image bytes
+ * @param mimeType Image MIME type (e.g. 'image/png')
+ * @param apiKey Google AI Studio API key
+ * @param modelName Gemini model name (default: 'gemini-2.5-flash')
+ * @param prompt Optional custom prompt
  */
 export async function describeImage(
     imageData: Uint8Array,
     mimeType: string,
     apiKey: string,
+    modelName: string = 'gemini-2.5-flash',
     prompt?: string
 ): Promise<VisionResult> {
     const base64Data = Buffer.from(imageData).toString('base64');
@@ -80,7 +86,7 @@ export async function describeImage(
         },
     };
 
-    const url = `${GEMINI_API_BASE}?key=${encodeURIComponent(apiKey)}`;
+    const url = `${GEMINI_API_BASE}/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     try {
         const response = await fetch(url, {

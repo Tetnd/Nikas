@@ -47,8 +47,11 @@ export async function preprocessVision(
     let describeFn: (data: Uint8Array, mimeType: string, credential: string, prompt?: string) => Promise<import('./types.js').VisionResult>;
     let credential: string;
 
-    if (visionModelId === 'gemini') {
-        describeFn = describeWithGemini;
+    if (visionModelId === 'gemini' || visionModelId === 'gemini-flash-lite') {
+        // Both Gemini variants use the same API key but different model endpoints
+        const geminiModel = visionModelId === 'gemini-flash-lite' ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash';
+        describeFn = (data, mimeType, apiKey, prompt) =>
+            describeWithGemini(data, mimeType, apiKey, geminiModel, prompt);
         const key = await secrets.getGeminiApiKey();
         if (!key) {
             return {
