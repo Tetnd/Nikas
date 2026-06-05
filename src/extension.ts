@@ -11,7 +11,7 @@ import { VISION_MODELS, getConfig, getOllamaBaseUrl } from './config.js';
  * - Configurable vision preprocessing for images (Gemma 4 / Gemini)
  * - Commands: Nika: Choose Provider, Nika: Manage
  */
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     const provider = new NikaChatProvider(context);
 
     // Register the language model chat provider — models appear in Copilot picker
@@ -19,14 +19,32 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.lm.registerLanguageModelChatProvider('nika', provider)
     );
 
+    // Check if DeepSeek API key is configured on startup
+    const apiKey = await provider.getApiKey();
+    if (!apiKey) {
+        const setKeyNow = 'Set API Key';
+        const response = await vscode.window.showWarningMessage(
+            'Nika: DeepSeek API key not configured. The Nika models will not appear in the Copilot Chat model picker until you set your API key.',
+            setKeyNow
+        );
+        if (response === setKeyNow) {
+            inputDeepseekToken(context);
+        }
+    }
+
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nika.chooseProvider', () => chooseProvider()),
         vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
+        vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
                 [
+                    {
+                        label: '$(key) Input DeepSeek API Key',
+                        description: 'Set your DeepSeek API key (required for Nika to work)',
+                    },
                     {
                         label: '$(list-tree) Choose Provider',
                         description: 'Select which DeepSeek model to use',
@@ -44,6 +62,10 @@ export function activate(context: vscode.ExtensionContext) {
                         description: 'Change Ollama server URL (for Gemma 4 vision)',
                     },
                     {
+                        label: '$(link-external) Get DeepSeek API Key',
+                        description: 'Open DeepSeek Platform to create an API key',
+                    },
+                    {
                         label: '$(link-external) Get Gemini API Key',
                         description: 'Open Google AI Studio to get a free Gemini API key',
                     },
@@ -52,6 +74,9 @@ export function activate(context: vscode.ExtensionContext) {
             ).then(selection => {
                 if (!selection) return;
                 switch (selection.label) {
+                    case '$(key) Input DeepSeek API Key':
+                        inputDeepseekToken(context);
+                        break;
                     case '$(list-tree) Choose Provider':
                         vscode.commands.executeCommand('nika.chooseProvider');
                         break;
@@ -64,6 +89,11 @@ export function activate(context: vscode.ExtensionContext) {
                     case '$(server) Set Ollama Host':
                         setOllamaHost();
                         break;
+                    case '$(link-external) Get DeepSeek API Key':
+                        vscode.env.openExternal(
+                            vscode.Uri.parse('https://platform.deepseek.com/api_keys')
+                        );
+                        break;
                     case '$(link-external) Get Gemini API Key':
                         vscode.env.openExternal(
                             vscode.Uri.parse('https://aistudio.google.com/apikey')
@@ -72,6 +102,32 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             });
         })
+    );
+}
+
+/**
+ * Prompt for DeepSeek API key (required for Nika to work).
+ */
+async function inputDeepseekToken(context: vscode.ExtensionContext): Promise<void> {
+    const key = await vscode.window.showInputBox({
+        title: 'Nika: DeepSeek API Key',
+        prompt: 'Enter your DeepSeek API key (from https://platform.deepseek.com/api_keys)',
+        password: true,
+        placeHolder: 'sk-...',
+        ignoreFocusOut: true,
+        validateInput: (value) => {
+            if (!value.trim()) {
+                return 'API key cannot be empty';
+            }
+            return null;
+        },
+    });
+
+    if (!key) return;
+
+    await context.secrets.store('nika.deepseek.apiKey', key.trim());
+    vscode.window.showInformationMessage(
+        'Nika: DeepSeek API key saved! The Nika models should now appear in the Copilot Chat model picker.'
     );
 }
 

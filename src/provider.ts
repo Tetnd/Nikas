@@ -19,6 +19,11 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         this.secrets = new SecretStore(context.secrets);
     }
 
+    /** Expose key check so the extension can prompt on startup. */
+    async getApiKey(): Promise<string | undefined> {
+        return this.secrets.getDeepSeekApiKey();
+    }
+
     /**
      * Returns the list of available models. Called by VS Code when the model picker opens.
      * When `silent: true` and no API key is configured, returns an empty array
