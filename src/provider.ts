@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, getThinkingEffort, ThinkingEffort } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, resolveModelId, resolveThinkingEffort } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
@@ -102,9 +102,9 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
         // Build the API request
         const config = getConfig();
-        const modelId = model.id ?? config.get<string>('selectedModel') ?? 'deepseek-v4-flash';
+        const modelId = resolveModelId(options.modelOptions);
 
-        const thinkingEffort = getThinkingEffort();
+        const thinkingEffort = resolveThinkingEffort(options.modelOptions);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         const request: DeepSeekRequest = {

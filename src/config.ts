@@ -87,3 +87,51 @@ export const THINKING_EFFORTS: { id: ThinkingEffort; label: string; description:
 export function getThinkingEffort(): ThinkingEffort {
     return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';
 }
+
+export type AgentOverride = {
+    model: string;
+    thinkingEffort?: ThinkingEffort;
+};
+
+/**
+ * Agent model overrides — maps agent names (e.g., 'explore', 'edit', 'chat')
+ * to { model, thinkingEffort? }. Used to route fast agents to Flash and deep agents to Pro
+ * with per-agent thinking control.
+ */
+export function getAgentModelOverrides(): Record<string, AgentOverride> {
+    return getConfig().get<Record<string, AgentOverride>>('agentModelOverrides') ?? {};
+}
+
+/**
+ * Resolve the effective model ID for a request, considering agent overrides.
+ * Falls back to the globally selected model if no override matches.
+ */
+export function resolveModelId(modelOptions: { readonly [name: string]: any } | undefined): string {
+    const overrides = getAgentModelOverrides();
+    if (modelOptions && overrides) {
+        for (const key of ['agent', 'agentName', 'mode', 'agentId']) {
+            const agentName = modelOptions[key];
+            if (typeof agentName === 'string' && overrides[agentName]?.model) {
+                return overrides[agentName].model;
+            }
+        }
+    }
+    return getSelectedModel();
+}
+
+/**
+ * Resolve the effective thinking effort for a request, considering agent overrides.
+ * Falls back to the globally configured thinking effort if no override matches.
+ */
+export function resolveThinkingEffort(modelOptions: { readonly [name: string]: any } | undefined): ThinkingEffort {
+    const overrides = getAgentModelOverrides();
+    if (modelOptions && overrides) {
+        for (const key of ['agent', 'agentName', 'mode', 'agentId']) {
+            const agentName = modelOptions[key];
+            if (typeof agentName === 'string' && overrides[agentName]?.thinkingEffort) {
+                return overrides[agentName].thinkingEffort;
+            }
+        }
+    }
+    return getThinkingEffort();
+}
