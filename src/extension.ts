@@ -281,6 +281,7 @@ async function agentModelOverrides(): Promise<void> {
         { id: 'chat', label: 'Chat', description: 'Default chat agent' },
         { id: 'inlineChat', label: 'Inline Chat', description: 'Inline editor chat' },
         { id: 'terminal', label: 'Terminal', description: 'Terminal chat agent' },
+        { id: 'subagent', label: 'Subagent', description: 'Agents invoked by other agents (e.g., Explore called from Edit)' },
     ];
 
     const MODEL_ITEMS = DEEPSEEK_MODELS.map(m => ({

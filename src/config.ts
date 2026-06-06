@@ -115,7 +115,7 @@ export function getAgentModelOverrides(): Record<string, AgentOverride> {
 export function resolveModelId(modelOptions: { readonly [name: string]: any } | undefined): string {
     const overrides = getAgentModelOverrides();
     if (modelOptions && overrides) {
-        for (const key of ['agent', 'agentName', 'mode', 'agentId']) {
+        for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent']) {
             const agentName = modelOptions[key];
             if (typeof agentName === 'string' && overrides[agentName]?.model) {
                 return overrides[agentName].model;
@@ -132,7 +132,7 @@ export function resolveModelId(modelOptions: { readonly [name: string]: any } | 
 export function resolveThinkingEffort(modelOptions: { readonly [name: string]: any } | undefined): ThinkingEffort {
     const overrides = getAgentModelOverrides();
     if (modelOptions && overrides) {
-        for (const key of ['agent', 'agentName', 'mode', 'agentId']) {
+        for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent']) {
             const agentName = modelOptions[key];
             if (typeof agentName === 'string' && overrides[agentName]?.thinkingEffort) {
                 return overrides[agentName].thinkingEffort;
