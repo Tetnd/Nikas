@@ -4,6 +4,7 @@ import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperat
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
+import { log } from './log.js';
 import type { DeepSeekRequest, DeepSeekTool } from './api/types.js';
 
 /**
@@ -156,10 +157,30 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 // Cancelled by user — silently stop
                 return;
             }
-            // Report error to the chat
-            const errorMessage = err instanceof Error ? err.message : String(err);
+            // Build a descriptive error for VS Code's error reporting.
+            // The Copilot summarizer catches errors and logs them; an opaque
+            // "unknown" message makes debugging impossible. We wrap the error
+            // so VS Code's ConversationHistorySummarizer gets a useful message.
+            const errorMessage = err instanceof Error ? err.message : String(err || 'unknown error');
+            const wrappedError = new Error(
+                `Nika provider error (model: ${modelId}): ${errorMessage}`
+            );
+            // Preserve the original stack if available
+            if (err instanceof Error && err.stack) {
+                wrappedError.stack = err.stack;
+            }
+
+            // Log to nika.log for offline investigation
+            log.error(
+                `Chat request failed for model "${modelId}" (messages: ${deepseekMessages.length}, tools: ${options.tools?.length ?? 0})`,
+                err
+            );
+
+            // Only report to progress for interactive (non-background) requests.
+            // Background summarization requests don't have a visible chat window,
+            // and calling progress.report on them is harmless but unnecessary.
             progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
-            throw err;
+            throw wrappedError;
         } finally {
             cancelDisposable.dispose();
         }

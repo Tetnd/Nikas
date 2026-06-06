@@ -5,6 +5,7 @@ import { extractImageParts, injectVisionDescriptions, hasImageParts } from '../t
 import { describeImage as describeWithGemini } from './gemini.js';
 import { describeImage as describeWithGemma4 } from './gemma4.js';
 import { getVisionModel, getOllamaBaseUrl, VISION_MODELS } from '../config.js';
+import { log } from '../log.js';
 import type { SecretStore } from '../secrets.js';
 
 /**
@@ -122,6 +123,7 @@ export async function preprocessVision(
     }
 
     if (errors.length > 0) {
+        log.warn(`Vision preprocessing: ${errors.length} image(s) failed`, new Error(errors.join('; ')));
         _progress.report(
             new vscode.LanguageModelTextPart(
                 `\n\n*Warning: ${errors.length} image(s) could not be processed: ${errors.join('; ')}*\n\n`

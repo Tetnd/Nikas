@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { log } from '../log.js';
 import type { DeepSeekRequest, DeepSeekResponse, DeepSeekDelta, DeepSeekErrorResponse, DeepSeekToolCallDelta } from './types.js';
 
 const DEEPSEEK_API_BASE = 'https://api.deepseek.com';
@@ -26,16 +27,35 @@ export async function streamDeepSeekChat(
         stream_options: { include_usage: true },
     };
 
-    const response = await fetch(DEEPSEEK_CHAT_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'Accept': 'text/event-stream',
-        },
-        body: JSON.stringify(streamRequest),
-        signal,
-    });
+    let response: Response;
+    try {
+        response = await fetch(DEEPSEEK_CHAT_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                'Accept': 'text/event-stream',
+            },
+            body: JSON.stringify(streamRequest),
+            signal,
+        });
+    } catch (fetchErr) {
+        // Network-level failures (DNS, TLS, connection refused, etc.)
+        // Node.js fetch throws TypeError with messages like "fetch failed".
+        // We wrap it so the error message is descriptive for VS Code's summarizer.
+        if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+            throw fetchErr; // Let the caller handle cancellation
+        }
+        const cause = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+        log.error(
+            `Network error connecting to DeepSeek API (${DEEPSEEK_CHAT_ENDPOINT})`,
+            fetchErr
+        );
+        throw new Error(
+            `Failed to connect to DeepSeek API (${DEEPSEEK_CHAT_ENDPOINT}): ${cause}. ` +
+            'Check your network connection and firewall settings.'
+        );
+    }
 
     if (!response.ok) {
         await handleErrorResponse(response);
@@ -52,7 +72,16 @@ export async function streamDeepSeekChat(
 
     try {
         while (true) {
-            const { done, value } = await reader.read();
+            let readResult;
+            try {
+                readResult = await reader.read();
+            } catch (readErr) {
+                // Stream read failure (e.g., connection dropped mid-stream)
+                const cause = readErr instanceof Error ? readErr.message : String(readErr);
+                log.error('DeepSeek API stream interrupted', readErr);
+                throw new Error(`DeepSeek API stream interrupted: ${cause}`);
+            }
+            const { done, value } = readResult;
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -159,25 +188,32 @@ function finalizeToolCalls(pending: Map<number, PendingToolCall>): CompletedTool
 // --- Error Handling ---
 
 async function handleErrorResponse(response: Response): Promise<never> {
-    let message = `DeepSeek API returned ${response.status}`;
+    let message = `DeepSeek API returned HTTP ${response.status}`;
+    let detail = '';
 
     try {
         const body = await response.json() as DeepSeekErrorResponse;
         if (body.error?.message) {
-            message = `DeepSeek API error: ${body.error.message}`;
+            detail = body.error.message;
         }
     } catch {
         try {
             const text = await response.text();
-            if (text) message += `: ${text}`;
+            if (text) detail = text.slice(0, 500); // Truncate long error bodies
         } catch {
             // ignore
         }
     }
 
     switch (response.status) {
+        case 400:
+            message = `DeepSeek API bad request: ${detail || 'check your request parameters'}`;
+            break;
         case 401:
             message = 'Invalid DeepSeek API key. Run "Nika: Input Deepseek userToken" to update it.';
+            break;
+        case 402:
+            message = 'DeepSeek API: insufficient balance. Please top up your DeepSeek account.';
             break;
         case 429:
             message = 'DeepSeek API rate limit exceeded. Please wait and try again.';
@@ -189,6 +225,11 @@ async function handleErrorResponse(response: Response): Promise<never> {
             break;
     }
 
+    if (detail && !message.includes(detail)) {
+        message += ` (${detail})`;
+    }
+
+    log.error(`DeepSeek API HTTP ${response.status}`, new Error(message));
     throw new Error(message);
 }
 
