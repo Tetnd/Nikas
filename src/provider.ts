@@ -8,6 +8,18 @@ import { log } from './log.js';
 import type { DeepSeekRequest, DeepSeekTool } from './api/types.js';
 
 /**
+ * VS Code Output channel for Nika diagnostics.
+ * Visible in View → Output → "Nika".
+ */
+let _outputChannel: vscode.OutputChannel | undefined;
+function getOutputChannel(): vscode.OutputChannel {
+    if (!_outputChannel) {
+        _outputChannel = vscode.window.createOutputChannel('Nika');
+    }
+    return _outputChannel;
+}
+
+/**
  * NikaChatProvider — a VS Code LanguageModelChatProvider for DeepSeek.
  *
  * Registered via vscode.lm.registerLanguageModelChatProvider('nika', provider).
@@ -105,11 +117,21 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const config = getConfig();
         const modelId = getSelectedModel();
 
-        // Log which model is being used
-        const agentName = options.modelOptions?.['agent'] ?? options.modelOptions?.['agentName'] ?? options.modelOptions?.['mode'] ?? '';
-        const agentLabel = agentName ? ` [agent: ${agentName}]` : '';
-        console.log(`[Nika] Using model: ${modelId}${agentLabel}`);
-        log.info(`Chat request — model: ${modelId}, agent: ${agentName || '(none)'}`);
+        // Log which model is being used — detect agent type from modelOptions
+        const agentName = options.modelOptions?.['agent']
+            ?? options.modelOptions?.['agentName']
+            ?? options.modelOptions?.['mode']
+            ?? options.modelOptions?.['subagent']
+            ?? '';
+        const isSubagent = !!(options.modelOptions?.['subagent']
+            || options.modelOptions?.['_subagent']
+            || (options.modelOptions?.['agentName'] && options.modelOptions?.['agentName'] !== options.modelOptions?.['mode']));
+        const agentType = isSubagent ? 'subagent' : (agentName ? `agent` : 'direct');
+        const agentLabel = agentName ? ` [${agentType}: ${agentName}]` : '';
+        const msg = `[Nika] Using model: ${modelId}${agentLabel}`;
+        console.log(msg);
+        getOutputChannel().appendLine(msg);
+        log.info(`Chat request — model: ${modelId}, agent: ${agentName || '(none)'}, type: ${agentType}`);
 
         const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
