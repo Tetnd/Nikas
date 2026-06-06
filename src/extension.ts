@@ -265,6 +265,7 @@ async function chooseThinkingEffort(): Promise<void> {
 }
 
 /**
+/**
  * Open VS Code settings to the agent model assignment section.
  * This exposes native settings like:
  *   - chat.exploreAgent.defaultModel
@@ -273,11 +274,12 @@ async function chooseThinkingEffort(): Promise<void> {
  *   - chat.utilitySmallModel
  */
 async function agentModelAssignments(): Promise<void> {
-    const items: (vscode.QuickPickItem & { setting: string })[] = [
+    const items: (vscode.QuickPickItem & { setting: string; isCommand?: boolean })[] = [
         { label: '$(search) Explore Agent', description: 'chat.exploreAgent.defaultModel — Model used by the Explore subagent', setting: 'chat.exploreAgent.defaultModel' },
         { label: '$(list-plan) Plan Agent', description: 'chat.planAgent.defaultModel — Model used by the Plan agent', setting: 'chat.planAgent.defaultModel' },
         { label: '$(tools) Utility Model', description: 'chat.utilityModel — Model for built-in utility flows', setting: 'chat.utilityModel' },
         { label: '$(rocket) Utility Small Model', description: 'chat.utilitySmallModel — Small/fast model for utility flows', setting: 'chat.utilitySmallModel' },
+        { label: '$(git-commit) Generate Commit Message', description: 'Generate a commit message from staged changes using Copilot', setting: 'github.copilot.git.generateCommitMessage', isCommand: true },
         { label: '$(settings-gear) All Chat Settings', description: 'Open all chat-related settings', setting: '@ext:github.copilot-chat' },
     ];
 
@@ -289,7 +291,9 @@ async function agentModelAssignments(): Promise<void> {
 
     if (!pick) return;
 
-    if (pick.setting === '@ext:github.copilot-chat') {
+    if (pick.isCommand) {
+        await vscode.commands.executeCommand(pick.setting);
+    } else if (pick.setting === '@ext:github.copilot-chat') {
         await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:github.copilot-chat');
     } else {
         await vscode.commands.executeCommand('workbench.action.openSettings', pick.setting);
