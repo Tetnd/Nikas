@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, resolveModelId, resolveThinkingEffort } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
@@ -103,15 +103,15 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
         // Build the API request
         const config = getConfig();
-        const modelId = resolveModelId(options.modelOptions, model);
+        const modelId = getSelectedModel();
 
-        // Log which model is being used (especially useful for agent overrides like Explore)
+        // Log which model is being used
         const agentName = options.modelOptions?.['agent'] ?? options.modelOptions?.['agentName'] ?? options.modelOptions?.['mode'] ?? '';
         const agentLabel = agentName ? ` [agent: ${agentName}]` : '';
         console.log(`[Nika] Using model: ${modelId}${agentLabel}`);
         log.info(`Chat request — model: ${modelId}, agent: ${agentName || '(none)'}`);
 
-        const thinkingEffort = resolveThinkingEffort(options.modelOptions, model);
+        const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         const request: DeepSeekRequest = {

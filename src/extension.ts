@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, AgentOverride } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -40,7 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
-        vscode.commands.registerCommand('nika.agentModelOverrides', () => agentModelOverrides()),
+        vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
         vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
@@ -62,8 +62,8 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'Set reasoning depth for thinking-capable models',
                     },
                     {
-                        label: '$(settings) Agent Model Overrides',
-                        description: 'Assign specific models to agents (e.g., Flash for Explore)',
+                        label: '$(symbol-misc) Agent Model Assignments',
+                        description: 'Configure which model each Copilot agent uses (Explore, Plan, etc.)',
                     },
                     {
                         label: '$(key) Input Gemini API Key',
@@ -102,8 +102,8 @@ export async function activate(context: vscode.ExtensionContext) {
                     case '$(symbol-parameter) Thinking Effort':
                         vscode.commands.executeCommand('nika.chooseThinkingEffort');
                         break;
-                    case '$(settings) Agent Model Overrides':
-                        vscode.commands.executeCommand('nika.agentModelOverrides');
+                    case '$(symbol-misc) Agent Model Assignments':
+                        vscode.commands.executeCommand('nika.agentModelAssignments');
                         break;
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
@@ -265,155 +265,34 @@ async function chooseThinkingEffort(): Promise<void> {
 }
 
 /**
- * Agent model overrides — lets user assign specific models and thinking effort
- * to agent names. Opens an interactive flow: pick agent → pick model → pick thinking.
- * Useful for routing fast/trivial agents (like Explore) to Flash with no thinking
- * while keeping deep reasoning agents on Pro with high thinking.
- *
- * Note: VS Code's built-in agents (Explore, Edit, etc.) do NOT pass their agent
- * name through `modelOptions`, so agent-specific overrides only work for
- * subagents (agents called by other agents). As a workaround, you can also
- * set an override keyed by the model ID itself — for example:
- *   `"deepseek-v4-pro": { "model": "deepseek-v4-flash" }`
- * This redirects all requests for that model regardless of which agent made them.
+ * Open VS Code settings to the agent model assignment section.
+ * This exposes native settings like:
+ *   - chat.exploreAgent.defaultModel
+ *   - chat.planAgent.defaultModel
+ *   - chat.utilityModel
+ *   - chat.utilitySmallModel
  */
-async function agentModelOverrides(): Promise<void> {
-    const config = getConfig();
-    const overrides = config.get<Record<string, AgentOverride>>('agentModelOverrides') ?? {};
-
-    // Known Copilot Chat agent names + model IDs (for model-based overrides)
-    const KNOWN_AGENTS = [
-        { id: 'explore', label: 'Explore', description: 'Fast read-only codebase search agent' },
-        { id: 'edit', label: 'Edit', description: 'Code editing agent' },
-        { id: 'chat', label: 'Chat', description: 'Default chat agent' },
-        { id: 'inlineChat', label: 'Inline Chat', description: 'Inline editor chat' },
-        { id: 'terminal', label: 'Terminal', description: 'Terminal chat agent' },
-        { id: 'subagent', label: 'Subagent', description: 'Agents invoked by other agents (e.g., Explore called from Edit)' },
-        // Model-based overrides — apply to ALL requests for that model
-        { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (model)', description: 'Override all requests for Pro → use a different model' },
-        { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (model)', description: 'Override all requests for Flash → use a different model' },
+async function agentModelAssignments(): Promise<void> {
+    const items: (vscode.QuickPickItem & { setting: string })[] = [
+        { label: '$(search) Explore Agent', description: 'chat.exploreAgent.defaultModel — Model used by the Explore subagent', setting: 'chat.exploreAgent.defaultModel' },
+        { label: '$(list-plan) Plan Agent', description: 'chat.planAgent.defaultModel — Model used by the Plan agent', setting: 'chat.planAgent.defaultModel' },
+        { label: '$(tools) Utility Model', description: 'chat.utilityModel — Model for built-in utility flows', setting: 'chat.utilityModel' },
+        { label: '$(rocket) Utility Small Model', description: 'chat.utilitySmallModel — Small/fast model for utility flows', setting: 'chat.utilitySmallModel' },
+        { label: '$(settings-gear) All Chat Settings', description: 'Open all chat-related settings', setting: '@ext:github.copilot-chat' },
     ];
 
-    const MODEL_ITEMS = DEEPSEEK_MODELS.map(m => ({
-        label: m.name,
-        description: m.detail,
-        id: m.id,
-    }));
-
-    // Show current overrides in a picker
-    const entries = KNOWN_AGENTS.map(a => {
-        const override = overrides[a.id];
-        const modelName = override?.model
-            ? DEEPSEEK_MODELS.find(m => m.id === override.model)?.name ?? override.model
-            : 'default';
-        const thinking = override?.thinkingEffort
-            ? ` · thinking: ${override.thinkingEffort}`
-            : '';
-        return {
-            label: a.label,
-            description: `→ ${modelName}${thinking}`,
-            detail: a.description,
-            agentId: a.id,
-        };
-    });
-
-    const selected = await vscode.window.showQuickPick(entries, {
-        title: 'Nika: Agent Model Overrides',
-        placeHolder: 'Select an agent to configure (Esc to finish)',
+    const pick = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Agent Model Assignments',
+        placeHolder: 'Select which agent model to configure',
         matchOnDescription: true,
     });
 
-    if (!selected) return;
+    if (!pick) return;
 
-    // --- Step 1: Pick model ---
-    const currentOverride = overrides[selected.agentId];
-    const currentModel = currentOverride?.model;
-
-    const modelItems: (vscode.QuickPickItem & { id: string })[] = [
-        {
-            label: '$(circle-slash) Default',
-            description: 'Use globally selected model',
-            id: '__default__',
-        },
-        ...MODEL_ITEMS.map(m => ({
-            label: currentModel === m.id ? `$(check) ${m.label}` : `$(blank) ${m.label}`,
-            description: m.description,
-            id: m.id,
-        })),
-    ];
-
-    const modelPick = await vscode.window.showQuickPick(modelItems, {
-        title: `Nika: Model for ${selected.label}`,
-        placeHolder: 'Select a model (or Default to clear override)',
-        matchOnDescription: true,
-    });
-
-    if (!modelPick) return;
-
-    // --- Step 2: Pick thinking effort (only if a specific model was chosen) ---
-    let thinkingPick: typeof THINKING_EFFORTS[number] | undefined;
-    if (modelPick.id !== '__default__') {
-        const currentThinking = currentOverride?.thinkingEffort ?? 'default';
-
-        const thinkingItems: (vscode.QuickPickItem & { id: string })[] = [
-            {
-                label: '$(circle-slash) Default',
-                description: 'Use global thinking effort setting',
-                id: '__default__',
-            },
-            ...THINKING_EFFORTS.map(e => ({
-                label: currentThinking === e.id ? `$(check) ${e.label}` : `$(blank) ${e.label}`,
-                description: e.description,
-                id: e.id,
-            })),
-        ];
-
-        const pick = await vscode.window.showQuickPick(thinkingItems, {
-            title: `Nika: Thinking for ${selected.label} (${modelPick.label.replace(/^\$\([^)]+\) /, '')})`,
-            placeHolder: 'Select thinking effort (or Default for global setting)',
-            matchOnDescription: true,
-        });
-
-        if (!pick) return;
-        thinkingPick = pick.id !== '__default__'
-            ? THINKING_EFFORTS.find(e => e.id === pick.id)
-            : undefined;
-    }
-
-    // --- Save ---
-    const newOverrides = { ...overrides };
-    if (modelPick.id === '__default__') {
-        delete newOverrides[selected.agentId];
+    if (pick.setting === '@ext:github.copilot-chat') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:github.copilot-chat');
     } else {
-        newOverrides[selected.agentId] = {
-            model: modelPick.id,
-            ...(thinkingPick ? { thinkingEffort: thinkingPick.id } : {}),
-        };
-    }
-
-    await config.update('agentModelOverrides', newOverrides, vscode.ConfigurationTarget.Global);
-
-    if (modelPick.id === '__default__') {
-        vscode.window.showInformationMessage(
-            `Nika: Cleared override for ${selected.label}`
-        );
-    } else {
-        const modelName = DEEPSEEK_MODELS.find(m => m.id === modelPick.id)?.name ?? modelPick.id;
-        const thinkingMsg = thinkingPick ? ` with ${thinkingPick.label} thinking` : '';
-        vscode.window.showInformationMessage(
-            `Nika: ${selected.label} → ${modelName}${thinkingMsg}`
-        );
-    }
-
-    // Recurse to let user configure more agents
-    const configureAnother = 'Configure Another';
-    const choice = await vscode.window.showInformationMessage(
-        'Agent override saved. Configure another agent?',
-        configureAnother,
-        'Done'
-    );
-    if (choice === configureAnother) {
-        agentModelOverrides();
+        await vscode.commands.executeCommand('workbench.action.openSettings', pick.setting);
     }
 }
 

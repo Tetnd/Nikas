@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -18,7 +18,15 @@
     "Machine Learning"
   ],
   "activationEvents": [
-    "onLanguageModelChatProvider:nika"
+    "onLanguageModelChatProvider:nika",
+    "onCommand:nika.manage",
+    "onCommand:nika.agentModelAssignments",
+    "onCommand:nika.chooseProvider",
+    "onCommand:nika.chooseVisionModel",
+    "onCommand:nika.setOllamaHost",
+    "onCommand:nika.inputDeepseekToken",
+    "onCommand:nika.chooseThinkingEffort",
+    "onCommand:nika.checkForUpdates"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -56,15 +64,16 @@
         "category": "Nika"
       },
       {
-        "command": "nika.agentModelOverrides",
-        "title": "Agent Model Overrides",
-        "category": "Nika"
-      },
-      {
         "command": "nika.manage",
         "title": "Manage Nika Models",
         "category": "Nika",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nika.agentModelAssignments",
+        "title": "Agent Model Assignments",
+        "category": "Nika",
+        "icon": "$(symbol-key)"
       },
       {
         "command": "nika.checkForUpdates",
@@ -129,11 +138,6 @@
           "type": "string",
           "default": "http://localhost:11434",
           "description": "Ollama server URL. Points to localhost by default, but can be any remote Ollama instance (e.g., http://192.168.1.100:11434). Used when vision model is Gemma 4."
-        },
-        "nika.agentModelOverrides": {
-          "type": "object",
-          "default": {},
-          "description": "Per-agent model and thinking overrides. Map agent names (e.g., 'explore', 'edit', 'chat') to { \"model\": \"...\", \"thinkingEffort\": \"...\" }. Use 'Nika: Agent Model Overrides' from the command palette to configure interactively."
         }
       }
     }
