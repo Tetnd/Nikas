@@ -147,9 +147,22 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                         );
                     }
                 },
-                // onComplete
-                (_usage) => {
-                    // Token usage could be logged or shown, but VS Code handles this
+                // onComplete — report usage back to VS Code so the context usage widget works
+                (usage) => {
+                    if (usage) {
+                        progress.report(
+                            new vscode.LanguageModelDataPart(
+                                new TextEncoder().encode(
+                                    JSON.stringify({
+                                        prompt_tokens: usage.promptTokens,
+                                        completion_tokens: usage.completionTokens,
+                                        total_tokens: usage.promptTokens + usage.completionTokens,
+                                    })
+                                ),
+                                'usage'
+                            )
+                        );
+                    }
                 }
             );
         } catch (err) {
