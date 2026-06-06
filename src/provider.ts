@@ -103,9 +103,9 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
         // Build the API request
         const config = getConfig();
-        const modelId = resolveModelId(options.modelOptions);
+        const modelId = resolveModelId(options.modelOptions, model);
 
-        const thinkingEffort = resolveThinkingEffort(options.modelOptions);
+        const thinkingEffort = resolveThinkingEffort(options.modelOptions, model);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         const request: DeepSeekRequest = {

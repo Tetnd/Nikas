@@ -269,12 +269,19 @@ async function chooseThinkingEffort(): Promise<void> {
  * to agent names. Opens an interactive flow: pick agent → pick model → pick thinking.
  * Useful for routing fast/trivial agents (like Explore) to Flash with no thinking
  * while keeping deep reasoning agents on Pro with high thinking.
+ *
+ * Note: VS Code's built-in agents (Explore, Edit, etc.) do NOT pass their agent
+ * name through `modelOptions`, so agent-specific overrides only work for
+ * subagents (agents called by other agents). As a workaround, you can also
+ * set an override keyed by the model ID itself — for example:
+ *   `"deepseek-v4-pro": { "model": "deepseek-v4-flash" }`
+ * This redirects all requests for that model regardless of which agent made them.
  */
 async function agentModelOverrides(): Promise<void> {
     const config = getConfig();
     const overrides = config.get<Record<string, AgentOverride>>('agentModelOverrides') ?? {};
 
-    // Known Copilot Chat agent names
+    // Known Copilot Chat agent names + model IDs (for model-based overrides)
     const KNOWN_AGENTS = [
         { id: 'explore', label: 'Explore', description: 'Fast read-only codebase search agent' },
         { id: 'edit', label: 'Edit', description: 'Code editing agent' },
@@ -282,6 +289,9 @@ async function agentModelOverrides(): Promise<void> {
         { id: 'inlineChat', label: 'Inline Chat', description: 'Inline editor chat' },
         { id: 'terminal', label: 'Terminal', description: 'Terminal chat agent' },
         { id: 'subagent', label: 'Subagent', description: 'Agents invoked by other agents (e.g., Explore called from Edit)' },
+        // Model-based overrides — apply to ALL requests for that model
+        { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (model)', description: 'Override all requests for Pro → use a different model' },
+        { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (model)', description: 'Override all requests for Flash → use a different model' },
     ];
 
     const MODEL_ITEMS = DEEPSEEK_MODELS.map(m => ({

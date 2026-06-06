@@ -111,15 +111,38 @@ export function getAgentModelOverrides(): Record<string, AgentOverride> {
 /**
  * Resolve the effective model ID for a request, considering agent overrides.
  * Falls back to the globally selected model if no override matches.
+ *
+ * Checks `modelOptions` for agent identifiers passed by the caller.
+ * VS Code's built-in agents (Explore, Edit, etc.) do NOT reliably populate
+ * these keys — this works best when an extension explicitly passes agent info
+ * via `sendRequest()` (e.g., subagents called from other agents).
+ *
+ * As a fallback, also checks if any override key matches the requested
+ * `model.id` — this lets users set overrides like
+ * `"deepseek-v4-pro": { "model": "deepseek-v4-flash" }` to redirect all
+ * requests for a specific model.
  */
-export function resolveModelId(modelOptions: { readonly [name: string]: any } | undefined): string {
+export function resolveModelId(
+    modelOptions: { readonly [name: string]: any } | undefined,
+    model?: vscode.LanguageModelChatInformation
+): string {
     const overrides = getAgentModelOverrides();
-    if (modelOptions && overrides) {
-        for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent']) {
-            const agentName = modelOptions[key];
-            if (typeof agentName === 'string' && overrides[agentName]?.model) {
-                return overrides[agentName].model;
+    if (overrides) {
+        // First pass: check modelOptions keys for agent identifiers
+        if (modelOptions) {
+            for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent', 'requestInitiator']) {
+                const agentName = modelOptions[key];
+                if (typeof agentName === 'string' && overrides[agentName]?.model) {
+                    return overrides[agentName].model;
+                }
             }
+        }
+
+        // Second pass: check if the requested model.id matches an override key
+        // This handles the case where VS Code's built-in agents don't pass
+        // agent identifiers in modelOptions.
+        if (model && overrides[model.id]?.model) {
+            return overrides[model.id].model;
         }
     }
     return getSelectedModel();
@@ -128,14 +151,31 @@ export function resolveModelId(modelOptions: { readonly [name: string]: any } | 
 /**
  * Resolve the effective thinking effort for a request, considering agent overrides.
  * Falls back to the globally configured thinking effort if no override matches.
+ *
+ * Checks `modelOptions` for agent identifiers, then falls back to checking
+ * the requested `model.id` against override keys.
  */
-export function resolveThinkingEffort(modelOptions: { readonly [name: string]: any } | undefined): ThinkingEffort {
+export function resolveThinkingEffort(
+    modelOptions: { readonly [name: string]: any } | undefined,
+    model?: vscode.LanguageModelChatInformation
+): ThinkingEffort {
     const overrides = getAgentModelOverrides();
-    if (modelOptions && overrides) {
-        for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent']) {
-            const agentName = modelOptions[key];
-            if (typeof agentName === 'string' && overrides[agentName]?.thinkingEffort) {
-                return overrides[agentName].thinkingEffort;
+    if (overrides) {
+        // First pass: check modelOptions keys for agent identifiers
+        if (modelOptions) {
+            for (const key of ['agent', 'agentName', 'mode', 'agentId', 'subagent']) {
+                const agentName = modelOptions[key];
+                if (typeof agentName === 'string' && overrides[agentName]?.thinkingEffort) {
+                    return overrides[agentName].thinkingEffort;
+                }
+            }
+        }
+
+        // Second pass: check if the requested model.id matches an override key
+        if (model) {
+            const modelOverride = overrides[model.id];
+            if (modelOverride?.thinkingEffort) {
+                return modelOverride.thinkingEffort;
             }
         }
     }
