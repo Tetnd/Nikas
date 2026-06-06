@@ -266,21 +266,20 @@ function sanitizeSchema(schema: Record<string, unknown> | null | undefined): Rec
 }
 
 /**
- * Map thinking effort level to DeepSeek API thinking parameters.
+ * Build DeepSeek API thinking parameters from effort level.
+ *
+ * DeepSeek's API uses:
+ *   thinking.type: "enabled" | "disabled"
+ *   reasoning_effort: "high" | "max"
+ *
+ * Per the API docs, `low` and `medium` are mapped to `high` by the server,
+ * and `xhigh` is mapped to `max`. We expose only the valid values directly.
  *
  * Effort levels:
- *   off    → thinking disabled (default)
- *   low    → thinking enabled, 1024 token budget
- *   medium → thinking enabled, 4096 token budget
- *   high   → thinking enabled, 8192 token budget
+ *   off  → thinking disabled
+ *   high → thinking enabled, standard reasoning (default)
+ *   max  → thinking enabled, maximum reasoning (for complex agent tasks)
  */
-const THINKING_TOKEN_BUDGET: Record<ThinkingEffort, number | null> = {
-    off: null,
-    low: 1024,
-    medium: 4096,
-    high: 8192,
-};
-
 function buildThinkingParams(effort: ThinkingEffort): Partial<DeepSeekRequest> {
     if (effort === 'off') {
         return {
@@ -288,9 +287,8 @@ function buildThinkingParams(effort: ThinkingEffort): Partial<DeepSeekRequest> {
         };
     }
 
-    const thinkingTokens = THINKING_TOKEN_BUDGET[effort];
     return {
         thinking: { type: 'enabled' },
-        ...(thinkingTokens !== null ? { thinking_tokens: thinkingTokens } : {}),
+        reasoning_effort: effort,
     };
 }

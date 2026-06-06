@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -18,15 +18,7 @@
     "Machine Learning"
   ],
   "activationEvents": [
-    "onLanguageModelChatProvider:nika",
-    "onCommand:nika.manage",
-    "onCommand:nika.agentModelAssignments",
-    "onCommand:nika.chooseProvider",
-    "onCommand:nika.chooseVisionModel",
-    "onCommand:nika.setOllamaHost",
-    "onCommand:nika.inputDeepseekToken",
-    "onCommand:nika.chooseThinkingEffort",
-    "onCommand:nika.checkForUpdates"
+    "onLanguageModelChatProvider:nika"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -113,15 +105,13 @@
           "default": "off",
           "enum": [
             "off",
-            "low",
-            "medium",
-            "high"
+            "high",
+            "max"
           ],
           "enumDescriptions": [
             "No thinking mode — fastest responses",
-            "Light thinking (1K token budget)",
-            "Moderate thinking (4K token budget)",
-            "Deep thinking (8K token budget)"
+            "Standard reasoning (default for most requests)",
+            "Maximum reasoning effort (used for complex agent tasks)"
           ],
           "description": "Thinking/reasoning effort level. Only applicable when using a model that supports thinking (e.g., DeepSeek V4 Pro). Higher effort produces more thorough reasoning but slower responses."
         },

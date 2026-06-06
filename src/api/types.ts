@@ -49,7 +49,7 @@ export interface DeepSeekRequest {
     thinking?: {
         type: 'enabled' | 'disabled';
     };
-    thinking_tokens?: number;
+    reasoning_effort?: 'high' | 'max';
     stream_options?: {
         include_usage: boolean;
     };

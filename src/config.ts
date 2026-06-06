@@ -81,13 +81,12 @@ export function getOllamaBaseUrl(): string {
     return getConfig().get<string>('ollamaBaseUrl') ?? 'http://localhost:11434';
 }
 
-export type ThinkingEffort = 'off' | 'low' | 'medium' | 'high';
+export type ThinkingEffort = 'off' | 'high' | 'max';
 
 export const THINKING_EFFORTS: { id: ThinkingEffort; label: string; description: string }[] = [
     { id: 'off', label: 'Off', description: 'No thinking mode — fastest responses' },
-    { id: 'low', label: 'Low', description: 'Light thinking (1K token budget)' },
-    { id: 'medium', label: 'Medium', description: 'Moderate thinking (4K token budget)' },
-    { id: 'high', label: 'High', description: 'Deep thinking (8K token budget)' },
+    { id: 'high', label: 'High', description: 'Standard reasoning (default for most requests)' },
+    { id: 'max', label: 'Max', description: 'Maximum reasoning effort (used for complex agent tasks)' },
 ];
 
 export function getThinkingEffort(): ThinkingEffort {
