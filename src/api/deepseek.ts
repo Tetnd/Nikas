@@ -41,8 +41,9 @@ export async function streamDeepSeekChat(
         });
     } catch (fetchErr) {
         // Network-level failures (DNS, TLS, connection refused, etc.)
-        // Node.js fetch throws TypeError with messages like "fetch failed".
-        // We wrap it so the error message is descriptive for VS Code's summarizer.
+        // VS Code's extension host uses Electron's fetch, which can fail with
+        // a generic "fetch failed" when TLS certificate validation fails,
+        // even when curl/Node.js work fine. This is a known VS Code issue.
         if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
             throw fetchErr; // Let the caller handle cancellation
         }
@@ -51,9 +52,18 @@ export async function streamDeepSeekChat(
             `Network error connecting to DeepSeek API (${DEEPSEEK_CHAT_ENDPOINT})`,
             fetchErr
         );
+
+        // Provide more specific troubleshooting for common VS Code fetch issues
+        let hint = '';
+        if (cause === 'fetch failed' || cause.includes('fetch failed')) {
+            hint = ' This is often caused by TLS certificate validation in VS Code\'s embedded browser. ' +
+                'Try setting "http.systemCertificates": true in VS Code settings, or adding ' +
+                '"http.proxyStrictSSL": false as a workaround.';
+        }
+
         throw new Error(
-            `Failed to connect to DeepSeek API (${DEEPSEEK_CHAT_ENDPOINT}): ${cause}. ` +
-            'Check your network connection and firewall settings.'
+            `Failed to connect to DeepSeek API (${DEEPSEEK_CHAT_ENDPOINT}): ${cause}.` +
+            hint
         );
     }
 
