@@ -41,6 +41,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
         vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
+        vscode.commands.registerCommand('nika.setFlashForAllAgents', () => setFlashForAllAgents()),
         vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
@@ -64,6 +65,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(symbol-misc) Agent Model Assignments',
                         description: 'Configure which model each Copilot agent uses (Explore, Plan, etc.)',
+                    },
+                    {
+                        label: '$(rocket) Apply Recommended Agent Models',
+                        description: 'Explore/Utility/Inline → Flash, Plan → Pro',
                     },
                     {
                         label: '$(key) Input Gemini API Key',
@@ -104,6 +109,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
                         vscode.commands.executeCommand('nika.agentModelAssignments');
+                        break;
+                    case '$(rocket) Apply Recommended Agent Models':
+                        vscode.commands.executeCommand('nika.setFlashForAllAgents');
                         break;
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
@@ -304,6 +312,53 @@ async function agentModelAssignments(): Promise<void> {
         await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:github.copilot-chat');
     } else {
         await vscode.commands.executeCommand('workbench.action.openSettings', pick.setting);
+    }
+}
+
+/**
+ * Quick-set agents to recommended models with one click.
+ *   - Explore, Utility, Inline Chat → DeepSeek V4 Flash (fast)
+ *   - Plan Agent                   → DeepSeek V4 Pro  (deep reasoning)
+ */
+async function setFlashForAllAgents(): Promise<void> {
+    const config = vscode.workspace.getConfiguration();
+    const target = vscode.ConfigurationTarget.Global;
+
+    const settings = [
+        { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nika/deepseek-v4-flash' },
+        { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nika/deepseek-v4-pro' },
+        { key: 'chat.utilityModel', label: 'Utility Model', model: 'nika/deepseek-v4-flash' },
+        { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nika/deepseek-v4-flash' },
+    ];
+
+    const confirm = await vscode.window.showInformationMessage(
+        `Apply recommended agent models?\n\n` +
+        settings.map(s => `  • ${s.label} → ${s.model}`).join('\n'),
+        { modal: true },
+        'Apply'
+    );
+
+    if (confirm !== 'Apply') return;
+
+    let success = 0;
+    let failed = 0;
+    for (const s of settings) {
+        try {
+            await config.update(s.key, s.model, target);
+            success++;
+        } catch {
+            failed++;
+        }
+    }
+
+    if (failed === 0) {
+        vscode.window.showInformationMessage(
+            `Nika: Agent models updated. Reload window to apply.`
+        );
+    } else {
+        vscode.window.showWarningMessage(
+            `Nika: Set ${success}/${settings.length} settings. ${failed} failed.`
+        );
     }
 }
 

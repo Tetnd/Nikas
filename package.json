@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -66,6 +66,12 @@
         "title": "Agent Model Assignments",
         "category": "Nika",
         "icon": "$(symbol-key)"
+      },
+      {
+        "command": "nika.setFlashForAllAgents",
+        "title": "Apply Recommended Agent Models",
+        "category": "Nika",
+        "icon": "$(rocket)"
       },
       {
         "command": "nika.checkForUpdates",
