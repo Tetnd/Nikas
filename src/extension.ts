@@ -265,13 +265,17 @@ async function chooseThinkingEffort(): Promise<void> {
 }
 
 /**
-/**
- * Open VS Code settings to the agent model assignment section.
- * This exposes native settings like:
- *   - chat.exploreAgent.defaultModel
- *   - chat.planAgent.defaultModel
- *   - chat.utilityModel
- *   - chat.utilitySmallModel
+ * Open VS Code settings to configure which model each agent uses.
+ *
+ * Native VS Code settings available:
+ *   - chat.exploreAgent.defaultModel  → Explore subagent
+ *   - chat.planAgent.defaultModel     → Plan agent
+ *   - chat.utilityModel               → Utility flows (commit messages, etc.)
+ *   - chat.utilitySmallModel          → Small/fast utility flows
+ *   - inlineChat.defaultModel         → Inline chat (Ctrl+I)
+ *
+ * Subagents inherit the model of their parent agent by default.
+ * To force a specific model for a subagent, set the agent's defaultModel above.
  */
 async function agentModelAssignments(): Promise<void> {
     const items: (vscode.QuickPickItem & { setting: string; isCommand?: boolean })[] = [
@@ -280,8 +284,6 @@ async function agentModelAssignments(): Promise<void> {
         { label: '$(tools) Utility Model', description: 'chat.utilityModel — Model for built-in utility flows', setting: 'chat.utilityModel' },
         { label: '$(rocket) Utility Small Model', description: 'chat.utilitySmallModel — Small/fast model for utility flows', setting: 'chat.utilitySmallModel' },
         { label: '$(edit) Inline Chat', description: 'inlineChat.defaultModel — Model used by inline chat (Ctrl+I)', setting: 'inlineChat.defaultModel' },
-        { label: '$(search) Search Subagent', description: 'chat.searchSubagent.model — Model for the search subagent (experimental)', setting: 'chat.searchSubagent.model' },
-        { label: '$(terminal) Execution Subagent', description: 'chat.executionSubagent.model — Model for the execution subagent (experimental)', setting: 'chat.executionSubagent.model' },
         { label: '$(git-commit) Generate Commit Message', description: 'Generate a commit message from staged changes using Copilot', setting: 'github.copilot.git.generateCommitMessage', isCommand: true },
         { label: '$(github) Build Codebase Semantic Index', description: 'Build remote codebase index for faster @workspace searches', setting: 'github.copilot.buildRemoteWorkspaceIndex', isCommand: true },
         { label: '$(trash) Delete External Ingest Index', description: 'Delete the external ingest codebase index', setting: 'github.copilot.deleteExternalIngestWorkspaceIndex', isCommand: true },
