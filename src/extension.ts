@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
+import { checkForUpdates } from './commands/updateExtension.js';
 import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, AgentOverride } from './config.js';
 
 /**
@@ -40,6 +41,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
         vscode.commands.registerCommand('nika.agentModelOverrides', () => agentModelOverrides()),
+        vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
                 [
@@ -79,6 +81,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         label: '$(link-external) Get Gemini API Key',
                         description: 'Open Google AI Studio to get a free Gemini API key',
                     },
+                    {
+                        label: '$(cloud-download) Check for Updates',
+                        description: 'Download and install the latest version from GitHub',
+                    },
                 ],
                 { title: 'Nika: Manage' }
             ).then(selection => {
@@ -114,6 +120,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         vscode.env.openExternal(
                             vscode.Uri.parse('https://aistudio.google.com/apikey')
                         );
+                        break;
+                    case '$(cloud-download) Check for Updates':
+                        vscode.commands.executeCommand('nika.checkForUpdates');
                         break;
                 }
             });

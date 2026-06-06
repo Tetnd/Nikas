@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -65,6 +65,12 @@
         "title": "Manage Nika Models",
         "category": "Nika",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nika.checkForUpdates",
+        "title": "Check for Updates",
+        "category": "Nika",
+        "icon": "$(cloud-download)"
       }
     ],
     "configuration": {
