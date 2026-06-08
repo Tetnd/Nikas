@@ -131,7 +131,6 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const msg = `[Nika] Using model: ${modelId}${agentLabel}`;
         console.log(msg);
         getOutputChannel().appendLine(msg);
-        log.info(`Chat request — model: ${modelId}, agent: ${agentName || '(none)'}, type: ${agentType}`);
 
         const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
