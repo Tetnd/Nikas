@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { log } from '../log.js';
 import type { DeepSeekMessage, DeepSeekContentPart } from '../api/types.js';
 
 /**
@@ -113,7 +114,7 @@ export function injectVisionDescriptions(
             const prefix = originalText ? originalText + '\n\n' : '';
             return {
                 ...msg,
-                content: `${prefix}[Image description provided by vision model: ${desc}]`,
+                content: `${prefix}[The user attached an image. Its contents are described below:\n${desc}]`,
             };
         }
 
@@ -146,7 +147,7 @@ function stripImageParts(msg: DeepSeekMessage): DeepSeekMessage {
         .map(p => (p as { type: 'text'; text: string }).text);
 
     const textContent = textParts.join('\n');
-    const placeholder = '[An image was sent but could not be processed by the vision model]';
+    const placeholder = '[The user attached an image, but the vision model could not process it. You may ask the user to describe it.]';
 
     return {
         ...msg,
