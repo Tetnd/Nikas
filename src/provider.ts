@@ -158,7 +158,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         });
 
         try {
-            await streamDeepSeekChat(
+            const streamResult = await streamDeepSeekChat(
                 request,
                 apiKey,
                 abortController.signal,
@@ -192,6 +192,15 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                     }
                 }
             );
+
+            // If DeepSeek returned an empty response (no text, no tool calls),
+            // throw so VS Code shows a meaningful error instead of "Sorry, no response was returned"
+            if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
+                throw new Error(
+                    `DeepSeek returned empty response (finish_reason: ${streamResult.finishReason ?? 'none'}). ` +
+                    'This may indicate a request format issue. Check nika.log for details.'
+                );
+            }
         } catch (err) {
             if (abortController.signal.aborted) {
                 // Cancelled by user — silently stop

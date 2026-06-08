@@ -12,6 +12,12 @@ const DEEPSEEK_CHAT_ENDPOINT = `${DEEPSEEK_API_BASE}/chat/completions`;
  * (NOT /v1/chat/completions).
  */
 
+export interface StreamResult {
+    receivedContent: boolean;
+    receivedToolCalls: boolean;
+    finishReason: string | null | undefined;
+}
+
 export async function streamDeepSeekChat(
     request: DeepSeekRequest,
     apiKey: string,
@@ -19,7 +25,7 @@ export async function streamDeepSeekChat(
     onText: (text: string) => void,
     onToolCalls: (toolCalls: CompletedToolCall[]) => void,
     onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void
-): Promise<void> {
+): Promise<StreamResult> {
     // Ensure stream options are set
     const streamRequest: DeepSeekRequest = {
         ...request,
@@ -80,6 +86,9 @@ export async function streamDeepSeekChat(
     let buffer = '';
     const pendingToolCalls = new Map<number, PendingToolCall>();
     let hasCompleted = false;
+    let receivedContent = false;
+    let receivedToolCalls = false;
+    let finalFinishReason: string | null | undefined;
 
     try {
         while (true) {
@@ -112,8 +121,13 @@ export async function streamDeepSeekChat(
                         const delta = choice.delta;
                         if (!delta) continue;
 
+                        if (choice.finish_reason) {
+                            finalFinishReason = choice.finish_reason;
+                        }
+
                         // Handle text content
                         if (delta.content) {
+                            receivedContent = true;
                             onText(delta.content);
                         }
 
@@ -128,6 +142,7 @@ export async function streamDeepSeekChat(
                         if (choice.finish_reason === 'tool_calls') {
                             const completed = finalizeToolCalls(pendingToolCalls);
                             if (completed.length > 0) {
+                                receivedToolCalls = true;
                                 onToolCalls(completed);
                             }
                         }
@@ -158,7 +173,11 @@ export async function streamDeepSeekChat(
                         for (const choice of parsed.choices) {
                             const delta = choice.delta;
                             if (!delta) continue;
-                            if (delta.content) onText(delta.content);
+                            if (choice.finish_reason) finalFinishReason = choice.finish_reason;
+                            if (delta.content) {
+                                receivedContent = true;
+                                onText(delta.content);
+                            }
                             if (delta.tool_calls) {
                                 for (const tc of delta.tool_calls) {
                                     mergeToolCallDelta(pendingToolCalls, tc);
@@ -166,7 +185,10 @@ export async function streamDeepSeekChat(
                             }
                             if (choice.finish_reason === 'tool_calls') {
                                 const completed = finalizeToolCalls(pendingToolCalls);
-                                if (completed.length > 0) onToolCalls(completed);
+                                if (completed.length > 0) {
+                                    receivedToolCalls = true;
+                                    onToolCalls(completed);
+                                }
                             }
                         }
                         if (parsed.usage) {
@@ -186,14 +208,16 @@ export async function streamDeepSeekChat(
         // Always signal completion so VS Code's agent loop can finalize,
         // even if the API didn't send a usage chunk.
         if (!hasCompleted) {
-            log.info('DeepSeek stream ended without usage chunk — signaling completion anyway');
+            log.info(`DeepSeek stream ended without usage chunk (finish_reason: ${finalFinishReason ?? 'none'}, content: ${receivedContent}, tools: ${receivedToolCalls}) — signaling completion`);
             onComplete();
         }
     } finally {
         reader.releaseLock();
     }
 
-    log.info('DeepSeek stream completed successfully');
+    log.info(`DeepSeek stream done — finish_reason: ${finalFinishReason ?? 'none'}, content: ${receivedContent}, tools: ${receivedToolCalls}, usage: ${hasCompleted}`);
+
+    return { receivedContent, receivedToolCalls, finishReason: finalFinishReason };
 }
 
 // --- Tool Call State Management ---
