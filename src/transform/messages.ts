@@ -100,9 +100,17 @@ export function injectVisionDescriptions(
     return messages.map((msg, i) => {
         const desc = descriptions.get(i);
         if (desc) {
-            // Inject the description
-            const content = typeof msg.content === 'string' ? msg.content : '';
-            const prefix = content ? content + '\n\n' : '';
+            // Extract ALL text from the message — both simple strings and array content parts
+            let originalText = '';
+            if (typeof msg.content === 'string') {
+                originalText = msg.content;
+            } else if (Array.isArray(msg.content)) {
+                originalText = msg.content
+                    .filter(p => p.type === 'text')
+                    .map(p => (p as { type: 'text'; text: string }).text)
+                    .join('\n');
+            }
+            const prefix = originalText ? originalText + '\n\n' : '';
             return {
                 ...msg,
                 content: `${prefix}[Image description provided by vision model: ${desc}]`,
