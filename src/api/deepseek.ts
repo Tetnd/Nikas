@@ -79,6 +79,7 @@ export async function streamDeepSeekChat(
     const decoder = new TextDecoder();
     let buffer = '';
     const pendingToolCalls = new Map<number, PendingToolCall>();
+    let hasCompleted = false;
 
     try {
         while (true) {
@@ -138,15 +139,61 @@ export async function streamDeepSeekChat(
                             promptTokens: parsed.usage.prompt_tokens,
                             completionTokens: parsed.usage.completion_tokens,
                         });
+                        hasCompleted = true;
                     }
                 } catch {
                     // Skip unparseable SSE lines
                 }
             }
         }
+
+        // Process any remaining data in the buffer after stream end
+        if (buffer.trim()) {
+            const trimmed = buffer.trim();
+            if (trimmed.startsWith('data: ')) {
+                const data = trimmed.slice(6);
+                if (data !== '[DONE]') {
+                    try {
+                        const parsed = JSON.parse(data) as DeepSeekResponse;
+                        for (const choice of parsed.choices) {
+                            const delta = choice.delta;
+                            if (!delta) continue;
+                            if (delta.content) onText(delta.content);
+                            if (delta.tool_calls) {
+                                for (const tc of delta.tool_calls) {
+                                    mergeToolCallDelta(pendingToolCalls, tc);
+                                }
+                            }
+                            if (choice.finish_reason === 'tool_calls') {
+                                const completed = finalizeToolCalls(pendingToolCalls);
+                                if (completed.length > 0) onToolCalls(completed);
+                            }
+                        }
+                        if (parsed.usage) {
+                            onComplete({
+                                promptTokens: parsed.usage.prompt_tokens,
+                                completionTokens: parsed.usage.completion_tokens,
+                            });
+                            hasCompleted = true;
+                        }
+                    } catch {
+                        // Skip unparseable buffer data
+                    }
+                }
+            }
+        }
+
+        // Always signal completion so VS Code's agent loop can finalize,
+        // even if the API didn't send a usage chunk.
+        if (!hasCompleted) {
+            log.info('DeepSeek stream ended without usage chunk — signaling completion anyway');
+            onComplete();
+        }
     } finally {
         reader.releaseLock();
     }
+
+    log.info('DeepSeek stream completed successfully');
 }
 
 // --- Tool Call State Management ---
