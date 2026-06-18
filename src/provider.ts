@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
 import { log } from './log.js';
-import type { DeepSeekRequest, DeepSeekTool } from './api/types.js';
+import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage } from './api/types.js';
 
 /**
  * VS Code Output channel for Nika diagnostics.
@@ -17,6 +17,89 @@ function getOutputChannel(): vscode.OutputChannel {
         _outputChannel = vscode.window.createOutputChannel('Nika');
     }
     return _outputChannel;
+}
+
+/**
+ * Rough token count estimation for messages.
+ * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
+ */
+function estimateMessageTokens(messages: DeepSeekMessage[]): number {
+    let total = 0;
+    for (const msg of messages) {
+        // Base overhead per message (~4 tokens for role formatting)
+        total += 4;
+        if (typeof msg.content === 'string') {
+            total += Math.ceil(msg.content.length / 4);
+        } else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+                if (part.type === 'text' && part.text) {
+                    total += Math.ceil(part.text.length / 4);
+                }
+            }
+        }
+        if (msg.tool_calls) {
+            for (const tc of msg.tool_calls) {
+                total += Math.ceil(tc.function.name.length / 4);
+                total += Math.ceil(tc.function.arguments.length / 4);
+            }
+        }
+    }
+    return total;
+}
+
+/**
+ * Truncate messages to fit within the configured context window.
+ * Preserves the system message (first message) and removes oldest user/assistant
+ * messages from the middle when the context is exceeded.
+ */
+function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekMessage[] {
+    const maxContextTokens = getContextWindowTokens();
+    const maxOutputTokens = getMaxTokens();
+    // Reserve space for output — input context = total - max_output - safety buffer
+    const availableInputTokens = maxContextTokens - maxOutputTokens - 1024;
+
+    const estimatedTokens = estimateMessageTokens(messages);
+    if (estimatedTokens <= availableInputTokens) {
+        return messages;
+    }
+
+    // Need to truncate. Keep system message (index 0 if it's role: 'system'),
+    // then keep the most recent messages.
+    const systemMessages: DeepSeekMessage[] = [];
+    const otherMessages: DeepSeekMessage[] = [];
+
+    for (const msg of messages) {
+        if (msg.role === 'system' && systemMessages.length === 0) {
+            systemMessages.push(msg);
+        } else {
+            otherMessages.push(msg);
+        }
+    }
+
+    // Work from newest to oldest, keeping what fits
+    const keptMessages: DeepSeekMessage[] = [];
+    let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages);
+
+    for (let i = otherMessages.length - 1; i >= 0; i--) {
+        const msg = otherMessages[i];
+        const msgTokens = estimateMessageTokens([msg]);
+        if (msgTokens <= tokenBudget) {
+            keptMessages.unshift(msg);
+            tokenBudget -= msgTokens;
+        } else {
+            // This message is too large — skip it and everything older
+            break;
+        }
+    }
+
+    const truncated = [...systemMessages, ...keptMessages];
+
+    log.info(
+        `Context window: truncated from ${messages.length} to ${truncated.length} messages ` +
+        `(~${estimateMessageTokens(messages).toLocaleString()} → ~${estimateMessageTokens(truncated).toLocaleString()} tokens)`
+    );
+
+    return truncated;
 }
 
 /**
@@ -110,6 +193,11 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 );
             }
         }
+
+        if (token.isCancellationRequested) return;
+
+        // Truncate messages to fit within the configured context window
+        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
 
         if (token.isCancellationRequested) return;
 

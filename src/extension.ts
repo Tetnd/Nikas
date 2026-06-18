@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -40,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
+        vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
         vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
         vscode.commands.registerCommand('nika.setFlashForAllAgents', () => setFlashForAllAgents()),
         vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
@@ -61,6 +62,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(symbol-parameter) Thinking Effort',
                         description: 'Set reasoning depth for thinking-capable models',
+                    },
+                    {
+                        label: '$(window) Context Window',
+                        description: 'Set maximum input context size (128K recommended)',
                     },
                     {
                         label: '$(symbol-misc) Agent Model Assignments',
@@ -106,6 +111,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(symbol-parameter) Thinking Effort':
                         vscode.commands.executeCommand('nika.chooseThinkingEffort');
+                        break;
+                    case '$(window) Context Window':
+                        vscode.commands.executeCommand('nika.chooseContextWindow');
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
                         vscode.commands.executeCommand('nika.agentModelAssignments');
@@ -269,6 +277,41 @@ async function chooseThinkingEffort(): Promise<void> {
     if (effort) {
         await config.update('thinkingEffort', effort, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(`Nika: Thinking effort set to ${effort}`);
+    }
+}
+
+/**
+ * Context window selector — lets user cap input tokens for cost/speed control.
+ */
+async function chooseContextWindow(): Promise<void> {
+    const config = getConfig();
+    const current = getContextWindowPreset();
+
+    const items: vscode.QuickPickItem[] = CONTEXT_WINDOW_PRESETS.map(p => {
+        const check = p.id === current ? '$(check)' : '$(blank)';
+        const recommended = p.recommended ? ' $(star) Recommended' : '';
+        return {
+            label: `${check} ${p.label}`,
+            description: `${p.tokens.toLocaleString()} tokens${recommended}`,
+            detail: p.description,
+        };
+    });
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Context Window',
+        placeHolder: 'Select maximum input context size (tokens)',
+        matchOnDescription: true,
+    });
+
+    if (!selected) return;
+
+    const preset = CONTEXT_WINDOW_PRESETS.find(p => selected.label.endsWith(p.id))?.id;
+    if (preset) {
+        await config.update('contextWindow', preset, vscode.ConfigurationTarget.Global);
+        const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
+        vscode.window.showInformationMessage(
+            `Nika: Context window set to ${preset} (${found?.tokens.toLocaleString()} tokens)`
+        );
     }
 }
 

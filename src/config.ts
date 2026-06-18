@@ -92,3 +92,30 @@ export const THINKING_EFFORTS: { id: ThinkingEffort; label: string; description:
 export function getThinkingEffort(): ThinkingEffort {
     return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';
 }
+
+/**
+ * Context window presets.
+ *
+ * DeepSeek V4 models support up to 1M tokens of input context.
+ * These presets let users cap the context to control costs and response speed.
+ */
+export type ContextWindowPreset = '32K' | '64K' | '128K' | '256K' | '512K' | '1M';
+
+export const CONTEXT_WINDOW_PRESETS: { id: ContextWindowPreset; label: string; tokens: number; description: string; recommended: boolean }[] = [
+    { id: '32K', label: '32K', tokens: 32_768, description: 'Minimal — most cost-efficient, fastest responses', recommended: false },
+    { id: '64K', label: '64K', tokens: 65_536, description: 'Small — good for simple Q&A', recommended: false },
+    { id: '128K', label: '128K', tokens: 131_072, description: 'Balanced — recommended default for most use cases', recommended: true },
+    { id: '256K', label: '256K', tokens: 262_144, description: 'Large — for complex document analysis', recommended: false },
+    { id: '512K', label: '512K', tokens: 524_288, description: 'Extra large — for very long conversations', recommended: false },
+    { id: '1M', label: '1M', tokens: 1_000_000, description: 'Maximum — full DeepSeek context (recommended for complex agent tasks)', recommended: false },
+];
+
+export function getContextWindowPreset(): ContextWindowPreset {
+    return (getConfig().get<string>('contextWindow') as ContextWindowPreset) ?? '128K';
+}
+
+export function getContextWindowTokens(): number {
+    const preset = getContextWindowPreset();
+    const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
+    return found?.tokens ?? 131_072;
+}
