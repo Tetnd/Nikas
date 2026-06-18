@@ -5,3 +5,8 @@ node_modules/**
 tsconfig.json
 **/*.ts
 **/*.map
+logs/**
+CachedProfilesData/**
+machineid
+nika.log
+*.log
