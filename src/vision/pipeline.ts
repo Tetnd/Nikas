@@ -21,6 +21,9 @@ import type { SecretStore } from '../secrets.js';
 
 // In-memory cache: image hash → description. Lives for the session.
 const descriptionCache = new Map<string, string>();
+// Sentinel value stored in descriptionCache for images that failed processing.
+// Prevents retrying failed images on subsequent messages since they're no longer relevant.
+const FAILED_MARKER = '__VISION_FAILED__';
 
 function hashImage(data: Uint8Array): string {
     // Hash first 64KB + total size to identify duplicates efficiently
@@ -98,8 +101,12 @@ export async function preprocessVision(
         if (_token.isCancellationRequested) break;
 
         if (img.cached) {
-            // Use cached description
             const cached = descriptionCache.get(img.hash)!;
+            if (cached === FAILED_MARKER) {
+                // Previously failed — don't retry, it's no longer relevant
+                continue;
+            }
+            // Use cached description
             const existing = descriptionMap.get(img.msgIndex) ?? '';
             const prefix = existing ? '\n\n---\n\n' : '';
             descriptionMap.set(img.msgIndex, `${existing}${prefix}${cached}`);
@@ -118,6 +125,8 @@ export async function preprocessVision(
             const prefix = existing ? '\n\n---\n\n' : '';
             descriptionMap.set(img.msgIndex, `${existing}${prefix}${result.description}`);
         } else {
+            // Cache the failure so it won't be retried on subsequent messages
+            descriptionCache.set(img.hash, FAILED_MARKER);
             errors.push(`Image: ${result.error ?? 'Unknown error'}`);
         }
     }
