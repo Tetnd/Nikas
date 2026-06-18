@@ -79,10 +79,11 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     }
 
     // New version available — ask user
+    const releaseVersion = release.tag_name.replace(/^v/, '');
     const download = 'Download & Install';
     const viewRelease = 'View Release Notes';
     const choice = await vscode.window.showInformationMessage(
-        `Nika v${release.tag_name} is available (you have v${currentVersion}). Update now?`,
+        `Nika v${releaseVersion} is available (you have v${currentVersion}). Update now?`,
         { modal: false },
         download,
         viewRelease
@@ -111,7 +112,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     await vscode.window.withProgress(
         {
             location: vscode.ProgressLocation.Notification,
-            title: `Downloading Nika ${release.tag_name}...`,
+            title: `Downloading Nika v${releaseVersion}...`,
             cancellable: true,
         },
         async (progress, token) => {
@@ -149,7 +150,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
 
             // Prompt to reload
             const reload = await vscode.window.showInformationMessage(
-                `Nika ${release.tag_name} installed! Reload window to activate.`,
+                `Nika v${releaseVersion} installed! Reload window to activate.`,
                 'Reload Now'
             );
 
