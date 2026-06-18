@@ -208,14 +208,11 @@ export async function streamDeepSeekChat(
         // Always signal completion so VS Code's agent loop can finalize,
         // even if the API didn't send a usage chunk.
         if (!hasCompleted) {
-            log.info(`DeepSeek stream ended without usage chunk (finish_reason: ${finalFinishReason ?? 'none'}, content: ${receivedContent}, tools: ${receivedToolCalls}) — signaling completion`);
             onComplete();
         }
     } finally {
         reader.releaseLock();
     }
-
-    log.info(`DeepSeek stream done — finish_reason: ${finalFinishReason ?? 'none'}, content: ${receivedContent}, tools: ${receivedToolCalls}, usage: ${hasCompleted}`);
 
     return { receivedContent, receivedToolCalls, finishReason: finalFinishReason };
 }

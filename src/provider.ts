@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { preprocessVision } from './vision/pipeline.js';
@@ -140,12 +140,14 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             return [];
         }
 
+        const effectiveInputTokens = getContextWindowTokens();
+
         return DEEPSEEK_MODELS.map(m => ({
             id: m.id,
             name: m.name,
             family: m.family,
             version: m.version,
-            maxInputTokens: m.maxInputTokens,
+            maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
             maxOutputTokens: m.maxOutputTokens,
             capabilities: m.capabilities,
             detail: m.detail,
@@ -219,6 +221,9 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const msg = `[Nika] Using model: ${modelId}${agentLabel}`;
         console.log(msg);
         getOutputChannel().appendLine(msg);
+
+        const ctxWindowTokens = getContextWindowTokens();
+        getOutputChannel().appendLine(`[Nika] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
         const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
