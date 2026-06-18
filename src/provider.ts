@@ -228,11 +228,28 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
+        // When thinking mode is enabled, ensure enough headroom for reasoning
+        // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
+        // alone, leaving nothing for visible output if max_tokens is too low.
+        const effectiveMaxTokens = getMaxTokens();
+        const thinkingEnabled = getThinkingEffort() !== 'off';
+        const minThinkingTokens = 16_384;
+        const boostedTokens = thinkingEnabled
+            ? Math.max(effectiveMaxTokens, minThinkingTokens)
+            : effectiveMaxTokens;
+
+        if (boostedTokens !== effectiveMaxTokens) {
+            getOutputChannel().appendLine(
+                `[Nika] Thinking mode enabled — boosting max_tokens from ` +
+                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`
+            );
+        }
+
         const request: DeepSeekRequest = {
             model: modelId,
             messages: deepseekMessages,
             temperature: getTemperature(),
-            max_tokens: getMaxTokens(),
+            max_tokens: boostedTokens,
             stream: true,
             ...thinkingParams,
             stream_options: { include_usage: true },
@@ -255,11 +272,11 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 request,
                 apiKey,
                 abortController.signal,
-                // onText — report each chunk to VS Code
+                // onText
                 (text: string) => {
                     progress.report(new vscode.LanguageModelTextPart(text));
                 },
-                // onToolCalls — report tool calls
+                // onToolCalls
                 (toolCalls) => {
                     for (const tc of toolCalls) {
                         progress.report(
@@ -267,7 +284,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                         );
                     }
                 },
-                // onComplete — report usage back to VS Code so the context usage widget works
+                // onComplete
                 (usage) => {
                     if (usage) {
                         progress.report(
@@ -286,12 +303,12 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 }
             );
 
-            // If DeepSeek returned an empty response (no text, no tool calls),
-            // throw so VS Code shows a meaningful error instead of "Sorry, no response was returned"
+            // If DeepSeek returned nothing, don't throw — VS Code's agent loop
+            // handles empty responses fine. Just log it for diagnostics.
             if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
-                throw new Error(
-                    `DeepSeek returned empty response (finish_reason: ${streamResult.finishReason ?? 'none'}). ` +
-                    'This may indicate a request format issue. Check nika.log for details.'
+                log.info(
+                    `Empty response from DeepSeek (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
+                    `max_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
         } catch (err) {

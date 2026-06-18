@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -56,6 +56,11 @@
         "category": "Nika"
       },
       {
+        "command": "nika.chooseMaxTokens",
+        "title": "Max Output Tokens",
+        "category": "Nika"
+      },
+      {
         "command": "nika.chooseContextWindow",
         "title": "Context Window",
         "category": "Nika"
@@ -98,11 +103,27 @@
           "description": "The DeepSeek model to use for chat"
         },
         "nika.maxTokens": {
-          "type": "number",
-          "default": 8192,
-          "minimum": 1,
-          "maximum": 8192,
-          "description": "Maximum output tokens per response"
+          "type": "string",
+          "default": "8K",
+          "enum": [
+            "4K",
+            "8K",
+            "16K",
+            "32K",
+            "64K",
+            "128K",
+            "384K"
+          ],
+          "enumDescriptions": [
+            "4,096 tokens — Minimal, fastest. Good for simple Q&A.",
+            "8,192 tokens — Default. Balanced for most conversations without thinking mode.",
+            "16,384 tokens — Thinking mode sweet spot. Reserves ~8K for reasoning + ~8K for visible output.",
+            "32,768 tokens — Large responses for complex code generation and analysis.",
+            "65,536 tokens — Very long outputs for document generation and large refactors.",
+            "131,072 tokens — Extended output for heavy agent sessions.",
+            "384,000 tokens — Maximum DeepSeek V4 output capability."
+          ],
+          "description": "Maximum output tokens per response. DeepSeek V4 supports up to 384K tokens. When thinking mode is on, choose at least 16K so reasoning tokens don't consume the entire budget."
         },
         "nika.temperature": {
           "type": "number",

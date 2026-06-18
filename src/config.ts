@@ -41,7 +41,7 @@ export const DEEPSEEK_MODELS = [
         family: 'deepseek',
         version: '4.0.0',
         maxInputTokens: 1_000_000,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 384_000,
         capabilities: { imageInput: true, toolCalling: true },
         detail: 'Fast, 284B MoE (13B active)',
     },
@@ -51,7 +51,7 @@ export const DEEPSEEK_MODELS = [
         family: 'deepseek',
         version: '4.0.0',
         maxInputTokens: 1_000_000,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 384_000,
         capabilities: { imageInput: true, toolCalling: true },
         detail: 'Full-powered, supports thinking mode',
     },
@@ -65,8 +65,34 @@ export function getSelectedModel(): string {
     return getConfig().get<string>('selectedModel') ?? 'deepseek-v4-flash';
 }
 
+/**
+ * Max output token presets.
+ *
+ * DeepSeek V4 models support up to 384K output tokens.
+ * These presets let users choose the right balance of speed, cost, and output length.
+ *
+ * Thinking mode consumes tokens just on reasoning — use at least 16K when it's enabled.
+ */
+export type MaxTokensPreset = '4K' | '8K' | '16K' | '32K' | '64K' | '128K' | '384K';
+
+export const MAX_TOKENS_PRESETS: { id: MaxTokensPreset; label: string; tokens: number; description: string; recommended: boolean; thinkingRecommended: boolean }[] = [
+    { id: '4K', label: '4K', tokens: 4_096, description: 'Minimal — fastest, lowest cost. Good for simple Q&A and lookups, but easily truncated.', recommended: false, thinkingRecommended: false },
+    { id: '8K', label: '8K', tokens: 8_192, description: 'Default — balanced for most conversations. Sufficient when thinking mode is off. Without thinking, the full budget goes to visible output.', recommended: true, thinkingRecommended: false },
+    { id: '16K', label: '16K', tokens: 16_384, description: 'Thinking mode sweet spot — reserves ~8K for reasoning tokens while leaving ~8K for visible output. Prevents the "empty response" problem.', recommended: false, thinkingRecommended: true },
+    { id: '32K', label: '32K', tokens: 32_768, description: 'Large responses — complex code generation, long-form content, detailed analysis with thinking.', recommended: false, thinkingRecommended: false },
+    { id: '64K', label: '64K', tokens: 65_536, description: 'Very long outputs — document generation, large refactors, multi-step agent tasks.', recommended: false, thinkingRecommended: false },
+    { id: '128K', label: '128K', tokens: 131_072, description: 'Extended — maximum practical for extended agent sessions with heavy tool use.', recommended: false, thinkingRecommended: false },
+    { id: '384K', label: '384K', tokens: 384_000, description: 'Maximum — full DeepSeek V4 output capability. Only needed for extremely long generations.', recommended: false, thinkingRecommended: false },
+];
+
+export function getMaxTokensPreset(): MaxTokensPreset {
+    return (getConfig().get<string>('maxTokens') as MaxTokensPreset) ?? '8K';
+}
+
 export function getMaxTokens(): number {
-    return getConfig().get<number>('maxTokens') ?? 8192;
+    const preset = getMaxTokensPreset();
+    const found = MAX_TOKENS_PRESETS.find(p => p.id === preset);
+    return found?.tokens ?? 8192;
 }
 
 export function getTemperature(): number {

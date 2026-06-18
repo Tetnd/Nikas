@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset } from './config.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -40,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
+        vscode.commands.registerCommand('nika.chooseMaxTokens', () => chooseMaxTokens()),
         vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
         vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
         vscode.commands.registerCommand('nika.setFlashForAllAgents', () => setFlashForAllAgents()),
@@ -62,6 +63,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(symbol-parameter) Thinking Effort',
                         description: 'Set reasoning depth for thinking-capable models',
+                    },
+                    {
+                        label: '$(symbol-method) Max Output Tokens',
+                        description: 'Set maximum response length (16K recommended for thinking mode)',
                     },
                     {
                         label: '$(window) Context Window',
@@ -111,6 +116,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(symbol-parameter) Thinking Effort':
                         vscode.commands.executeCommand('nika.chooseThinkingEffort');
+                        break;
+                    case '$(symbol-method) Max Output Tokens':
+                        vscode.commands.executeCommand('nika.chooseMaxTokens');
                         break;
                     case '$(window) Context Window':
                         vscode.commands.executeCommand('nika.chooseContextWindow');
@@ -311,6 +319,48 @@ async function chooseContextWindow(): Promise<void> {
         const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
         vscode.window.showInformationMessage(
             `Nika: Context window set to ${preset} (${found?.tokens.toLocaleString()} tokens)`
+        );
+    }
+}
+
+/**
+ * Max output tokens picker — controls how long responses can be.
+ *
+ * Thinking mode consumes tokens just on reasoning. The 16K preset is the
+ * sweet spot: ~8K for reasoning + ~8K for visible output. Without thinking,
+ * the full budget goes to visible text.
+ */
+async function chooseMaxTokens(): Promise<void> {
+    const config = getConfig();
+    const current = getMaxTokensPreset();
+
+    const items: vscode.QuickPickItem[] = MAX_TOKENS_PRESETS.map(p => {
+        const check = p.id === current ? '$(check)' : '$(blank)';
+        let badges = '';
+        if (p.recommended) badges += ' $(star) Recommended';
+        if (p.thinkingRecommended) badges += ' $(chip) Best for thinking';
+        return {
+            label: `${check} ${p.label}`,
+            description: `${p.tokens.toLocaleString()} tokens${badges}`,
+            detail: p.description,
+        };
+    });
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Max Output Tokens',
+        placeHolder: 'Select maximum output length. 16K+ recommended when thinking mode is on.',
+        matchOnDescription: true,
+    });
+
+    if (!selected) return;
+
+    const preset = MAX_TOKENS_PRESETS.find(p => selected.label.endsWith(p.id))?.id;
+    if (preset) {
+        await config.update('maxTokens', preset, vscode.ConfigurationTarget.Global);
+        const found = MAX_TOKENS_PRESETS.find(p => p.id === preset);
+        const thinkingNote = found?.thinkingRecommended ? ' Good for thinking mode.' : '';
+        vscode.window.showInformationMessage(
+            `Nika: Max output tokens set to ${preset} (${found?.tokens.toLocaleString()}).${thinkingNote}`
         );
     }
 }
