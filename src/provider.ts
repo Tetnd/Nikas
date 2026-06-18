@@ -141,6 +141,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         }
 
         const effectiveInputTokens = getContextWindowTokens();
+        const effectiveOutputTokens = getMaxTokens();
 
         return DEEPSEEK_MODELS.map(m => ({
             id: m.id,
@@ -148,7 +149,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             family: m.family,
             version: m.version,
             maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
-            maxOutputTokens: m.maxOutputTokens,
+            maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
             capabilities: m.capabilities,
             detail: m.detail,
         })) as vscode.LanguageModelChatInformation[];
