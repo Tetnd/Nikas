@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -192,18 +192,20 @@
           "type": "string",
           "default": "INFO",
           "enum": [
+            "OFF",
             "ERROR",
             "WARN",
             "INFO",
             "VERBOSE"
           ],
           "enumDescriptions": [
+            "No logging at all — completely silent",
             "Only errors and API failures",
             "Errors and warnings (misconfigurations, recoverable issues)",
             "Normal operational messages — requests sent, models used, errors",
             "Detailed debugging — full request/response bodies, message dumps"
           ],
-          "description": "Logging verbosity level. Writes to nika.log in the workspace root. Set to VERBOSE when debugging API issues."
+          "description": "Logging verbosity level. Writes to nika.log in the workspace root. Set to OFF to disable logging entirely. Set to VERBOSE when debugging API issues."
         }
       }
     }

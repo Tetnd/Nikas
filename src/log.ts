@@ -13,14 +13,16 @@ import type { LogLevel } from './config.js';
  * Stack traces are included when available.
  *
  * Log levels (increasing verbosity):
- *   ERROR — Only errors (crashes, API failures)
- *   WARN  — Warnings (misconfigurations, recoverable issues)
- *   INFO  — Normal operational messages (requests sent, models used) [default]
+ *   OFF     — No logging at all (completely silent)
+ *   ERROR   — Only errors (crashes, API failures)
+ *   WARN    — Warnings (misconfigurations, recoverable issues)
+ *   INFO    — Normal operational messages (requests sent, models used) [default]
  *   VERBOSE — Detailed debugging (full request/response bodies, message dumps)
  */
 
 // Numeric values for comparison
 const LEVEL_NUM: Record<LogLevel, number> = {
+    OFF: -1,
     ERROR: 0,
     WARN: 1,
     INFO: 2,

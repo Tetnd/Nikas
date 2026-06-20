@@ -148,9 +148,10 @@ export function getContextWindowTokens(): number {
 
 // --- Log Level ---
 
-export type LogLevel = 'ERROR' | 'WARN' | 'INFO' | 'VERBOSE';
+export type LogLevel = 'OFF' | 'ERROR' | 'WARN' | 'INFO' | 'VERBOSE';
 
 export const LOG_LEVELS: { id: LogLevel; label: string; description: string }[] = [
+    { id: 'OFF', label: 'Off', description: 'No logging at all — completely silent' },
     { id: 'ERROR', label: 'Error', description: 'Only errors (crashes, API failures)' },
     { id: 'WARN', label: 'Warning', description: 'Errors and warnings (misconfigurations)' },
     { id: 'INFO', label: 'Info', description: 'Normal operational messages (default)' },
