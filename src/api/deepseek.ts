@@ -30,7 +30,7 @@ function logRequestDetails(request: DeepSeekRequest): void {
             ? bodyStr.slice(0, 10_000) + `\n... [truncated, full body is ${bodyStr.length} chars / ${bodySize} bytes]`
             : bodyStr;
 
-        log.info(
+        log.verbose(
             `DeepSeek API request:\n` +
             `  URL: ${DEEPSEEK_CHAT_ENDPOINT}\n` +
             `  Method: POST\n` +
@@ -323,7 +323,7 @@ async function logResponseDetails(response: Response, label: string): Promise<st
             headers[key] = value;
         });
 
-        log.info(
+        log.verbose(
             `${label} response details:\n` +
             `  Status: ${response.status} ${response.statusText}\n` +
             `  Headers: ${JSON.stringify(headers, null, 2)}\n` +
@@ -361,7 +361,7 @@ async function handleErrorResponse(response: Response, request?: DeepSeekRequest
 
     // Log request context for correlation
     if (request) {
-        log.info(
+        log.verbose(
             `Request context for failed response:\n` +
             `  Model: ${request.model}\n` +
             `  Messages: ${request.messages?.length ?? 0}\n` +

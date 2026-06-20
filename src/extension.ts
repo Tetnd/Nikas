@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
+import { setLogLevel } from './log.js';
 
 /**
  * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
@@ -14,6 +15,18 @@ import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_
  */
 export async function activate(context: vscode.ExtensionContext) {
     const provider = new NikaChatProvider(context);
+
+    // Sync log level from settings on startup
+    setLogLevel(getLogLevelSetting());
+
+    // Listen for log level changes in settings
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('nika.logLevel')) {
+                setLogLevel(getLogLevelSetting());
+            }
+        })
+    );
 
     // Register the language model chat provider — models appear in Copilot picker
     context.subscriptions.push(
@@ -44,6 +57,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
         vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
         vscode.commands.registerCommand('nika.setFlashForAllAgents', () => setFlashForAllAgents()),
+        vscode.commands.registerCommand('nika.chooseLogLevel', () => chooseLogLevel()),
         vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nika.manage', () => {
             vscode.window.showQuickPick(
@@ -71,6 +85,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(window) Context Window',
                         description: 'Set maximum input context size (128K recommended)',
+                    },
+                    {
+                        label: '$(output) Log Level',
+                        description: 'Set logging verbosity (INFO is default, VERBOSE for debugging)',
                     },
                     {
                         label: '$(symbol-misc) Agent Model Assignments',
@@ -122,6 +140,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(window) Context Window':
                         vscode.commands.executeCommand('nika.chooseContextWindow');
+                        break;
+                    case '$(output) Log Level':
+                        vscode.commands.executeCommand('nika.chooseLogLevel');
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
                         vscode.commands.executeCommand('nika.agentModelAssignments');
@@ -452,6 +473,33 @@ async function setFlashForAllAgents(): Promise<void> {
         vscode.window.showWarningMessage(
             `Nika: Set ${success}/${settings.length} settings. ${failed} failed.`
         );
+    }
+}
+
+/**
+ * Log level picker — lets user control logging verbosity.
+ */
+async function chooseLogLevel(): Promise<void> {
+    const config = getConfig();
+    const current = getLogLevelSetting();
+
+    const items: vscode.QuickPickItem[] = LOG_LEVELS.map(l => ({
+        label: l.id === current ? `$(check) ${l.label}` : `$(blank) ${l.label}`,
+        description: l.description,
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Nika: Log Level',
+        placeHolder: 'Select logging verbosity (writes to nika.log)',
+        matchOnDescription: true,
+    });
+
+    if (!selected) return;
+
+    const level = LOG_LEVELS.find(l => selected.label.endsWith(l.label))?.id;
+    if (level) {
+        await config.update('logLevel', level, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`Nika: Log level set to ${level}`);
     }
 }
 

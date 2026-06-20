@@ -1,20 +1,36 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { LogLevel } from './config.js';
 
 /**
- * Simple file-based logger for Nika extension errors.
+ * File-based logger for Nika with level filtering.
  *
  * Writes to `nika.log` in the workspace root (first workspace folder).
  * Falls back to the extension's global storage path if no workspace is open.
  *
  * Log format: [ISO timestamp] [LEVEL] message
  * Stack traces are included when available.
+ *
+ * Log levels (increasing verbosity):
+ *   ERROR — Only errors (crashes, API failures)
+ *   WARN  — Warnings (misconfigurations, recoverable issues)
+ *   INFO  — Normal operational messages (requests sent, models used) [default]
+ *   VERBOSE — Detailed debugging (full request/response bodies, message dumps)
  */
+
+// Numeric values for comparison
+const LEVEL_NUM: Record<LogLevel, number> = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    VERBOSE: 3,
+};
 
 const LOG_FILE_NAME = 'nika.log';
 
 let logFilePath: string | null = null;
+let currentLevel: LogLevel = 'INFO';
 
 function resolveLogPath(): string {
     if (logFilePath) return logFilePath;
@@ -35,7 +51,13 @@ function formatTimestamp(): string {
     return new Date().toISOString();
 }
 
-function writeLine(level: string, message: string, err?: unknown): void {
+function shouldLog(level: LogLevel): boolean {
+    return LEVEL_NUM[level] <= LEVEL_NUM[currentLevel];
+}
+
+function writeLine(level: LogLevel, message: string, err?: unknown): void {
+    if (!shouldLog(level)) return;
+
     try {
         const filePath = resolveLogPath();
         const timestamp = formatTimestamp();
@@ -73,7 +95,23 @@ export const log = {
     info(message: string): void {
         writeLine('INFO', message);
     },
+
+    verbose(message: string, err?: unknown): void {
+        writeLine('VERBOSE', message, err);
+    },
 };
+
+/** Set the current log level. Returns the previous level. */
+export function setLogLevel(level: LogLevel): LogLevel {
+    const prev = currentLevel;
+    currentLevel = level;
+    return prev;
+}
+
+/** Get the current log level. */
+export function getLogLevel(): LogLevel {
+    return currentLevel;
+}
 
 /** Get the current log file path (for display to the user). */
 export function getLogFilePath(): string {

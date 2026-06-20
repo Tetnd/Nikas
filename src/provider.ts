@@ -279,7 +279,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             getOutputChannel().appendLine(warning);
             log.warn(warning);
 
-            // Log the full message roles for debugging
+            // Log the full message roles for debugging (verbose only)
             const roleSequence = deepseekMessages.map((m, i) => {
                 const hasTc = m.tool_calls ? ` (${m.tool_calls.length} tool_calls)` : '';
                 const isToolResult = m.tool_call_id ? ` (tool_call_id: ${m.tool_call_id})` : '';
@@ -287,7 +287,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                     Array.isArray(m.content) ? m.content.length : 0;
                 return `  [${i}] role=${m.role}${hasTc}${isToolResult} content=${typeof m.content === 'string' ? m.content.slice(0, 80) : contentLen > 0 ? `[${contentLen} parts]` : m.content === null ? 'null' : 'empty'}`;
             }).join('\n');
-            log.info(`Full message role sequence (${deepseekMessages.length} messages):\n${roleSequence}`);
+            log.verbose(`Full message role sequence (${deepseekMessages.length} messages):\n${roleSequence}`);
         }
 
         // Log request summary to nika.log
@@ -376,7 +376,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 err
             );
             // Also log extra context that might help debug 400s
-            log.info(
+            log.verbose(
                 `Error context: model=${modelId}, ` +
                 `thinking=${thinkingEnabled}, ` +
                 `tools=${options.tools?.length ?? 0}, ` +

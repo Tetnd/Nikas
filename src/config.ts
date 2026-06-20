@@ -145,3 +145,18 @@ export function getContextWindowTokens(): number {
     const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
     return found?.tokens ?? 131_072;
 }
+
+// --- Log Level ---
+
+export type LogLevel = 'ERROR' | 'WARN' | 'INFO' | 'VERBOSE';
+
+export const LOG_LEVELS: { id: LogLevel; label: string; description: string }[] = [
+    { id: 'ERROR', label: 'Error', description: 'Only errors (crashes, API failures)' },
+    { id: 'WARN', label: 'Warning', description: 'Errors and warnings (misconfigurations)' },
+    { id: 'INFO', label: 'Info', description: 'Normal operational messages (default)' },
+    { id: 'VERBOSE', label: 'Verbose', description: 'Detailed debugging (request/response bodies, message dumps)' },
+];
+
+export function getLogLevelSetting(): LogLevel {
+    return (getConfig().get<string>('logLevel') as LogLevel) ?? 'INFO';
+}
