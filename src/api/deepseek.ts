@@ -18,6 +18,41 @@ export interface StreamResult {
     finishReason: string | null | undefined;
 }
 
+/**
+ * Log the full request details for debugging.
+ * The API key is masked in log output.
+ */
+function logRequestDetails(request: DeepSeekRequest): void {
+    try {
+        const bodyStr = JSON.stringify(request);
+        const bodySize = new TextEncoder().encode(bodyStr).length;
+        const truncatedBody = bodyStr.length > 10_000
+            ? bodyStr.slice(0, 10_000) + `\n... [truncated, full body is ${bodyStr.length} chars / ${bodySize} bytes]`
+            : bodyStr;
+
+        // Mask API key: not in the request body itself, but log the rest
+        log.info(
+            `DeepSeek API request:\n` +
+            `  URL: ${DEEPSEEK_CHAT_ENDPOINT}\n` +
+            `  Method: POST\n` +
+            `  Body size: ${bodySize} bytes (${bodyStr.length} chars)\n` +
+            `  Messages: ${request.messages?.length ?? 0}\n` +
+            `  Tools: ${request.tools?.length ?? 0}\n` +
+            `  Model: ${request.model}\n` +
+            `  Stream: ${request.stream}\n` +
+            `  Thinking: ${request.thinking?.type ?? 'not set'}\n` +
+            `  Reasoning effort: ${request.reasoning_effort ?? 'not set'}\n` +
+            `  Max tokens: ${request.max_tokens}\n` +
+            `  Temperature: ${request.temperature}\n` +
+            `  Tool choice: ${request.tool_choice ?? 'not set'}\n` +
+            `  Body (first 10K chars):\n${truncatedBody}`
+        );
+    } catch (err) {
+        // Don't let logging itself cause issues
+        log.warn('Failed to log request details', err);
+    }
+}
+
 export async function streamDeepSeekChat(
     request: DeepSeekRequest,
     apiKey: string,
@@ -32,6 +67,9 @@ export async function streamDeepSeekChat(
         stream: true,
         stream_options: { include_usage: true },
     };
+
+    // Log the full request details before sending
+    logRequestDetails(streamRequest);
 
     let response: Response;
     try {
@@ -74,7 +112,7 @@ export async function streamDeepSeekChat(
     }
 
     if (!response.ok) {
-        await handleErrorResponse(response);
+        await handleErrorResponse(response, streamRequest);
     }
 
     const reader = response.body?.getReader();
@@ -265,14 +303,52 @@ function finalizeToolCalls(pending: Map<number, PendingToolCall>): CompletedTool
 
 // --- Error Handling ---
 
-async function handleErrorResponse(response: Response): Promise<never> {
+/**
+ * Log full response details for debugging API errors.
+ */
+async function logResponseDetails(response: Response, label: string): Promise<void> {
+    try {
+        // Clone the response so we can read the body without consuming the original
+        const cloned = response.clone();
+        let bodyText: string;
+        try {
+            bodyText = await cloned.text();
+        } catch {
+            bodyText = '(could not read response body)';
+        }
+        const truncated = bodyText.length > 5_000
+            ? bodyText.slice(0, 5_000) + `\n... [truncated, full body is ${bodyText.length} chars]`
+            : bodyText;
+
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+            headers[key] = value;
+        });
+
+        log.info(
+            `${label} response details:\n` +
+            `  Status: ${response.status} ${response.statusText}\n` +
+            `  Headers: ${JSON.stringify(headers, null, 2)}\n` +
+            `  Body:\n${truncated}`
+        );
+    } catch (err) {
+        log.warn(`Failed to log response details for ${label}`, err);
+    }
+}
+
+async function handleErrorResponse(response: Response, request?: DeepSeekRequest): Promise<never> {
     let message = `DeepSeek API returned HTTP ${response.status}`;
     let detail = '';
+
+    // Log full response details first
+    await logResponseDetails(response, `DeepSeek API HTTP ${response.status}`);
 
     try {
         const body = await response.json() as DeepSeekErrorResponse;
         if (body.error?.message) {
             detail = body.error.message;
+        } else {
+            detail = JSON.stringify(body).slice(0, 500);
         }
     } catch {
         try {
@@ -281,6 +357,20 @@ async function handleErrorResponse(response: Response): Promise<never> {
         } catch {
             // ignore
         }
+    }
+
+    // Log request context for correlation
+    if (request) {
+        log.info(
+            `Request context for failed response:\n` +
+            `  Model: ${request.model}\n` +
+            `  Messages: ${request.messages?.length ?? 0}\n` +
+            `  Tools: ${request.tools?.length ?? 0}\n` +
+            `  Thinking: ${request.thinking?.type ?? 'not set'}\n` +
+            `  Reasoning effort: ${request.reasoning_effort ?? 'not set'}\n` +
+            `  Max tokens: ${request.max_tokens}\n` +
+            `  Tool choice: ${request.tool_choice ?? 'not set'}`
+        );
     }
 
     switch (response.status) {

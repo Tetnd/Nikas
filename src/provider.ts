@@ -262,6 +262,45 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             request.tool_choice = 'auto';
         }
 
+        // Detect incompatible parameter combinations
+        const hasThinking = thinkingEnabled;
+        const hasTools = (options.tools?.length ?? 0) > 0;
+        if (hasThinking && hasTools) {
+            const warning = `[Nika] WARNING: thinking mode (${getThinkingEffort()}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
+            getOutputChannel().appendLine(warning);
+            log.warn(warning);
+        }
+
+        // Validate message sequence order before sending
+        const sequenceIssues = validateMessageSequence(deepseekMessages);
+        if (sequenceIssues.length > 0) {
+            const warning = `[Nika] WARNING: Message sequence validation found ${sequenceIssues.length} issue(s):\n  ${sequenceIssues.join('\n  ')}`;
+            getOutputChannel().appendLine(warning);
+            log.warn(warning);
+
+            // Log the full message roles for debugging
+            const roleSequence = deepseekMessages.map((m, i) => {
+                const hasTc = m.tool_calls ? ` (${m.tool_calls.length} tool_calls)` : '';
+                const isToolResult = m.tool_call_id ? ` (tool_call_id: ${m.tool_call_id})` : '';
+                const contentLen = typeof m.content === 'string' ? m.content.length :
+                    Array.isArray(m.content) ? m.content.length : 0;
+                return `  [${i}] role=${m.role}${hasTc}${isToolResult} content=${typeof m.content === 'string' ? m.content.slice(0, 80) : contentLen > 0 ? `[${contentLen} parts]` : m.content === null ? 'null' : 'empty'}`;
+            }).join('\n');
+            log.info(`Full message role sequence (${deepseekMessages.length} messages):\n${roleSequence}`);
+        }
+
+        // Log request summary to nika.log
+        const bodySize = new TextEncoder().encode(JSON.stringify(request)).length;
+        log.info(
+            `Sending DeepSeek request: model=${modelId}, ` +
+            `messages=${deepseekMessages.length}, ` +
+            `tools=${options.tools?.length ?? 0}, ` +
+            `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
+            `thinking=${thinkingEnabled}, ` +
+            `max_tokens=${boostedTokens.toLocaleString()}, ` +
+            `temperature=${getTemperature()}`
+        );
+
         // Create an AbortController for cancellation
         const abortController = new AbortController();
         const cancelDisposable = token.onCancellationRequested(() => {
@@ -335,6 +374,16 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 `Chat request failed for model "${modelId}" (messages: ${deepseekMessages.length}, tools: ${options.tools?.length ?? 0})`,
                 err
             );
+            // Also log extra context that might help debug 400s
+            log.info(
+                `Error context: model=${modelId}, ` +
+                `thinking=${thinkingEnabled}, ` +
+                `tools=${options.tools?.length ?? 0}, ` +
+                `max_tokens=${boostedTokens}, ` +
+                `temperature=${getTemperature()}, ` +
+                `bodySize=${(new TextEncoder().encode(JSON.stringify(request)).length / 1024).toFixed(1)}KB, ` +
+                `contextWindow=${getContextWindowPreset()}`
+            );
 
             // Only report to progress for interactive (non-background) requests.
             // Background summarization requests don't have a visible chat window,
@@ -371,6 +420,72 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
         return Math.ceil(content.length / 4);
     }
+}
+
+/**
+ * Validate DeepSeek message sequence ordering.
+ * The API expects strict alternating roles (system → user → assistant → user → assistant → ...)
+ * with tool results following tool call messages.
+ * Returns an array of human-readable issue descriptions (empty if no issues).
+ */
+function validateMessageSequence(messages: DeepSeekMessage[]): string[] {
+    const issues: string[] = [];
+
+    if (messages.length === 0) {
+        issues.push('No messages in request');
+        return issues;
+    }
+
+    for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const prev = i > 0 ? messages[i - 1] : null;
+        const next = i < messages.length - 1 ? messages[i + 1] : null;
+
+        // Check 1: System message must be first if present
+        if (msg.role === 'system' && i !== 0) {
+            issues.push(`Message [${i}]: system role must be first, not at index ${i}`);
+        }
+
+        // Check 2: Two consecutive user messages
+        if (msg.role === 'user' && prev?.role === 'user') {
+            issues.push(`Message [${i}]: two consecutive user messages ([${i - 1}] and [${i}])`);
+        }
+
+        // Check 3: Two consecutive assistant messages (without tool calls)
+        if (msg.role === 'assistant' && prev?.role === 'assistant' && !msg.tool_calls && !prev?.tool_calls) {
+            issues.push(`Message [${i}]: two consecutive assistant messages without tool calls`);
+        }
+
+        // Check 4: Tool message without a preceding assistant message with tool_calls
+        if (msg.role === 'tool') {
+            if (!prev || prev.role !== 'assistant' || !prev.tool_calls) {
+                issues.push(`Message [${i}]: tool result without preceding assistant tool_calls message`);
+            }
+            // Check that tool_call_id exists
+            if (!msg.tool_call_id) {
+                issues.push(`Message [${i}]: tool result missing tool_call_id`);
+            }
+        }
+
+        // Check 5: Assistant with tool_calls should have content: null (or empty)
+        if (msg.tool_calls && msg.tool_calls.length > 0 && msg.content !== null) {
+            issues.push(`Message [${i}]: assistant tool_calls message should have content: null, got content type: ${typeof msg.content}`);
+        }
+
+        // Check 6: Check for empty content in user/assistant messages
+        if ((msg.role === 'user' || msg.role === 'assistant') && !msg.tool_calls) {
+            if (msg.content === null || (typeof msg.content === 'string' && msg.content.trim() === '')) {
+                issues.push(`Message [${i}]: ${msg.role} message has empty content`);
+            }
+        }
+
+        // Check 7: Check for oversized individual messages (>100K chars)
+        if (typeof msg.content === 'string' && msg.content.length > 100_000) {
+            issues.push(`Message [${i}]: ${msg.role} message content is ${msg.content.length.toLocaleString()} chars (very large)`);
+        }
+    }
+
+    return issues;
 }
 
 /**
