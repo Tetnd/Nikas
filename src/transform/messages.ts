@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { log } from '../log.js';
+import { safeStringify } from '../api/sanitize.js';
 import type { DeepSeekMessage, DeepSeekContentPart } from '../api/types.js';
 
 /**
@@ -77,7 +78,7 @@ function buildAssistantToolCallParts(
                 type: 'function',
                 function: {
                     name: part.name,
-                    arguments: JSON.stringify(part.input),
+                    arguments: safeStringify(part.input),
                 },
             });
         } else if (part instanceof vscode.LanguageModelTextPart) {

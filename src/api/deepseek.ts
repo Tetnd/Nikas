@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { log } from '../log.js';
+import { safeStringify } from './sanitize.js';
 import type { DeepSeekRequest, DeepSeekResponse, DeepSeekDelta, DeepSeekErrorResponse, DeepSeekToolCallDelta } from './types.js';
 
 const DEEPSEEK_API_BASE = 'https://api.deepseek.com';
@@ -20,17 +21,15 @@ export interface StreamResult {
 
 /**
  * Log the full request details for debugging.
- * The API key is masked in log output.
  */
 function logRequestDetails(request: DeepSeekRequest): void {
     try {
-        const bodyStr = JSON.stringify(request);
+        const bodyStr = safeStringify(request);
         const bodySize = new TextEncoder().encode(bodyStr).length;
         const truncatedBody = bodyStr.length > 10_000
             ? bodyStr.slice(0, 10_000) + `\n... [truncated, full body is ${bodyStr.length} chars / ${bodySize} bytes]`
             : bodyStr;
 
-        // Mask API key: not in the request body itself, but log the rest
         log.info(
             `DeepSeek API request:\n` +
             `  URL: ${DEEPSEEK_CHAT_ENDPOINT}\n` +
@@ -80,7 +79,7 @@ export async function streamDeepSeekChat(
                 'Authorization': `Bearer ${apiKey}`,
                 'Accept': 'text/event-stream',
             },
-            body: JSON.stringify(streamRequest),
+            body: safeStringify(streamRequest),
             signal,
         });
     } catch (fetchErr) {
@@ -305,14 +304,13 @@ function finalizeToolCalls(pending: Map<number, PendingToolCall>): CompletedTool
 
 /**
  * Log full response details for debugging API errors.
+ * Returns the response body text so callers can reuse it.
  */
-async function logResponseDetails(response: Response, label: string): Promise<void> {
+async function logResponseDetails(response: Response, label: string): Promise<string> {
     try {
-        // Clone the response so we can read the body without consuming the original
-        const cloned = response.clone();
         let bodyText: string;
         try {
-            bodyText = await cloned.text();
+            bodyText = await response.text();
         } catch {
             bodyText = '(could not read response body)';
         }
@@ -331,8 +329,11 @@ async function logResponseDetails(response: Response, label: string): Promise<vo
             `  Headers: ${JSON.stringify(headers, null, 2)}\n` +
             `  Body:\n${truncated}`
         );
+
+        return bodyText;
     } catch (err) {
         log.warn(`Failed to log response details for ${label}`, err);
+        return `(failed to read body: ${err instanceof Error ? err.message : String(err)})`;
     }
 }
 
@@ -340,22 +341,21 @@ async function handleErrorResponse(response: Response, request?: DeepSeekRequest
     let message = `DeepSeek API returned HTTP ${response.status}`;
     let detail = '';
 
-    // Log full response details first
-    await logResponseDetails(response, `DeepSeek API HTTP ${response.status}`);
+    // Log full response details — this consumes the response body and returns it
+    const bodyText = await logResponseDetails(response, `DeepSeek API HTTP ${response.status}`);
 
+    // Try to parse the body as JSON for structured error info
     try {
-        const body = await response.json() as DeepSeekErrorResponse;
-        if (body.error?.message) {
-            detail = body.error.message;
+        const parsed = JSON.parse(bodyText) as DeepSeekErrorResponse;
+        if (parsed.error?.message) {
+            detail = parsed.error.message;
         } else {
-            detail = JSON.stringify(body).slice(0, 500);
+            detail = bodyText.slice(0, 500);
         }
     } catch {
-        try {
-            const text = await response.text();
-            if (text) detail = text.slice(0, 500); // Truncate long error bodies
-        } catch {
-            // ignore
+        // Not JSON — use the raw text
+        if (bodyText && !bodyText.startsWith('(failed')) {
+            detail = bodyText.slice(0, 500);
         }
     }
 

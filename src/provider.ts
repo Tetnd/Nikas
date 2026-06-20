@@ -3,6 +3,7 @@ import { SecretStore } from './secrets.js';
 import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset } from './config.js';
 import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
+import { safeStringify } from './api/sanitize.js';
 import { preprocessVision } from './vision/pipeline.js';
 import { log } from './log.js';
 import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage } from './api/types.js';
@@ -290,7 +291,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         }
 
         // Log request summary to nika.log
-        const bodySize = new TextEncoder().encode(JSON.stringify(request)).length;
+        const bodySize = new TextEncoder().encode(safeStringify(request)).length;
         log.info(
             `Sending DeepSeek request: model=${modelId}, ` +
             `messages=${deepseekMessages.length}, ` +
@@ -381,7 +382,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 `tools=${options.tools?.length ?? 0}, ` +
                 `max_tokens=${boostedTokens}, ` +
                 `temperature=${getTemperature()}, ` +
-                `bodySize=${(new TextEncoder().encode(JSON.stringify(request)).length / 1024).toFixed(1)}KB, ` +
+                `bodySize=${(new TextEncoder().encode(safeStringify(request)).length / 1024).toFixed(1)}KB, ` +
                 `contextWindow=${getContextWindowPreset()}`
             );
 
