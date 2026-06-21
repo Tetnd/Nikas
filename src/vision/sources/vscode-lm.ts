@@ -58,12 +58,14 @@ export class VSCodeLanguageModelVisionDescriber implements VisionDescriber {
 const EXCLUDED_VISION_MODEL_IDS = new Set([
     'copilot-utility',
     'copilot-utility-small',
+    // Nika's DeepSeek models — they don't serve as vision describers
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
 ]);
 const EXCLUDED_VISION_MODEL_VENDORS = new Set([
     'deepseek',
     'claude-code',
     'copilotcli',
-    'nika',
 ]);
 
 // A minimal valid 1x1 pixel PNG for probing vision capability.

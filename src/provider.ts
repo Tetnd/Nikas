@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey } from './config.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource } from './config.js';
 import { vscodeMessagesToDeepSeek } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -190,7 +190,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                     version: '2.5.0',
                     maxInputTokens: 1_000_000,
                     maxOutputTokens: 8_192,
-                    capabilities: {},
+                    capabilities: { imageInput: true },
                     detail: 'Google Gemini 2.5 Flash — free tier',
                 },
                 {
@@ -200,7 +200,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                     version: '2.5.0',
                     maxInputTokens: 1_000_000,
                     maxOutputTokens: 8_192,
-                    capabilities: {},
+                    capabilities: { imageInput: true },
                     detail: 'Google Gemini 2.5 Flash-Lite — fastest, most cost-efficient',
                 }
             );
@@ -219,7 +219,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             version: '4.0.0',
             maxInputTokens: 128_000,
             maxOutputTokens: 4_096,
-            capabilities: {},
+            capabilities: { imageInput: true },
             detail: 'Local Gemma 4 via Ollama — runs on your machine',
         });
 
@@ -664,44 +664,61 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const config = getConfig();
         const visionModelKey = getVisionModelKey();
         const oldVisionModel = config.get<string>('visionModel');
+        const visionSource = getVisionSource();
 
         visionLog.info(
             `Creating vision describer: visionModelKey=${visionModelKey ?? '(none)'}, ` +
-            `visionModel=${oldVisionModel ?? '(none)'}`
+            `visionModel=${oldVisionModel ?? '(none)'}, visionSource=${visionSource}`
         );
 
-        // ── Nika-native models (direct API) ──────────────────────────
+        // ── Direct API path ───────────────────────────────────────────
+        // Nika-native models (keys starting with "nika/") MUST use the direct API
+        // because the Copilot LM path would route back to our own provider, which
+        // only extracts text parts and drops image data — making vision unusable.
+        //
+        // The legacy "nika-" prefix is also handled here.
+
+        // Nika-native models by visionModelKey ("nika/gemini-2.5-flash-lite" etc.)
+        if (visionModelKey === 'nika/gemini-2.5-flash-lite') {
+            return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
+        }
+        if (visionModelKey === 'nika/gemini-2.5-flash') {
+            return this.createDirectGeminiDescriber('gemini-2.5-flash');
+        }
+        if (visionModelKey === 'nika/gemma4:31b') {
+            return this.createDirectGemma4Describer();
+        }
+
+        // Legacy nika- prefixed keys
         if (visionModelKey?.startsWith('nika-')) {
-            visionLog.info(`Using Nika direct describer for key: ${visionModelKey}`);
             return this.createNikaDirectDescriber(visionModelKey);
         }
 
-        // Legacy visionModel setting
+        // Legacy visionModel setting (from "Nika Native" picker)
         if (!visionModelKey) {
             if (oldVisionModel === 'gemini-flash-lite') {
-                visionLog.info('Using Gemini Flash-Lite (direct API)');
                 return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
             }
             if (oldVisionModel === 'gemini' || !oldVisionModel) {
-                visionLog.info('Using Gemini Flash (direct API)');
                 return this.createDirectGeminiDescriber('gemini-2.5-flash');
             }
             if (oldVisionModel === 'ollama-gemma4') {
-                visionLog.info('Using Gemma4 (direct Ollama API)');
                 return this.createDirectGemma4Describer();
             }
         }
 
-        // ── Copilot models (selectChatModels) ────────────────────────
+        // ── Copilot LM path (third-party models only) ─────────────────
+        // For non-Nika visionModelKey (e.g. "copilot/gpt-4o", "github/gpt-4o"),
+        // try the Copilot LM path. These models are provided by VS Code itself
+        // and properly handle image data parts through sendRequest.
         if (visionModelKey) {
-            visionLog.info(`Trying Copilot vision model: ${visionModelKey}`);
+            visionLog.info(`Trying Copilot LM for model: ${visionModelKey}`);
             const describer = await resolveVisionDescriber({
                 source: 'vscode-lm',
                 visionModelKey,
             });
             if (describer) return describer;
-
-            visionLog.warn(`Copilot vision model not found: "${visionModelKey}"`);
+            visionLog.warn(`Copilot LM model not found: "${visionModelKey}"`);
         }
 
         // ── Default fallback ─────────────────────────────────────────

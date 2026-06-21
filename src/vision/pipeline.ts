@@ -42,6 +42,11 @@ import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/ap
 // Keyed by truncated hash of the first image's raw bytes.
 // The agent shifts message indices between loop iterations but the image
 // bytes stay the same, so content-hash keys work across calls.
+//
+// Values:
+//   string (non-empty) — successful description, reuse it
+//   '' (empty string)  — sentinel: description failed, skip silently
+//   undefined (not in map) — never seen before, attempt to describe
 let sessionImageCache = new Map<string, string>();
 let cachedMessageCount = 0;
 
@@ -57,24 +62,41 @@ function hashImageBytes(data: Uint8Array): string {
 }
 
 function clearSessionCacheIfNewTurn(messages: readonly vscode.LanguageModelChatRequestMessage[]): void {
-    // Detect new user turn by checking if message count changed direction
-    // (agent loop adds messages, new user turn starts fresh)
-    if (messages.length < cachedMessageCount) {
-        sessionImageCache = new Map();
-    }
+    // Track message count to detect direction changes, but do NOT clear the
+    // cache. The cache is keyed by image byte hash (FNV-1a), so it's
+    // collision-safe. Keeping it across turns prevents re-describing the
+    // same image when the user continues the conversation with the same
+    // attachment — fixing the "vision only works on 2nd attempt" bug.
     cachedMessageCount = messages.length;
 }
 
 function getCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[]): string | undefined {
     if (imageParts.length === 0) return undefined;
     const key = hashImageBytes(imageParts[0].data);
-    return sessionImageCache.get(key);
+    const cached = sessionImageCache.get(key);
+    // '' (empty string) = failed sentinel — return as-is so the caller
+    // can distinguish "cached as failed" from "not in cache" (undefined).
+    return cached;
+}
+
+/** Returns true if the image was previously cached as failed. */
+function isFailedImage(imageParts: vscode.LanguageModelDataPart[]): boolean {
+    if (imageParts.length === 0) return false;
+    const key = hashImageBytes(imageParts[0].data);
+    return sessionImageCache.get(key) === '';
 }
 
 function setCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[], text: string): void {
     if (imageParts.length === 0) return;
     const key = hashImageBytes(imageParts[0].data);
     sessionImageCache.set(key, text);
+}
+
+/** Mark an image as failed so it's silently skipped on subsequent turns. */
+function markFailedImage(imageParts: vscode.LanguageModelDataPart[]): void {
+    if (imageParts.length === 0) return;
+    const key = hashImageBytes(imageParts[0].data);
+    sessionImageCache.set(key, ''); // empty string = failed sentinel
 }
 
 /**
@@ -151,6 +173,33 @@ export async function resolveImageMessages(
         // Case B: This is the current (latest) user message with images — describe it
         if (messageIndex === currentImageMessageIndex) {
             stats.currentImageMessages += 1;
+
+            // Check agent-loop cache first — same image might have been
+            // described in a previous turn (e.g. the user re-asks with the
+            // same attachment). Skip the API call if we have it cached.
+            const cachedText = getCachedVisionByImage(imageParts);
+            if (cachedText !== undefined) {
+                // Empty string = previously failed — drop images silently
+                if (cachedText === '') {
+                    visionLog.info(`Skipping failed image in message [${messageIndex}] (cached as failed)`);
+                    stats.omittedImageMessages += 1;
+                    stats.droppedImageParts += imageParts.length;
+                    result.push(createResolvedMessage(message, nonImageParts));
+                    continue;
+                }
+                visionLog.info(`Reused session-cached vision for current image message [${messageIndex}]`);
+                stats.replayedImageMessages += 1;
+                markerVisionText = cachedText;
+                stats.markerVisionTextChars = cachedText.length;
+                result.push(
+                    createResolvedMessage(message, [
+                        ...nonImageParts,
+                        new vscode.LanguageModelTextPart(cachedText),
+                    ]),
+                );
+                continue;
+            }
+
             if (!visionDescriberRequested) {
                 visionDescriberRequested = true;
                 visionDescriber = await getDescriber();
@@ -172,8 +221,15 @@ export async function resolveImageMessages(
             markerVisionText = visionText;
             stats.markerVisionTextChars = visionText.length;
 
-            // Cache the description for agent loop persistence (by image hash)
-            setCachedVisionByImage(imageParts, visionText);
+            // Cache the description for agent loop persistence (by image hash).
+            // Only cache successful descriptions — if the describer failed or was
+            // unavailable we don't want to replay "[Image Description unavailable]"
+            // on every subsequent turn. Instead, mark as failed so we skip silently.
+            if (!visionResolution.failureNotice && !missingVisionProxy) {
+                setCachedVisionByImage(imageParts, visionText);
+            } else {
+                markFailedImage(imageParts);
+            }
 
             result.push(
                 createResolvedMessage(message, [
@@ -187,7 +243,15 @@ export async function resolveImageMessages(
         // Case C: Old image message with no marker — check session cache first,
         // then fall back to dropping images.
         const cachedText = getCachedVisionByImage(imageParts);
-        if (cachedText) {
+        if (cachedText !== undefined) {
+            // Empty string = previously failed — drop silently
+            if (cachedText === '') {
+                visionLog.info(`Skipping failed image in message [${messageIndex}] (cached as failed)`);
+                stats.omittedImageMessages += 1;
+                stats.droppedImageParts += imageParts.length;
+                result.push(createResolvedMessage(message, nonImageParts));
+                continue;
+            }
             stats.replayedImageMessages += 1;
             stats.droppedImageParts += imageParts.length;
             visionLog.info(`Reused session-cached vision for message [${messageIndex}] (${imageParts.length} image(s))`);
