@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset } from './config.js';
-import { vscodeMessagesToDeepSeek, hasImageParts } from './transform/messages.js';
+import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey } from './config.js';
+import { vscodeMessagesToDeepSeek } from './transform/messages.js';
 import { streamDeepSeekChat } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
-import { preprocessVision } from './vision/pipeline.js';
+import { resolveImageMessages, resolveVisionDescriber } from './vision/pipeline.js';
+import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { log } from './log.js';
+import { visionLog } from './vision/log.js';
 import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage } from './api/types.js';
+import type { ReplayMarkerMetadata } from './vision/types.js';
 
 /**
  * VS Code Output channel for Nika diagnostics.
@@ -104,10 +107,15 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 }
 
 /**
- * NikaChatProvider — a VS Code LanguageModelChatProvider for DeepSeek.
+ * NikaChatProvider — a VS Code LanguageModelChatProvider bringing multiple
+ * model families under the single "Nika" vendor.
+ *
+ * - DeepSeek V4 Flash & Pro → proxied to DeepSeek API
+ * - Gemini 2.5 Flash & Flash-Lite → proxied to Gemini API
+ * - Gemma 4 (Ollama) → proxied to local Ollama
  *
  * Registered via vscode.lm.registerLanguageModelChatProvider('nika', provider).
- * Models appear in Copilot Chat's model picker dropdown.
+ * All models appear in Copilot Chat's model picker under "Nika".
  */
 export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation> {
     private readonly secrets: SecretStore;
@@ -121,47 +129,101 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         return this.secrets.getDeepSeekApiKey();
     }
 
+    /** Expose Gemini key check for internal use. */
+    private async getGeminiApiKey(): Promise<string | undefined> {
+        return this.secrets.getGeminiApiKey();
+    }
+
     /**
      * Returns the list of available models. Called by VS Code when the model picker opens.
-     * When `silent: true` and no API key is configured, returns an empty array
-     * (to avoid prompting during startup).
+     * Shows all configured models under the single "Nika" vendor.
+     *
+     * - DeepSeek models: require DeepSeek API key
+     * - Gemini models: require Gemini API key
+     * - Gemma 4: always available (local Ollama, no key needed)
      */
     async provideLanguageModelChatInformation(
         options: { silent: boolean },
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelChatInformation[]> {
-        const apiKey = await this.secrets.getDeepSeekApiKey();
+        const models: vscode.LanguageModelChatInformation[] = [];
+        const deepseekKey = await this.secrets.getDeepSeekApiKey();
+        const geminiKey = await this.secrets.getGeminiApiKey();
 
-        if (!apiKey) {
-            if (!options.silent) {
-                vscode.window.showWarningMessage(
-                    'Nika: DeepSeek API key not configured. The Nika models will not appear in the model picker until the key is set.'
-                );
+        // ── DeepSeek models ──────────────────────────────────────────
+        if (deepseekKey) {
+            const effectiveInputTokens = getContextWindowTokens();
+            const effectiveOutputTokens = getMaxTokens();
+            for (const m of DEEPSEEK_MODELS) {
+                models.push({
+                    id: m.id,
+                    name: m.name,
+                    family: m.family,
+                    version: m.version,
+                    maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
+                    maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
+                    capabilities: m.capabilities,
+                    detail: m.detail,
+                });
             }
-            return [];
+        } else if (!options.silent) {
+            vscode.window.showWarningMessage(
+                'Nika: DeepSeek API key not configured. DeepSeek models will not appear in the model picker until the key is set.'
+            );
         }
 
-        const effectiveInputTokens = getContextWindowTokens();
-        const effectiveOutputTokens = getMaxTokens();
+        // ── Gemini models ────────────────────────────────────────────
+        if (geminiKey) {
+            models.push(
+                {
+                    id: 'gemini-2.5-flash',
+                    name: 'Gemini 2.5 Flash',
+                    family: 'gemini',
+                    version: '2.5.0',
+                    maxInputTokens: 1_000_000,
+                    maxOutputTokens: 8_192,
+                    capabilities: {},
+                    detail: 'Google Gemini 2.5 Flash — free tier',
+                },
+                {
+                    id: 'gemini-2.5-flash-lite',
+                    name: 'Gemini 2.5 Flash-Lite',
+                    family: 'gemini',
+                    version: '2.5.0',
+                    maxInputTokens: 1_000_000,
+                    maxOutputTokens: 8_192,
+                    capabilities: {},
+                    detail: 'Google Gemini 2.5 Flash-Lite — fastest, most cost-efficient',
+                }
+            );
+        } else if (!options.silent && !deepseekKey) {
+            // Only show one warning if neither key is set
+            vscode.window.showWarningMessage(
+                'Nika: Gemini API key not configured. Gemini models will not appear in the model picker until the key is set.'
+            );
+        }
 
-        return DEEPSEEK_MODELS.map(m => ({
-            id: m.id,
-            name: m.name,
-            family: m.family,
-            version: m.version,
-            maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
-            maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
-            capabilities: m.capabilities,
-            detail: m.detail,
-        })) as vscode.LanguageModelChatInformation[];
+        // ── Gemma 4 (always available, local Ollama) ─────────────────
+        models.push({
+            id: 'gemma4:31b',
+            name: 'Gemma 4 (Ollama)',
+            family: 'gemma',
+            version: '4.0.0',
+            maxInputTokens: 128_000,
+            maxOutputTokens: 4_096,
+            capabilities: {},
+            detail: 'Local Gemma 4 via Ollama — runs on your machine',
+        });
+
+        return models;
     }
 
     /**
-     * Handle a chat request. This is the core method — it:
-     * 1. Gets the API key
-     * 2. Transforms VS Code messages to DeepSeek format
-     * 3. Preprocesses any images via the configured vision model (Gemma 4 / Gemini)
-     * 4. Streams the response back via `progress.report()`
+     * Handle a chat request. Routes to the correct handler based on model ID.
+     *
+     * - deepseek-* → DeepSeek API (with vision preprocessing + replay markers)
+     * - gemini-*   → Gemini API directly
+     * - gemma4:*   → Ollama API directly
      */
     async provideLanguageModelChatResponse(
         model: vscode.LanguageModelChatInformation,
@@ -170,6 +232,15 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         progress: vscode.Progress<vscode.LanguageModelResponsePart>,
         token: vscode.CancellationToken
     ): Promise<void> {
+        // Route to the appropriate handler
+        if (model.id.startsWith('gemini-')) {
+            return this.handleGeminiChat(model.id, messages, progress, token);
+        }
+        if (model.id.startsWith('gemma4:')) {
+            return this.handleGemma4Chat(model.id, messages, progress, token);
+        }
+
+        // ── DeepSeek handler (inline, for minimal diff) ──────────────
         const apiKey = await this.secrets.getDeepSeekApiKey();
         if (!apiKey) {
             throw new Error(
@@ -180,25 +251,43 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         // Check for cancellation
         if (token.isCancellationRequested) return;
 
-        // Transform messages to DeepSeek format
-        let deepseekMessages = vscodeMessagesToDeepSeek(messages);
-
-        // Vision preprocessing — if images are present, send to Gemini
-        if (hasImageParts(messages)) {
-            const result = await preprocessVision(messages, deepseekMessages, this.secrets, progress, token);
-            deepseekMessages = result.messages;
-
-            if (result.errors.length > 0 && result.errors.length === result.errors.length) {
-                // All images failed — warn and proceed with text-only
-                progress.report(
-                    new vscode.LanguageModelTextPart(
-                        `\n\n⚠️ Unable to process images: ${result.errors.join('; ')}\n\n`
-                    )
-                );
+        // Resolve images to text descriptions (replay markers / vision model)
+        // This operates on raw VS Code messages BEFORE conversion to DeepSeek format.
+        // Wrap in try-catch so a describer failure doesn't crash the whole request.
+        const getDescriber = async () => {
+            try {
+                return await this.createVisionDescriber();
+            } catch (err) {
+                visionLog.error('Failed to create vision describer', err);
+                return undefined;
             }
+        };
+        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
+        const resolvedMessages = visionResolution.messages;
+        const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
+
+        // Log vision stats for diagnostics
+        if (visionResolution.stats.inputImageParts > 0) {
+            const s = visionResolution.stats;
+            visionLog.info(
+                `Vision: ${s.inputImageParts} image(s) in ${s.inputImageMessages} message(s) ` +
+                `→ current=${s.currentImageMessages} generated=${s.generatedImageMessages} ` +
+                `replayed=${s.replayedImageMessages} omitted=${s.omittedImageMessages} ` +
+                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages}`
+            );
+        }
+
+        // Show any vision notices to the user
+        if (visionResolution.initialResponseNotice) {
+            progress.report(new vscode.LanguageModelTextPart(
+                `\n\n${visionResolution.initialResponseNotice}\n\n`
+            ));
         }
 
         if (token.isCancellationRequested) return;
+
+        // Convert resolved VS Code messages to DeepSeek format
+        let deepseekMessages = vscodeMessagesToDeepSeek(resolvedMessages);
 
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
@@ -327,6 +416,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                 },
                 // onComplete
                 (usage) => {
+                    // Report token usage
                     if (usage) {
                         progress.report(
                             new vscode.LanguageModelDataPart(
@@ -340,6 +430,13 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
                                 'usage'
                             )
                         );
+                    }
+
+                    // Inject replay marker if we described images this turn
+                    // This allows the next turn to replay descriptions without
+                    // calling the vision model again.
+                    if (replayMarkerMetadata.visionText) {
+                        progress.report(createReplayMarkerPart(replayMarkerMetadata));
                     }
                 }
             );
@@ -394,6 +491,292 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         } finally {
             cancelDisposable.dispose();
         }
+    }
+
+    /**
+     * Handle a chat request routed to the Gemini API.
+     */
+    private async handleGeminiChat(
+        modelId: string,
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+        token: vscode.CancellationToken
+    ): Promise<void> {
+        const apiKey = await this.secrets.getGeminiApiKey();
+        if (!apiKey) {
+            throw new Error('Gemini API key not configured. Run "Nika: Input Gemini API Key" from the command palette.');
+        }
+
+        if (token.isCancellationRequested) return;
+
+        // Convert VS Code messages to Gemini format
+        const contents: { role?: string; parts: { text: string }[] }[] = [];
+        for (const msg of messages) {
+            const role = msg.role === vscode.LanguageModelChatMessageRole.Assistant ? 'model' : 'user';
+            let text = '';
+            for (const part of msg.content) {
+                if (part instanceof vscode.LanguageModelTextPart) {
+                    text += part.value;
+                }
+            }
+            if (text.trim()) {
+                contents.push({ role, parts: [{ text: text.trim() }] });
+            }
+        }
+
+        const request = { contents, generationConfig: { temperature: 0.7, maxOutputTokens: 4096 } };
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+        const abortController = new AbortController();
+        const cancelDisposable = token.onCancellationRequested(() => abortController.abort());
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+                signal: abortController.signal,
+            });
+
+            if (!response.ok) {
+                throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
+            }
+
+            const data = await response.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[]; error?: { message: string } };
+            if (data.error) throw new Error(`Gemini API error: ${data.error.message}`);
+
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) {
+                progress.report(new vscode.LanguageModelTextPart(text));
+                getOutputChannel().appendLine(`[Nika] Gemini response: ${text.slice(0, 100)}...`);
+            }
+        } catch (err) {
+            if (abortController.signal.aborted) return;
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            log.error(`Gemini chat failed for model "${modelId}"`, err);
+            progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
+            throw err;
+        } finally {
+            cancelDisposable.dispose();
+        }
+    }
+
+    /**
+     * Handle a chat request routed to Gemma 4 via Ollama.
+     */
+    private async handleGemma4Chat(
+        modelId: string,
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+        token: vscode.CancellationToken
+    ): Promise<void> {
+        if (token.isCancellationRequested) return;
+
+        // Convert VS Code messages to Ollama format
+        const ollamaMessages: { role: string; content: string }[] = [];
+        for (const msg of messages) {
+            const role = msg.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user';
+            let content = '';
+            for (const part of msg.content) {
+                if (part instanceof vscode.LanguageModelTextPart) {
+                    content += part.value;
+                }
+            }
+            if (content.trim()) {
+                ollamaMessages.push({ role, content: content.trim() });
+            }
+        }
+
+        const request = {
+            model: modelId,
+            messages: ollamaMessages,
+            stream: false,
+            options: { temperature: 0.7, num_predict: 4096 },
+        };
+
+        const { getOllamaBaseUrl } = await import('./config.js');
+        const url = `${getOllamaBaseUrl().replace(/\/$/, '')}/api/chat`;
+
+        const abortController = new AbortController();
+        const cancelDisposable = token.onCancellationRequested(() => abortController.abort());
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+                signal: abortController.signal,
+            });
+
+            if (!response.ok) {
+                throw new Error(`Ollama API error ${response.status}: ${await response.text()}`);
+            }
+
+            const data = await response.json() as { message?: { content?: string; thinking?: string }; error?: string };
+            if (data.error) throw new Error(`Ollama error: ${data.error}`);
+
+            const text = data.message?.content?.trim() || data.message?.thinking?.trim();
+            if (text) {
+                progress.report(new vscode.LanguageModelTextPart(text));
+                getOutputChannel().appendLine(`[Nika] Gemma4 response: ${text.slice(0, 100)}...`);
+            }
+        } catch (err) {
+            if (abortController.signal.aborted) return;
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            log.error(`Gemma4 chat failed for model "${modelId}"`, err);
+            progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
+            throw err;
+        } finally {
+            cancelDisposable.dispose();
+        }
+    }
+
+    /**
+     * Create a vision describer based on the current configuration.
+     *
+     * For Nika-native vision models (Gemini, Gemma4), we call the API directly
+     * — this is the Vizards "api-endpoint" pattern.
+     *
+     * For Copilot-provided models (GPT-4o, Claude, etc.), we use selectChatModels
+     * and wrap the result — this is the Vizards "vscode-lm" pattern.
+     *
+     * Priority:
+     * 1. visionModelKey setting (for Copilot models, vendor/id composite key)
+     * 2. visionModel setting (legacy: 'gemini', 'gemini-flash-lite', 'ollama-gemma4')
+     * 3. Default: Gemini 2.5 Flash
+     */
+    private async createVisionDescriber(): Promise<import('./vision/types.js').VisionDescriber | undefined> {
+        const config = getConfig();
+        const visionModelKey = getVisionModelKey();
+        const oldVisionModel = config.get<string>('visionModel');
+
+        visionLog.info(
+            `Creating vision describer: visionModelKey=${visionModelKey ?? '(none)'}, ` +
+            `visionModel=${oldVisionModel ?? '(none)'}`
+        );
+
+        // ── Nika-native models (direct API) ──────────────────────────
+        if (visionModelKey?.startsWith('nika-')) {
+            visionLog.info(`Using Nika direct describer for key: ${visionModelKey}`);
+            return this.createNikaDirectDescriber(visionModelKey);
+        }
+
+        // Legacy visionModel setting
+        if (!visionModelKey) {
+            if (oldVisionModel === 'gemini-flash-lite') {
+                visionLog.info('Using Gemini Flash-Lite (direct API)');
+                return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
+            }
+            if (oldVisionModel === 'gemini' || !oldVisionModel) {
+                visionLog.info('Using Gemini Flash (direct API)');
+                return this.createDirectGeminiDescriber('gemini-2.5-flash');
+            }
+            if (oldVisionModel === 'ollama-gemma4') {
+                visionLog.info('Using Gemma4 (direct Ollama API)');
+                return this.createDirectGemma4Describer();
+            }
+        }
+
+        // ── Copilot models (selectChatModels) ────────────────────────
+        if (visionModelKey) {
+            visionLog.info(`Trying Copilot vision model: ${visionModelKey}`);
+            const describer = await resolveVisionDescriber({
+                source: 'vscode-lm',
+                visionModelKey,
+            });
+            if (describer) return describer;
+
+            visionLog.warn(`Copilot vision model not found: "${visionModelKey}"`);
+        }
+
+        // ── Default fallback ─────────────────────────────────────────
+        visionLog.info('Falling back to default: Gemini Flash (direct API)');
+        return this.createDirectGeminiDescriber('gemini-2.5-flash');
+    }
+
+    /**
+     * Create a direct Gemini describer that calls the Gemini API directly.
+     * This is the Vizards "api-endpoint" pattern for Nika's built-in models.
+     */
+    private async createDirectGeminiDescriber(
+        modelName: string,
+    ): Promise<import('./vision/types.js').VisionDescriber | undefined> {
+        const apiKey = await this.secrets.getGeminiApiKey();
+        if (!apiKey) {
+            visionLog.warn('Gemini API key not configured');
+            return undefined;
+        }
+
+        const { describeImage } = await import('./vision/gemini.js');
+
+        return {
+            id: `gemini:${modelName}`,
+            source: 'api-endpoint' as const,
+            describe: async (request) => {
+                const results: string[] = [];
+                for (const [index, image] of request.images.entries()) {
+                    const result = await describeImage(
+                        image.data,
+                        image.mimeType,
+                        apiKey,
+                        modelName,
+                        index === 0 ? request.prompt : undefined,
+                    );
+                    if (!result.success) {
+                        throw new Error(`Gemini vision failed: ${result.error}`);
+                    }
+                    results.push(result.description);
+                }
+                return results.join('\n\n---\n\n');
+            },
+        };
+    }
+
+    /**
+     * Create a direct Gemma4 describer that calls Ollama directly.
+     */
+    private async createDirectGemma4Describer(): Promise<import('./vision/types.js').VisionDescriber | undefined> {
+        const { getOllamaBaseUrl } = await import('./config.js');
+        const { describeImage } = await import('./vision/gemma4.js');
+
+        return {
+            id: 'gemma4:31b',
+            source: 'api-endpoint' as const,
+            describe: async (request) => {
+                const results: string[] = [];
+                for (const [index, image] of request.images.entries()) {
+                    const result = await describeImage(
+                        image.data,
+                        image.mimeType,
+                        getOllamaBaseUrl(),
+                        index === 0 ? request.prompt : undefined,
+                    );
+                    if (!result.success) {
+                        throw new Error(`Gemma4 vision failed: ${result.error}`);
+                    }
+                    results.push(result.description);
+                }
+                return results.join('\n\n---\n\n');
+            },
+        };
+    }
+
+    /**
+     * Map a Nika provider key to a direct describer.
+     */
+    private async createNikaDirectDescriber(
+        key: string,
+    ): Promise<import('./vision/types.js').VisionDescriber | undefined> {
+        if (key.includes('gemini-2.5-flash-lite')) {
+            return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
+        }
+        if (key.includes('gemini')) {
+            return this.createDirectGeminiDescriber('gemini-2.5-flash');
+        }
+        if (key.includes('gemma4')) {
+            return this.createDirectGemma4Describer();
+        }
+        return this.createDirectGeminiDescriber('gemini-2.5-flash');
     }
 
     /**

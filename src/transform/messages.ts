@@ -89,20 +89,14 @@ function buildAssistantToolCallParts(
     return { toolCalls, textContent };
 }
 
-/**
- * After vision preprocessing, inject text descriptions back into messages.
- * Replaces image parts with text descriptions.
- * Messages without descriptions that still contain image_url parts are stripped
- * (replaced with a placeholder) so DeepSeek never sees unsupported image_url parts.
- */
+/** @deprecated Replay markers superseded this — see vision/replay.ts and vision/pipeline.ts */
 export function injectVisionDescriptions(
     messages: DeepSeekMessage[],
-    descriptions: Map<number, string> // messageIndex → description text
+    descriptions: Map<number, string>
 ): DeepSeekMessage[] {
     return messages.map((msg, i) => {
         const desc = descriptions.get(i);
         if (desc) {
-            // Extract ALL text from the message — both simple strings and array content parts
             let originalText = '';
             if (typeof msg.content === 'string') {
                 originalText = msg.content;
@@ -118,80 +112,38 @@ export function injectVisionDescriptions(
                 content: `${prefix}[The user attached an image. Its contents are described below:\n${desc}]`,
             };
         }
-
-        // No description for this message — strip any lingering image_url parts
-        if (hasImageContent(msg)) {
-            return stripImageParts(msg);
-        }
-
         return msg;
     });
 }
 
-/**
- * Check if a DeepSeek message contains image_url content parts.
- */
-function hasImageContent(msg: DeepSeekMessage): boolean {
-    if (!msg.content || typeof msg.content === 'string') return false;
-    return msg.content.some(p => p.type === 'image_url');
-}
-
-/**
- * Strip image_url parts from a message, leaving only text.
- * Adds a placeholder so the conversation flow isn't broken.
- */
-function stripImageParts(msg: DeepSeekMessage): DeepSeekMessage {
-    if (!msg.content || typeof msg.content === 'string') return msg;
-
-    const textParts = msg.content
-        .filter(p => p.type === 'text')
-        .map(p => (p as { type: 'text'; text: string }).text);
-
-    const textContent = textParts.join('\n');
-    const placeholder = '[The user attached an image, but the vision model could not process it. You may ask the user to describe it.]';
-
-    return {
-        ...msg,
-        content: textContent ? `${textContent}\n\n${placeholder}` : placeholder,
-    };
-}
-
-/**
- * Extract image data parts from messages, indexed by message position.
- * Returns a map of message index → array of { data, mimeType }.
- */
+/** @deprecated Replay markers superseded this — see vision/replay.ts */
 export function extractImageParts(
     messages: readonly vscode.LanguageModelChatRequestMessage[]
 ): Map<number, { data: Uint8Array; mimeType: string }[]> {
     const result = new Map<number, { data: Uint8Array; mimeType: string }[]>();
-
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
         if (typeof msg.content === 'string') continue;
-
         const parts = msg.content as readonly vscode.LanguageModelInputPart[];
         for (const part of parts) {
-            if (part instanceof vscode.LanguageModelDataPart && isImagePart(part)) {
+            if (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/')) {
                 const entry = result.get(i) ?? [];
                 entry.push({ data: part.data, mimeType: part.mimeType });
                 result.set(i, entry);
             }
         }
     }
-
     return result;
 }
 
-/**
- * Check if any messages contain image parts.
- */
+/** @deprecated Replay markers superseded this — see vision/replay.ts */
 export function hasImageParts(
     messages: readonly vscode.LanguageModelChatRequestMessage[]
 ): boolean {
     for (const msg of messages) {
         if (typeof msg.content === 'string') continue;
         for (const part of msg.content as readonly vscode.LanguageModelInputPart[]) {
-            if (part instanceof vscode.LanguageModelDataPart && isImagePart(part)) {
+            if (part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/')) {
                 return true;
             }
         }

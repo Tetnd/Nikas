@@ -103,6 +103,26 @@ export function getVisionModel(): VisionModelId {
     return (getConfig().get<string>('visionModel') as VisionModelId) ?? 'ollama-gemma4';
 }
 
+/**
+ * Vision source setting — how image descriptions are obtained.
+ * - 'vscode-lm': Uses a Copilot vision model (selected via visionModelKey)
+ * - 'api-endpoint': Uses a direct API endpoint
+ */
+export type VisionSource = 'vscode-lm' | 'api-endpoint';
+
+export function getVisionSource(): VisionSource {
+    return (getConfig().get<string>('visionSource') as VisionSource) ?? 'vscode-lm';
+}
+
+/**
+ * The composite key of the selected VS Code LM vision model (vendor/id).
+ * Only used when visionSource is 'vscode-lm'.
+ */
+export function getVisionModelKey(): string | undefined {
+    const key = getConfig().get<string>('visionModelKey');
+    return key?.trim() || undefined;
+}
+
 export function getOllamaBaseUrl(): string {
     return getConfig().get<string>('ollamaBaseUrl') ?? 'http://localhost:11434';
 }

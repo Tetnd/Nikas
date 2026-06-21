@@ -2,14 +2,18 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
 import { setLogLevel } from './log.js';
+import { visionLog } from './vision/log.js';
+import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
 
 /**
- * Nika VS Code Extension — DeepSeek language model provider for Copilot Chat.
+ * Nika VS Code Extension — language model provider for Copilot Chat.
  *
- * Provides:
- * - DeepSeek models in Copilot Chat's model picker (V4 Flash, V4 Pro)
+ * Provides under the single "Nika" vendor:
+ * - DeepSeek V4 Flash & Pro (requires DeepSeek API key)
+ * - Gemini 2.5 Flash & Flash-Lite (requires Gemini API key)
+ * - Gemma 4 via Ollama (local, no key needed)
  * - Configurable vision preprocessing for images (Gemma 4 / Gemini)
  * - Commands: Nika: Choose Provider, Nika: Manage
  */
@@ -28,7 +32,7 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Register the language model chat provider — models appear in Copilot picker
+    // Register the single language model chat provider — all models under "Nika"
     context.subscriptions.push(
         vscode.lm.registerLanguageModelChatProvider('nika', provider)
     );
@@ -46,12 +50,17 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
 
+    // Pre-warm vision modules so the first chat request doesn't have to
+    // cold-start dynamic imports (which can cause transient failures).
+    prewarmVisionModules().catch(() => { /* non-fatal */ });
+
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nika.chooseProvider', () => chooseProvider()),
         vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
+        vscode.commands.registerCommand('nika.inputGeminiToken', () => inputGeminiToken(context)),
         vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
         vscode.commands.registerCommand('nika.chooseMaxTokens', () => chooseMaxTokens()),
         vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
@@ -234,31 +243,94 @@ async function setOllamaHost(): Promise<void> {
 }
 
 /**
- * Vision model picker — lets user choose between Gemma 4 and Gemini.
+ * Vision model picker — lets user choose between Nika-native models
+ * (Gemini, Gemma4) and Copilot-provided models (GPT-4o, Claude, etc.).
+ *
+ * - Nika-native models → set `visionModel`, clear `visionModelKey`
+ * - Copilot models    → set `visionModelKey` (vendor/id), clear `visionModel`
  */
 async function chooseVisionModel(): Promise<void> {
     const config = getConfig();
-    const current = config.get<string>('visionModel') ?? 'ollama-gemma4';
+    const currentVisionModel = config.get<string>('visionModel');
+    const currentVisionModelKey = getVisionModelKey();
 
-    const items: vscode.QuickPickItem[] = VISION_MODELS.map(m => ({
-        label: m.id === current ? `$(check) ${m.name}` : `$(blank) ${m.name}`,
-        description: m.description,
-        detail: m.requiresApiKey ? 'Requires Gemini API key' : 'Runs locally via Ollama — no API key needed',
-    }));
+    // Phase 1: Pick category — Nika Native or Copilot
+    const categoryItems: vscode.QuickPickItem[] = [
+        {
+            label: 'Nika Native',
+            description: 'Gemini, Gemma4 — requires API key or local Ollama',
+        },
+        {
+            label: 'Copilot Models',
+            description: 'GPT-4o, Claude, Gemini (via Copilot) — uses Copilot quota',
+        },
+    ];
 
-    const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Choose Vision Model',
-        placeHolder: 'Select a vision model for image preprocessing',
-        matchOnDescription: true,
+    const category = await vscode.window.showQuickPick(categoryItems, {
+        title: 'Nika: Choose Vision Model — Source',
+        placeHolder: 'Select a source for image descriptions',
     });
 
-    if (!selected) return;
+    if (!category) return;
 
-    const modelId = VISION_MODELS.find(m => selected.label.endsWith(m.name))?.id;
-    if (modelId) {
-        await config.update('visionModel', modelId, vscode.ConfigurationTarget.Global);
-        const modelName = VISION_MODELS.find(m => m.id === modelId)?.name ?? modelId;
-        vscode.window.showInformationMessage(`Nika: Selected ${modelName} for vision`);
+    if (category.label === 'Nika Native') {
+        // Phase 2a: Nika-native models
+        const items: vscode.QuickPickItem[] = VISION_MODELS.map(m => ({
+            label: m.id === currentVisionModel ? `$(check) ${m.name}` : `$(blank) ${m.name}`,
+            description: m.description,
+            detail: m.requiresApiKey ? 'Requires Gemini API key' : 'Runs locally via Ollama — no API key needed',
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+            title: 'Nika: Choose Vision Model — Nika Native',
+            placeHolder: 'Select a vision model for image preprocessing',
+            matchOnDescription: true,
+        });
+
+        if (!selected) return;
+
+        const modelId = VISION_MODELS.find(m => selected.label.endsWith(m.name))?.id;
+        if (modelId) {
+            // Set visionModel, clear visionModelKey
+            await config.update('visionModel', modelId, vscode.ConfigurationTarget.Global);
+            await config.update('visionModelKey', undefined, vscode.ConfigurationTarget.Global);
+            const modelName = VISION_MODELS.find(m => m.id === modelId)?.name ?? modelId;
+            vscode.window.showInformationMessage(`Nika: Selected ${modelName} for vision`);
+        }
+    } else {
+        // Phase 2b: Copilot models — fetch live from selectChatModels
+        const copilotModels = await listVSCodeVisionModels();
+
+        if (copilotModels.length === 0) {
+            vscode.window.showWarningMessage(
+                'Nika: No Copilot vision models available. Ensure you have a Copilot subscription and vision-capable models enabled.'
+            );
+            return;
+        }
+
+        const items: vscode.QuickPickItem[] = copilotModels.map(m => ({
+            label: m.key === currentVisionModelKey ? `$(check) ${m.label}` : `$(blank) ${m.label}`,
+            description: m.description,
+            detail: 'Uses your Copilot quota — no extra API keys needed',
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+            title: 'Nika: Choose Vision Model — Copilot',
+            placeHolder: 'Select a vision-capable Copilot model',
+            matchOnDescription: true,
+        });
+
+        if (!selected) return;
+
+        const modelKey = copilotModels.find(m => selected.label.endsWith(m.label))?.key;
+        if (modelKey) {
+            // Set visionModelKey, clear visionModel
+            await config.update('visionModelKey', modelKey, vscode.ConfigurationTarget.Global);
+            await config.update('visionModel', undefined, vscode.ConfigurationTarget.Global);
+            const parts = modelKey.split('/');
+            const modelName = parts[1] ?? modelKey;
+            vscode.window.showInformationMessage(`Nika: Selected Copilot model "${modelName}" for vision`);
+        }
     }
 }
 
@@ -500,6 +572,38 @@ async function chooseLogLevel(): Promise<void> {
     if (level) {
         await config.update('logLevel', level, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(`Nika: Log level set to ${level}`);
+    }
+}
+
+/**
+ * Pre-warm vision modules so dynamic imports are cached before the
+ * first chat request arrives. This prevents transient failures caused
+ * by cold-started module loading or secret store lookups.
+ */
+async function prewarmVisionModules(): Promise<void> {
+    try {
+        // Warm the Gemini vision module
+        await import('./vision/gemini.js');
+        visionLog.info('Prewarmed Gemini vision module');
+    } catch {
+        // Non-fatal: Gemini may not be configured
+    }
+
+    try {
+        // Warm the Gemma4 vision module
+        await import('./vision/gemma4.js');
+        visionLog.info('Prewarmed Gemma4 vision module');
+    } catch {
+        // Non-fatal: Gemma4/Ollama may not be available
+    }
+
+    try {
+        // Warm the replay and pipeline modules (used in every chat request)
+        await import('./vision/replay.js');
+        await import('./vision/pipeline.js');
+        visionLog.info('Prewarmed replay/pipeline modules');
+    } catch {
+        // Non-fatal
     }
 }
 

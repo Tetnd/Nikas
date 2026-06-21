@@ -1,179 +1,413 @@
 import * as vscode from 'vscode';
-import * as crypto from 'crypto';
-import type { DeepSeekMessage } from '../api/types.js';
-import { extractImageParts, injectVisionDescriptions, hasImageParts } from '../transform/messages.js';
-import { describeImage as describeWithGemini } from './gemini.js';
-import { describeImage as describeWithGemma4 } from './gemma4.js';
-import { getVisionModel, getOllamaBaseUrl, VISION_MODELS } from '../config.js';
-import { log } from '../log.js';
-import type { SecretStore } from '../secrets.js';
+import { visionLog } from './log.js';
+import {
+    IMAGE_DESCRIPTION_PROMPT,
+    IMAGE_DESCRIPTION_UNAVAILABLE,
+} from './consts.js';
+import {
+    createVisionMarkerBindings,
+    createVisionReplayText,
+    createImageDescriptionText,
+    getImageParts,
+    getNonImageParts,
+    hasImageParts,
+    isImageDataPart,
+} from './replay.js';
+import type {
+    VisionDescriber,
+    VisionProxySource,
+    VisionResolutionResult,
+    VisionResolutionStats,
+} from './types.js';
+import { VSCodeLanguageModelVisionDescriber, findVisionModelByKey, getVisionPrompt } from './sources/vscode-lm.js';
+import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/api-endpoint.js';
 
 /**
- * Vision preprocessing pipeline.
+ * Vision preprocessing pipeline using replay markers.
  *
- * When messages contain image parts:
- * 1. Hash each image to identify duplicates (same image re-sent in history)
- * 2. Send NEW images to the configured vision model (Gemma 4 / Gemini) for description
- * 3. Use cached descriptions for already-seen images
- * 4. Inject text descriptions back into the messages
- * 5. Return text-only messages ready for DeepSeek
+ * Core design (matching Vizards):
+ * 1. Historical images → replay marker text (no API call, survives reload)
+ * 2. Only the LAST user message with images → describe via chosen vision model
+ * 3. Older images without markers → silently dropped (no longer relevant)
+ * 4. Descriptions embedded in assistant responses as replay markers
+ *
+ * Agent loop persistence:
+ * The Copilot agent reconstructs messages between loop iterations (stripping
+ * LanguageModelDataPart and shifting indices). To keep vision descriptions
+ * across iterations, we use a session-level cache keyed by the raw image
+ * bytes hash. This survives index shifts because the image data is stable.
  */
 
-// In-memory cache: image hash → description. Lives for the session.
-const descriptionCache = new Map<string, string>();
-// Sentinel value stored in descriptionCache for images that failed processing.
-// Prevents retrying failed images on subsequent messages since they're no longer relevant.
-const FAILED_MARKER = '__VISION_FAILED__';
+// ── Agent-loop cache ──────────────────────────────────────────────────────
+// Keyed by truncated hash of the first image's raw bytes.
+// The agent shifts message indices between loop iterations but the image
+// bytes stay the same, so content-hash keys work across calls.
+let sessionImageCache = new Map<string, string>();
+let cachedMessageCount = 0;
 
-function hashImage(data: Uint8Array): string {
-    // Hash first 64KB + total size to identify duplicates efficiently
-    const slice = data.length > 65536 ? data.subarray(0, 65536) : data;
-    const sizeSuffix = `::${data.length}`;
-    return crypto.createHash('sha256').update(slice).digest('hex') + sizeSuffix;
+function hashImageBytes(data: Uint8Array): string {
+    // Simple FNV-1a hash of first 4096 bytes (fast, collision-resistant enough)
+    let hash = 0x811c9dc5;
+    const len = Math.min(data.length, 4096);
+    for (let i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(36); // unsigned 32-bit as base-36 string
 }
 
-export async function preprocessVision(
+function clearSessionCacheIfNewTurn(messages: readonly vscode.LanguageModelChatRequestMessage[]): void {
+    // Detect new user turn by checking if message count changed direction
+    // (agent loop adds messages, new user turn starts fresh)
+    if (messages.length < cachedMessageCount) {
+        sessionImageCache = new Map();
+    }
+    cachedMessageCount = messages.length;
+}
+
+function getCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[]): string | undefined {
+    if (imageParts.length === 0) return undefined;
+    const key = hashImageBytes(imageParts[0].data);
+    return sessionImageCache.get(key);
+}
+
+function setCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[], text: string): void {
+    if (imageParts.length === 0) return;
+    const key = hashImageBytes(imageParts[0].data);
+    sessionImageCache.set(key, text);
+}
+
+/**
+ * Resolve image parts in VS Code messages to text descriptions.
+ *
+ * Operates on VS Code messages (pre-conversion to DeepSeek format) so we can
+ * manipulate LanguageModelDataPart / LanguageModelTextPart directly.
+ *
+ * @param messages The full VS Code chat message array
+ * @param token Cancellation token
+ * @param getDescriber Factory for the vision describer (lazy — only called if needed)
+ * @returns Resolved messages + stats + replay marker metadata
+ */
+export async function resolveImageMessages(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
-    deepseekMessages: DeepSeekMessage[],
-    secrets: SecretStore,
-    _progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-    _token: vscode.CancellationToken
-): Promise<{ messages: DeepSeekMessage[]; hadImages: boolean; errors: string[] }> {
-    if (!hasImageParts(messages)) {
-        return { messages: deepseekMessages, hadImages: false, errors: [] };
+    token: vscode.CancellationToken,
+    getDescriber: () => Promise<VisionDescriber | undefined>,
+): Promise<VisionResolutionResult> {
+    const stats = createVisionResolutionStats();
+    collectInputImageStats(messages, stats);
+
+    // Clear the agent-loop cache on new user turns
+    clearSessionCacheIfNewTurn(messages);
+
+    // No images at all — pass through unchanged
+    if (stats.inputImageParts === 0) {
+        return {
+            messages,
+            stats,
+            replayMarkerMetadata: {},
+        };
     }
 
-    const visionModelId = getVisionModel();
-    const providerInfo = VISION_MODELS.find(m => m.id === visionModelId) ?? VISION_MODELS[0];
-    const providerName = providerInfo.name;
+    // Phase 1: Build replay marker bindings from previous assistant responses
+    const markerBindings = createVisionMarkerBindings(messages, stats);
 
-    // Resolve credentials / endpoint based on provider
-    let describeFn: (data: Uint8Array, mimeType: string, credential: string, prompt?: string) => Promise<import('./types.js').VisionResult>;
-    let credential: string;
+    // Phase 2: Find the current (latest) user message with images
+    const currentImageMessageIndex = findCurrentImageMessageIndex(messages);
 
-    if (visionModelId === 'gemini' || visionModelId === 'gemini-flash-lite') {
-        // Both Gemini variants use the same API key but different model endpoints
-        const geminiModel = visionModelId === 'gemini-flash-lite' ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash';
-        describeFn = (data, mimeType, apiKey, prompt) =>
-            describeWithGemini(data, mimeType, apiKey, geminiModel, prompt);
-        const key = await secrets.getGeminiApiKey();
-        if (!key) {
-            return {
-                messages: deepseekMessages,
-                hadImages: true,
-                errors: ['No Gemini API key configured. Images cannot be processed. Run "Nika: Manage Nika Models" and select "Input Gemini API Key". Get a free key at https://aistudio.google.com/apikey'],
-            };
-        }
-        credential = key;
-    } else {
-        // ollama-gemma4 (default) — no API key needed
-        describeFn = describeWithGemma4 as typeof describeWithGemini;
-        credential = getOllamaBaseUrl();
-    }
+    // Phase 3: Resolve each message
+    const result: vscode.LanguageModelChatRequestMessage[] = [];
+    let visionDescriber: VisionDescriber | undefined;
+    let visionDescriberRequested = false;
+    let missingVisionProxy = false;
+    let visionFailureNotice: string | undefined;
+    let markerVisionText: string | undefined;
 
-    const imageMap = extractImageParts(messages);
-    const errors: string[] = [];
+    for (const [messageIndex, message] of messages.entries()) {
+        if (token.isCancellationRequested) break;
 
-    // Collect all images with their hashes, tracking new vs cached
-    const allImages: { msgIndex: number; data: Uint8Array; mimeType: string; hash: string; cached: boolean }[] = [];
-    let newImageCount = 0;
-
-    for (const [msgIndex, images] of imageMap) {
-        for (const img of images) {
-            const hash = hashImage(img.data);
-            const cached = descriptionCache.has(hash);
-            allImages.push({ msgIndex, data: img.data, mimeType: img.mimeType, hash, cached });
-            if (!cached) newImageCount++;
-        }
-    }
-
-    // Only show progress for new images
-    if (newImageCount > 0) {
-        _progress.report(new vscode.LanguageModelTextPart(
-            `\n\n*Analyzing ${newImageCount} image(s) with ${providerName} vision...*\n\n`
-        ));
-    }
-
-    // Process each image — only call the vision provider for uncached ones
-    const descriptionMap = new Map<number, string>();
-
-    for (const img of allImages) {
-        if (_token.isCancellationRequested) break;
-
-        if (img.cached) {
-            const cached = descriptionCache.get(img.hash)!;
-            if (cached === FAILED_MARKER) {
-                // Previously failed — don't retry, it's no longer relevant
-                continue;
-            }
-            // Use cached description
-            const existing = descriptionMap.get(img.msgIndex) ?? '';
-            const prefix = existing ? '\n\n---\n\n' : '';
-            descriptionMap.set(img.msgIndex, `${existing}${prefix}${cached}`);
+        const imageParts = getImageParts(message);
+        if (imageParts.length === 0) {
+            // No images — pass through unchanged
+            result.push(message as vscode.LanguageModelChatRequestMessage);
             continue;
         }
 
-        // Call the selected vision provider for new image
-        const prompt = buildVisionPrompt(messages, img.msgIndex);
-        const result = await describeFn(img.data, img.mimeType, credential, prompt);
+        const nonImageParts = getNonImageParts(message);
 
-        if (result.success) {
-            // Cache the result
-            descriptionCache.set(img.hash, result.description);
-
-            const existing = descriptionMap.get(img.msgIndex) ?? '';
-            const prefix = existing ? '\n\n---\n\n' : '';
-            descriptionMap.set(img.msgIndex, `${existing}${prefix}${result.description}`);
-        } else {
-            // Cache the failure so it won't be retried on subsequent messages
-            descriptionCache.set(img.hash, FAILED_MARKER);
-            errors.push(`Image: ${result.error ?? 'Unknown error'}`);
+        // Case A: Replay marker found — use cached description, no API call
+        const replayText = markerBindings.get(messageIndex);
+        if (replayText) {
+            stats.replayedImageMessages += 1;
+            stats.droppedImageParts += imageParts.length;
+            result.push(
+                createResolvedMessage(message, [
+                    ...nonImageParts,
+                    new vscode.LanguageModelTextPart(replayText),
+                ]),
+            );
+            continue;
         }
+
+        // Case B: This is the current (latest) user message with images — describe it
+        if (messageIndex === currentImageMessageIndex) {
+            stats.currentImageMessages += 1;
+            if (!visionDescriberRequested) {
+                visionDescriberRequested = true;
+                visionDescriber = await getDescriber();
+            }
+
+            const visionResolution = await resolveCurrentVisionText(
+                imageParts,
+                nonImageParts,
+                visionDescriber,
+                stats,
+                token,
+            );
+
+            const visionText = visionResolution.text;
+            if (!visionDescriber && !token.isCancellationRequested) {
+                missingVisionProxy = true;
+            }
+            visionFailureNotice ??= visionResolution.failureNotice;
+            markerVisionText = visionText;
+            stats.markerVisionTextChars = visionText.length;
+
+            // Cache the description for agent loop persistence (by image hash)
+            setCachedVisionByImage(imageParts, visionText);
+
+            result.push(
+                createResolvedMessage(message, [
+                    ...nonImageParts,
+                    new vscode.LanguageModelTextPart(visionText),
+                ]),
+            );
+            continue;
+        }
+
+        // Case C: Old image message with no marker — check session cache first,
+        // then fall back to dropping images.
+        const cachedText = getCachedVisionByImage(imageParts);
+        if (cachedText) {
+            stats.replayedImageMessages += 1;
+            stats.droppedImageParts += imageParts.length;
+            visionLog.info(`Reused session-cached vision for message [${messageIndex}] (${imageParts.length} image(s))`);
+            result.push(
+                createResolvedMessage(message, [
+                    ...nonImageParts,
+                    new vscode.LanguageModelTextPart(cachedText),
+                ]),
+            );
+            continue;
+        }
+
+        visionLog.info(`No cache hit for message [${messageIndex}] — omitting ${imageParts.length} image(s)`);
+
+        // Case D: Truly old image with no marker and no cache — drop images
+        stats.omittedImageMessages += 1;
+        stats.droppedImageParts += imageParts.length;
+        result.push(createResolvedMessage(message, nonImageParts));
     }
 
-    if (errors.length > 0) {
-        log.warn(`Vision preprocessing: ${errors.length} image(s) failed`, new Error(errors.join('; ')));
-        _progress.report(
-            new vscode.LanguageModelTextPart(
-                `\n\n*Warning: ${errors.length} image(s) could not be processed: ${errors.join('; ')}*\n\n`
-            )
+    return {
+        messages: result,
+        stats,
+        replayMarkerMetadata: { visionText: markerVisionText },
+        visionModelId: visionDescriber?.id,
+        visionProxySource: visionDescriber?.source,
+        initialResponseNotice: missingVisionProxy
+            ? createVisionProxyMissingNotice()
+            : visionFailureNotice,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Describer resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a vision describer based on the current configuration.
+ * Supports two sources:
+ *   - 'vscode-lm': Uses a Copilot vision model (Gemini/Gemma4 registered as providers, or existing models)
+ *   - 'api-endpoint': Direct API endpoint (OpenAI/Anthropic compatible)
+ */
+export async function resolveVisionDescriber(
+    config: {
+        source: VisionProxySource;
+        visionModelKey?: string;
+        apiEndpointConfig?: ApiEndpointConfig;
+    },
+): Promise<VisionDescriber | undefined> {
+    if (config.source === 'vscode-lm' && config.visionModelKey) {
+        const model = await findVisionModelByKey(config.visionModelKey);
+        if (model) {
+            return new VSCodeLanguageModelVisionDescriber(model);
+        }
+        visionLog.warn(`Vision model not found: ${config.visionModelKey}`);
+        return undefined;
+    }
+
+    if (config.source === 'api-endpoint' && config.apiEndpointConfig) {
+        return new ApiEndpointVisionDescriber(
+            `api:${config.apiEndpointConfig.modelId}`,
+            config.apiEndpointConfig,
         );
     }
 
-    // Inject descriptions into the DeepSeek messages
-    const processedMessages = injectVisionDescriptions(deepseekMessages, descriptionMap);
+    return undefined;
+}
 
-    return { messages: processedMessages, hadImages: true, errors };
+// ---------------------------------------------------------------------------
+// Current image resolution
+// ---------------------------------------------------------------------------
+
+interface CurrentVisionResolution {
+    text: string;
+    failureNotice?: string;
+}
+
+async function resolveCurrentVisionText(
+    imageParts: vscode.LanguageModelDataPart[],
+    nonImageParts: readonly vscode.LanguageModelInputPart[],
+    visionDescriber: VisionDescriber | undefined,
+    stats: VisionResolutionStats,
+    token: vscode.CancellationToken,
+): Promise<CurrentVisionResolution> {
+    // No describer available — mark as unavailable
+    if (!visionDescriber || token.isCancellationRequested) {
+        if (!visionDescriber) {
+            visionLog.warn('No vision describer available');
+        }
+        stats.unavailableImageMessages += 1;
+        return {
+            text: createVisionReplayText(IMAGE_DESCRIPTION_UNAVAILABLE, nonImageParts),
+        };
+    }
+
+    // Describe the image(s) via the chosen vision model
+    try {
+        const description = await visionDescriber.describe({
+            prompt: getVisionPrompt(),
+            images: imageParts.map(toVisionImagePart),
+            token,
+        });
+
+        if (description.length === 0) {
+            stats.failedImageMessages += 1;
+            return createFailedVisionResolution(
+                'empty-response',
+                'Vision model returned empty response',
+                nonImageParts,
+            );
+        }
+
+        stats.generatedImageMessages += 1;
+        return {
+            text: createVisionReplayText(
+                createImageDescriptionText(description),
+                nonImageParts,
+            ),
+        };
+    } catch (error) {
+        visionLog.error('Vision describe failed', error);
+        stats.failedImageMessages += 1;
+        return createFailedVisionResolution(
+            'describe-error',
+            error instanceof Error ? error.message : String(error),
+            nonImageParts,
+        );
+    }
+}
+
+function createFailedVisionResolution(
+    errorCode: string,
+    errorMessage: string,
+    nonImageParts: readonly vscode.LanguageModelInputPart[],
+): CurrentVisionResolution {
+    return {
+        text: createVisionReplayText(IMAGE_DESCRIPTION_UNAVAILABLE, nonImageParts),
+        failureNotice: createVisionProxyFailureNotice(errorCode, errorMessage),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createVisionResolutionStats(): VisionResolutionStats {
+    return {
+        inputImageParts: 0,
+        inputImageMessages: 0,
+        currentImageMessages: 0,
+        generatedImageMessages: 0,
+        replayedImageMessages: 0,
+        omittedImageMessages: 0,
+        unavailableImageMessages: 0,
+        failedImageMessages: 0,
+        droppedImageParts: 0,
+        markerVisionTextChars: 0,
+        invalidMarkerVisionMetadata: 0,
+    };
+}
+
+function collectInputImageStats(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    stats: VisionResolutionStats,
+): void {
+    for (const message of messages) {
+        const imageParts = getImageParts(message).length;
+        if (imageParts === 0) continue;
+        stats.inputImageMessages += 1;
+        stats.inputImageParts += imageParts;
+    }
 }
 
 /**
- * Build a context-aware vision prompt.
- * If the user seems to be asking about text/content in the image,
- * we emphasize OCR and transcription.
+ * Find the LAST user message in the conversation that contains images.
+ * If the most recent non-user message is an assistant message, there's no
+ * "current" image to describe — the last image turn has already been answered.
  */
-function buildVisionPrompt(
+function findCurrentImageMessageIndex(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
-    _imageMsgIndex: number
-): string {
-    // Gather recent user messages for context
-    const userTexts: string[] = [];
-    for (const msg of messages) {
-        if (msg.role !== vscode.LanguageModelChatMessageRole.User) continue;
-        const content = typeof msg.content === 'string'
-            ? msg.content
-            : msg.content
-                .filter(p => p instanceof vscode.LanguageModelTextPart)
-                .map(p => (p as vscode.LanguageModelTextPart).value)
-                .join(' ');
-        if (content) userTexts.push(content);
+): number | undefined {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        // If we hit an assistant message first, there's no current user image
+        if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
+            return undefined;
+        }
+        if (message.role !== vscode.LanguageModelChatMessageRole.User) {
+            continue;
+        }
+        if (getImageParts(message).length > 0) {
+            return index;
+        }
     }
+    return undefined;
+}
 
-    const recentQueries = userTexts.slice(-3).join(' | ').toLowerCase();
-    const wantsText = /chat|message|text|read|transcribe|extract|what does.*say|what.*written|ocr|screenshot|conversation/i.test(recentQueries);
+function createResolvedMessage(
+    message: vscode.LanguageModelChatRequestMessage,
+    content: readonly vscode.LanguageModelInputPart[],
+): vscode.LanguageModelChatRequestMessage {
+    return {
+        role: message.role,
+        content,
+        name: message.name,
+    } as unknown as vscode.LanguageModelChatRequestMessage;
+}
 
-    if (wantsText) {
-        return `This is a screenshot. Your task is to transcribe ALL visible text exactly as it appears — every message, every word, line by line. Pay close attention to chat messages, names, timestamps, and any UI text. Do not summarize or paraphrase. Output the full transcript. If text is in a non-English language, transcribe it in that language.`;
-    }
+function toVisionImagePart(part: vscode.LanguageModelDataPart): import('./types.js').VisionImagePart {
+    return {
+        mimeType: part.mimeType,
+        data: part.data,
+    };
+}
 
-    return `Describe this image in detail. Include all visible text (transcribe it exactly if readable), UI elements, code, diagrams, charts, people, objects, colors, and layout. Be thorough and precise. If there is text in the image, transcribe it word-for-word.`;
+function createVisionProxyMissingNotice(): string {
+    return '⚠️ No vision model is configured. Images will not be described. '
+        + 'Run "Nika: Manage → Choose Vision Model" to select one.';
+}
+
+function createVisionProxyFailureNotice(errorCode: string, errorMessage: string): string {
+    return `⚠️ Vision model error (${errorCode}): ${errorMessage}`;
 }

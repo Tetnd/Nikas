@@ -2,7 +2,7 @@
   "name": "nika",
   "displayName": "Nika",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "publisher": "nika",
   "icon": "logo.png",
   "license": "MIT",
@@ -48,6 +48,11 @@
       {
         "command": "nika.inputDeepseekToken",
         "title": "Input DeepSeek API Key",
+        "category": "Nika"
+      },
+      {
+        "command": "nika.inputGeminiToken",
+        "title": "Input Gemini API Key",
         "category": "Nika"
       },
       {
@@ -158,7 +163,8 @@
           "default": "ollama-gemma4",
           "enum": [
             "ollama-gemma4",
-            "gemini"
+            "gemini",
+            "gemini-flash-lite"
           ],
           "description": "Vision model for image preprocessing. Gemma 4 runs locally via Ollama (no API key needed). Gemini uses Google AI Studio (free tier, needs API key)."
         },
@@ -187,6 +193,17 @@
             "1,000,000 tokens — Maximum, full DeepSeek context for complex agent tasks"
           ],
           "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models."
+        },
+        "nika.visionModelKey": {
+          "type": "string",
+          "default": "",
+          "description": "Composite key (vendor/id) for a Copilot vision model selected via 'Nika: Choose Vision Model'. When set, overrides nika.visionModel. Cleared automatically when a native vision model is selected."
+        },
+        "nika.visionSource": {
+          "type": "string",
+          "default": "vscode-lm",
+          "enum": ["vscode-lm", "api-endpoint"],
+          "description": "Source for image descriptions: 'vscode-lm' uses a Copilot model, 'api-endpoint' uses a direct API endpoint."
         },
         "nika.logLevel": {
           "type": "string",

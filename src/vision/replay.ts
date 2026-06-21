@@ -1,0 +1,366 @@
+import * as vscode from 'vscode';
+import {
+    REPLAY_MARKER_MIME,
+    REPLAY_MARKER_WRITER_ID,
+    IMAGE_DESCRIPTION_PREFIX,
+    IMAGE_DESCRIPTION_SUFFIX,
+    IMAGE_DESCRIPTION_UNAVAILABLE,
+} from './consts.js';
+import type { ReplayMarkerMetadata, VisionResolutionStats } from './types.js';
+import { visionLog } from './log.js';
+
+// ---------------------------------------------------------------------------
+// Replay Marker Format
+// ---------------------------------------------------------------------------
+// Markers are stored as LanguageModelDataPart with MIME type 'stateful_marker'.
+// The data is: <writerId>\<base64url-json-payload>
+//
+// Payload schema:
+//   { vision?: { text: string }, reasoning?: { text: string }, segmentId?: string }
+//
+// Example:
+//   nika\{ "vision": { "text": "[Image Description: A screenshot of ...]" } }
+// ---------------------------------------------------------------------------
+
+export interface ReplayMarkerParseResult {
+    valid: boolean;
+    segmentId?: string;
+    visionText?: string;
+    visionTextIgnoredReason?: VisionMarkerTextIgnoredReason;
+    reasoningText?: string;
+    reasoningTextIgnoredReason?: ReasoningMarkerTextIgnoredReason;
+    error?: string;
+}
+
+export type VisionMarkerTextIgnoredReason =
+    | 'vision-not-object'
+    | 'vision-text-not-string'
+    | 'vision-text-empty';
+
+export type ReasoningMarkerTextIgnoredReason =
+    | 'reasoning-not-object'
+    | 'reasoning-text-not-string'
+    | 'reasoning-text-empty';
+
+// ---------------------------------------------------------------------------
+// Creating replay markers
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a replay marker data part from vision metadata.
+ * This is appended to the assistant response so the next turn can replay
+ * the description without calling the vision model again.
+ */
+export function createReplayMarkerPart(
+    metadata: ReplayMarkerMetadata,
+): vscode.LanguageModelDataPart {
+    const payloadObj: Record<string, unknown> = {};
+
+    if (metadata.visionText) {
+        payloadObj.vision = { text: metadata.visionText };
+    }
+    if (metadata.reasoningText) {
+        payloadObj.reasoning = { text: metadata.reasoningText };
+    }
+
+    const payload = encodeReplayMarkerJson(payloadObj);
+    const marker = `${REPLAY_MARKER_WRITER_ID}\\${payload}`;
+
+    return new vscode.LanguageModelDataPart(
+        new TextEncoder().encode(marker),
+        REPLAY_MARKER_MIME,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Parsing replay markers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse replay marker data from a LanguageModelDataPart.
+ */
+export function parseReplayMarkerData(data: Uint8Array): ReplayMarkerParseResult {
+    const raw = new TextDecoder().decode(data);
+
+    // Must start with known prefix
+    if (!raw.includes('\\')) {
+        return { valid: false, error: 'no-separator' };
+    }
+
+    const sepIndex = raw.indexOf('\\');
+    const prefix = raw.slice(0, sepIndex);
+    const payloadRaw = raw.slice(sepIndex + 1);
+
+    // Accept any known prefix (nika, or any model ID for compatibility)
+    if (prefix !== REPLAY_MARKER_WRITER_ID) {
+        return { valid: false, error: `unknown-writer: ${prefix}` };
+    }
+
+    return decodeReplayMarkerPayload(payloadRaw);
+}
+
+/**
+ * Find the first replay marker in an assistant message.
+ */
+export function findFirstReplayMarker(
+    message: vscode.LanguageModelChatRequestMessage,
+): { partIndex: number; marker: ReplayMarkerParseResult } | undefined {
+    for (const [partIndex, part] of message.content.entries()) {
+        if (!(part instanceof vscode.LanguageModelDataPart)) {
+            continue;
+        }
+        if (part.mimeType !== REPLAY_MARKER_MIME) {
+            continue;
+        }
+        const marker = parseReplayMarkerData(part.data);
+        return { partIndex, marker };
+    }
+    return undefined;
+}
+
+/**
+ * Shorthand — parse the first replay marker from a message, if any.
+ */
+export function parseFirstReplayMarker(
+    message: vscode.LanguageModelChatRequestMessage,
+): ReplayMarkerParseResult | undefined {
+    return findFirstReplayMarker(message)?.marker;
+}
+
+// ---------------------------------------------------------------------------
+// Vision marker binding (replay mapping)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract vision text from an assistant message's replay marker.
+ * Returns undefined if no valid vision text is found.
+ */
+export function findAssistantVisionText(
+    message: vscode.LanguageModelChatRequestMessage,
+    stats: VisionResolutionStats,
+): string | undefined {
+    const marker = parseFirstReplayMarker(message);
+    if (!marker) {
+        return undefined;
+    }
+    if (!marker.valid) {
+        stats.invalidMarkerVisionMetadata += 1;
+        return undefined;
+    }
+    if (marker.visionText) {
+        return marker.visionText;
+    }
+    if (marker.visionTextIgnoredReason) {
+        stats.invalidMarkerVisionMetadata += 1;
+    }
+    return undefined;
+}
+
+/**
+ * Scan assistant messages for replay markers and build a map from
+ * user message index → vision text.
+ *
+ * For each assistant message that carries a vision marker, we find the
+ * nearest preceding user message that contains image parts and bind
+ * the vision text to it. This way the next turn can replay the description
+ * without re-calling the vision model.
+ */
+export function createVisionMarkerBindings(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    stats: VisionResolutionStats,
+): Map<number, string> {
+    const bindings = new Map<number, string>();
+    const boundUserMessages = new Set<number>();
+
+    for (const [messageIndex, message] of messages.entries()) {
+        if (message.role !== vscode.LanguageModelChatMessageRole.Assistant) {
+            continue;
+        }
+
+        const visionText = findAssistantVisionText(message, stats);
+        if (!visionText) {
+            continue;
+        }
+
+        // Walk backwards to find the nearest unbound user message with images
+        for (let userIndex = messageIndex - 1; userIndex >= 0; userIndex -= 1) {
+            if (boundUserMessages.has(userIndex)) {
+                continue;
+            }
+            const candidate = messages[userIndex];
+            if (candidate.role !== vscode.LanguageModelChatMessageRole.User) {
+                continue;
+            }
+            if (getImageParts(candidate).length === 0) {
+                continue;
+            }
+
+            bindings.set(userIndex, visionText);
+            boundUserMessages.add(userIndex);
+            break;
+        }
+    }
+
+    return bindings;
+}
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a message contains image data parts.
+ */
+export function hasImageParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): boolean {
+    return getImageParts(message).length > 0;
+}
+
+/**
+ * Extract image data parts from a message.
+ */
+export function getImageParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): vscode.LanguageModelDataPart[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
+        isImageDataPart,
+    );
+}
+
+/**
+ * Extract non-image parts from a message.
+ */
+export function getNonImageParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): vscode.LanguageModelInputPart[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
+        (part) => !isImageDataPart(part),
+    );
+}
+
+/**
+ * Extract text from a message's text parts.
+ */
+export function getMessageText(
+    message: vscode.LanguageModelChatRequestMessage,
+): string {
+    let text = '';
+    for (const part of message.content) {
+        if (part instanceof vscode.LanguageModelTextPart) {
+            text += part.value;
+        }
+    }
+    return text;
+}
+
+export function isImageDataPart(part: unknown): part is vscode.LanguageModelDataPart {
+    return part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/');
+}
+
+/**
+ * Create the wrapped description text: `[Image Description: <text>]`
+ */
+export function createImageDescriptionText(description: string): string {
+    return IMAGE_DESCRIPTION_PREFIX + description + IMAGE_DESCRIPTION_SUFFIX;
+}
+
+/**
+ * Format a non-empty text + vision text combination.
+ * If there's existing text, separate with a newline. Otherwise return just the vision text.
+ */
+export function createVisionReplayText(
+    visionText: string,
+    nonImageParts: readonly vscode.LanguageModelInputPart[],
+): string {
+    const hasText = nonImageParts.some(
+        (part) => part instanceof vscode.LanguageModelTextPart && part.value.trim().length > 0,
+    );
+    const separatedText = hasText ? `\n\n${visionText}` : visionText;
+    return toWellFormedString(separatedText);
+}
+
+/**
+ * Ensure a string has no invalid surrogate pairs (well-formed Unicode).
+ */
+function toWellFormedString(value: string): string {
+    // Polyfill for String.prototype.toWellFormed() (ES2024)
+    // Remove lone surrogates
+    return value.replace(/[\uD800-\uDFFF]/gu, '\uFFFD');
+}
+
+// ---------------------------------------------------------------------------
+// Encoding / decoding
+// ---------------------------------------------------------------------------
+
+function encodeReplayMarkerJson(value: object): string {
+    const json = JSON.stringify(value);
+    // Base64url-encode (no padding)
+    const bytes = new TextEncoder().encode(json);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+function decodeReplayMarkerPayload(payloadRaw: string): ReplayMarkerParseResult {
+    try {
+        // Base64url-decode
+        const base64 = payloadRaw
+            .replace(/-/g, '+')
+            .replace(/_/g, '/');
+        const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
+        const json = new TextDecoder().decode(
+            new Uint8Array(atob(padded).split('').map(c => c.charCodeAt(0))),
+        );
+        const obj = JSON.parse(json);
+
+        if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+            return { valid: false, error: 'payload-not-object' };
+        }
+
+        const result: ReplayMarkerParseResult = { valid: true };
+
+        // Parse vision
+        const vision = obj.vision;
+        if (vision !== undefined) {
+            if (typeof vision !== 'object' || vision === null || Array.isArray(vision)) {
+                result.visionTextIgnoredReason = 'vision-not-object';
+            } else if (typeof vision.text !== 'string') {
+                result.visionTextIgnoredReason = 'vision-text-not-string';
+            } else if (vision.text.length === 0) {
+                result.visionTextIgnoredReason = 'vision-text-empty';
+            } else {
+                result.visionText = vision.text;
+            }
+        }
+
+        // Parse reasoning
+        const reasoning = obj.reasoning;
+        if (reasoning !== undefined) {
+            if (typeof reasoning !== 'object' || reasoning === null || Array.isArray(reasoning)) {
+                result.reasoningTextIgnoredReason = 'reasoning-not-object';
+            } else if (typeof reasoning.text !== 'string') {
+                result.reasoningTextIgnoredReason = 'reasoning-text-not-string';
+            } else if (reasoning.text.length === 0) {
+                result.reasoningTextIgnoredReason = 'reasoning-text-empty';
+            } else {
+                result.reasoningText = reasoning.text;
+            }
+        }
+
+        // Parse optional segmentId
+        if (typeof obj.segmentId === 'string') {
+            result.segmentId = obj.segmentId;
+        }
+
+        return result;
+    } catch (err) {
+        visionLog.warn('Failed to decode replay marker', err);
+        return { valid: false, error: `decode-error: ${err instanceof Error ? err.message : String(err)}` };
+    }
+}
