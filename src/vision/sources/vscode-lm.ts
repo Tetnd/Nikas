@@ -14,7 +14,7 @@ import type { VisionDescriber, VisionDescriptionRequest, VisionLanguageModelOpti
 export class VSCodeLanguageModelVisionDescriber implements VisionDescriber {
     readonly source: VisionProxySource = 'vscode-lm';
 
-    constructor(private readonly model: vscode.LanguageModelChat) {}
+    constructor(private readonly model: vscode.LanguageModelChat) { }
 
     get id(): string {
         return this.model.id;

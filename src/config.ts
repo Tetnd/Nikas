@@ -129,12 +129,6 @@ export function getOllamaBaseUrl(): string {
 
 export type ThinkingEffort = 'off' | 'high' | 'max';
 
-export const THINKING_EFFORTS: { id: ThinkingEffort; label: string; description: string }[] = [
-    { id: 'off', label: 'Off', description: 'No thinking mode — fastest responses' },
-    { id: 'high', label: 'High', description: 'Standard reasoning (default for most requests)' },
-    { id: 'max', label: 'Max', description: 'Maximum reasoning effort (used for complex agent tasks)' },
-];
-
 export function getThinkingEffort(): ThinkingEffort {
     return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';
 }

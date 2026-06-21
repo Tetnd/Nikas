@@ -30,7 +30,7 @@ export class ApiEndpointVisionDescriber implements VisionDescriber {
     constructor(
         public readonly id: string,
         private readonly config: ApiEndpointConfig,
-    ) {}
+    ) { }
 
     async describe(request: VisionDescriptionRequest): Promise<string> {
         if (request.token.isCancellationRequested) {
@@ -57,13 +57,13 @@ export class ApiEndpointVisionDescriber implements VisionDescriber {
                 signal: abortController.signal,
             });
 
-        if (!response.ok) {
-            const errorBody = await response.text();
-            throw new ApiEndpointError(
-                'http-error',
-                `API returned ${response.status}: ${errorBody}`,
-            );
-        }
+            if (!response.ok) {
+                const errorBody = await response.text();
+                throw new ApiEndpointError(
+                    'http-error',
+                    `API returned ${response.status}: ${errorBody}`,
+                );
+            }
 
             const result = await response.json();
             return this.parseResponse(result);

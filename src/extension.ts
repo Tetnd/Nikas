@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NikaChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, THINKING_EFFORTS, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
 import { setLogLevel } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -61,7 +61,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nika.inputGeminiToken', () => inputGeminiToken(context)),
-        vscode.commands.registerCommand('nika.chooseThinkingEffort', () => chooseThinkingEffort()),
+
         vscode.commands.registerCommand('nika.chooseMaxTokens', () => chooseMaxTokens()),
         vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
         vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
@@ -83,10 +83,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         label: '$(eye) Choose Vision Model',
                         description: 'Select which vision model preprocesses images',
                     },
-                    {
-                        label: '$(symbol-parameter) Thinking Effort',
-                        description: 'Set reasoning depth for thinking-capable models',
-                    },
+
                     {
                         label: '$(symbol-method) Max Output Tokens',
                         description: 'Set maximum response length (16K recommended for thinking mode)',
@@ -141,9 +138,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     case '$(eye) Choose Vision Model':
                         vscode.commands.executeCommand('nika.chooseVisionModel');
                         break;
-                    case '$(symbol-parameter) Thinking Effort':
-                        vscode.commands.executeCommand('nika.chooseThinkingEffort');
-                        break;
+
                     case '$(symbol-method) Max Output Tokens':
                         vscode.commands.executeCommand('nika.chooseMaxTokens');
                         break;
@@ -352,33 +347,6 @@ async function inputGeminiToken(context: vscode.ExtensionContext): Promise<void>
     vscode.window.showInformationMessage(
         'Nika: Gemini API key saved! Image/vision support is now enabled.'
     );
-}
-
-/**
- * Thinking effort picker — controls reasoning depth for models that support it.
- */
-async function chooseThinkingEffort(): Promise<void> {
-    const config = getConfig();
-    const current = config.get<string>('thinkingEffort') ?? 'off';
-
-    const items: vscode.QuickPickItem[] = THINKING_EFFORTS.map(e => ({
-        label: e.id === current ? `$(check) ${e.label}` : `$(blank) ${e.label}`,
-        description: e.description,
-    }));
-
-    const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Thinking Effort',
-        placeHolder: 'Select reasoning depth (only applies to thinking-capable models)',
-        matchOnDescription: true,
-    });
-
-    if (!selected) return;
-
-    const effort = THINKING_EFFORTS.find(e => selected.label.endsWith(e.label))?.id;
-    if (effort) {
-        await config.update('thinkingEffort', effort, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Nika: Thinking effort set to ${effort}`);
-    }
 }
 
 /**
