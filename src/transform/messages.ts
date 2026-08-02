@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { log } from '../log.js';
 import { safeStringify } from '../api/sanitize.js';
-import type { DeepSeekMessage, DeepSeekContentPart } from '../api/types.js';
+import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem } from '../api/types.js';
 
 /**
  * Convert VS Code LanguageModelChatRequestMessage[] to DeepSeek API message format.
@@ -149,6 +149,91 @@ export function hasImageParts(
         }
     }
     return false;
+}
+
+/**
+ * Convert DeepSeek chat-completion messages to Responses API input items.
+ *
+ * Mapping (per DeepSeek Responses API docs):
+ * - system            → top-level `instructions` (first one) or `message` item
+ * - user              → `message` item (role: user)
+ * - assistant (text)  → `message` item (role: assistant)
+ * - assistant (tools) → adjacent `function_call` items
+ * - tool (result)     → `function_call_output` item
+ *
+ * Images were already resolved to text by the vision pipeline before this
+ * point, so any leftover image_url parts are dropped (the Responses API would
+ * replace them with placeholders anyway).
+ *
+ * Returns `{ input, instructions }` — `instructions` is the first system
+ * message, hoisted to the top-level request field per the API docs.
+ */
+export function deepseekMessagesToResponsesInput(
+    messages: DeepSeekMessage[]
+): { input: DeepSeekResponsesInputItem[]; instructions?: string } {
+    const input: DeepSeekResponsesInputItem[] = [];
+    let instructions: string | undefined;
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            const text = messageText(msg);
+            if (!instructions && text) {
+                instructions = text;
+            } else {
+                input.push({ type: 'message', role: 'system', content: text });
+            }
+            continue;
+        }
+
+        if (msg.role === 'user') {
+            input.push({ type: 'message', role: 'user', content: messageText(msg) });
+            continue;
+        }
+
+        if (msg.role === 'assistant') {
+            const text = messageText(msg);
+            if (text) {
+                input.push({ type: 'message', role: 'assistant', content: text });
+            }
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+                for (const tc of msg.tool_calls) {
+                    input.push({
+                        type: 'function_call',
+                        call_id: tc.id,
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                    });
+                }
+            }
+            continue;
+        }
+
+        if (msg.role === 'tool' && msg.tool_call_id) {
+            input.push({
+                type: 'function_call_output',
+                call_id: msg.tool_call_id,
+                output: messageText(msg),
+            });
+            continue;
+        }
+    }
+
+    return { input, instructions };
+}
+
+/** Extract plain text from a DeepSeek message (string or content parts). */
+function messageText(msg: DeepSeekMessage): string {
+    if (typeof msg.content === 'string') {
+        return msg.content;
+    }
+    if (Array.isArray(msg.content)) {
+        return msg.content
+            .filter((p): p is DeepSeekContentPart & { type: 'text'; text: string } =>
+                p.type === 'text' && !!p.text)
+            .map(p => p.text)
+            .join('\n');
+    }
+    return '';
 }
 
 // --- Helpers ---

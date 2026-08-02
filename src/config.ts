@@ -34,6 +34,28 @@ export const VISION_MODELS = [
 
 export type VisionModelId = (typeof VISION_MODELS)[number]['id'];
 
+/**
+ * DeepSeek V4 Flash exposed through the Responses API (POST /responses).
+ *
+ * Kept SEPARATE from DEEPSEEK_MODELS on purpose:
+ * - The Responses API currently only supports `deepseek-v4-flash` (not Pro).
+ * - `nika.selectedModel` / "Nika: Choose Provider" drives the chat-completions
+ *   request model id, so this id must NOT be selectable there (the inline
+ *   handler would send it to /chat/completions and get a 400).
+ * - It is picked via Copilot Chat's model picker, where routing in
+ *   `provideLanguageModelChatResponse` dispatches it to the /responses handler.
+ */
+export const DEEPSEEK_RESPONSES_MODEL = {
+    id: 'deepseek-v4-flash-responses',
+    name: 'DeepSeek V4 Flash (Responses)',
+    family: 'deepseek',
+    version: '0731',
+    maxInputTokens: 1_000_000,
+    maxOutputTokens: 384_000,
+    capabilities: { imageInput: true, toolCalling: true },
+    detail: 'Flash 0731 via the Responses API — agent-native tooling & server-side web search',
+} as const;
+
 export const DEEPSEEK_MODELS = [
     {
         id: 'deepseek-v4-flash',
@@ -127,7 +149,7 @@ export function getOllamaBaseUrl(): string {
     return getConfig().get<string>('ollamaBaseUrl') ?? 'http://localhost:11434';
 }
 
-export type ThinkingEffort = 'off' | 'high' | 'max';
+export type ThinkingEffort = 'off' | 'low' | 'high' | 'max';
 
 export function getThinkingEffort(): ThinkingEffort {
     return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';

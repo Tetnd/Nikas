@@ -7,6 +7,7 @@ Adds DeepSeek V4 models to Copilot Chat's model picker. Bring your own API key �
 ## Features
 
 - **DeepSeek V4 Flash & Pro** — fast and powerful models in the Copilot Chat model picker
+- **DeepSeek V4 Flash (Responses)** — the same Flash 0731 model served through DeepSeek's newer Responses API (`POST /responses`), built for agent-native tooling
 - **Vision preprocessing** — send images in chat and they're automatically described by Gemma 4 (local, via Ollama) or Gemini 2.5 Flash (free tier), then forwarded to DeepSeek
 - **Streaming responses** — real-time token-by-token output
 - **Tool calling** — full support for VS Code's built-in tools (read files, run terminal commands, search, etc.)
@@ -18,7 +19,7 @@ Adds DeepSeek V4 models to Copilot Chat's model picker. Bring your own API key �
 ### 1. Install
 
 ```bash
-code --install-extension nika-0.2.0.vsix
+code --install-extension nika-0.7.0.vsix
 ```
 
 Or download from [Releases](https://github.com/alive2/nika/releases).
@@ -68,8 +69,10 @@ Only needed if you switch vision models to Gemini:
 
 1. Open Copilot Chat (`Ctrl+Shift+I`)
 2. Click the model picker dropdown at the top
-3. Select **DeepSeek V4 Flash** or **DeepSeek V4 Pro**
+3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses)**
 4. Start chatting
+
+> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's the same Flash 0731 model, exposed through the agent-native endpoint. It's selected via the Copilot model picker only (it's not part of `Nika: Choose Provider`, which controls the Chat Completions model).
 
 ### 4. Switch vision model
 

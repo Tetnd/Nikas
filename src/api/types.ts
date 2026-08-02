@@ -49,7 +49,7 @@ export interface DeepSeekRequest {
     thinking?: {
         type: 'enabled' | 'disabled';
     };
-    reasoning_effort?: 'high' | 'max';
+    reasoning_effort?: 'low' | 'high' | 'max';
     stream_options?: {
         include_usage: boolean;
     };
@@ -60,6 +60,12 @@ export interface DeepSeekResponse {
     object: string;
     created: number;
     model: string;
+    /**
+     * Server-side fingerprint. Changes when the backend serving the model
+     * changes (e.g. a checkpoint swap like Preview → 0731), so it's the best
+     * runtime signal that we're actually hitting the new version.
+     */
+    system_fingerprint?: string;
     choices: DeepSeekChoice[];
     usage?: DeepSeekUsage;
 }
@@ -103,5 +109,110 @@ export interface DeepSeekErrorResponse {
         message: string;
         type: string;
         code?: string;
+    };
+}
+
+// --- Responses API (POST /responses, currently flash-only) ---
+
+export interface DeepSeekResponsesRequest {
+    model: string;
+    /** String or input item list. At least one of `input` and `instructions` is required. */
+    input: string | DeepSeekResponsesInputItem[];
+    /** Inserted as the first system message. */
+    instructions?: string;
+    stream: boolean;
+    temperature?: number;
+    top_p?: number;
+    max_output_tokens?: number;
+    reasoning?: {
+        effort?: 'none' | 'low' | 'high' | 'max';
+    };
+    tools?: DeepSeekResponsesTool[];
+    tool_choice?: 'none' | 'auto' | 'required';
+}
+
+/**
+ * A function tool in the Responses API format.
+ *
+ * NOTE: unlike Chat Completions, the Responses API FLATTENS the function
+ * definition — `name`, `description`, and `parameters` sit at the top level of
+ * the tool object, NOT under a nested `function` key. Sending the Chat
+ * Completions shape (`{ type, function: { name, ... } }`) fails with
+ * `tools[0]: missing field name`.
+ */
+export interface DeepSeekResponsesTool {
+    type: 'function';
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+}
+
+export type DeepSeekResponsesInputItem =
+    | DeepSeekResponsesMessageItem
+    | DeepSeekResponsesFunctionCallItem
+    | DeepSeekResponsesFunctionCallOutputItem;
+
+export interface DeepSeekResponsesMessageItem {
+    type: 'message';
+    role: 'system' | 'developer' | 'user' | 'assistant';
+    content: string | DeepSeekResponsesContentPart[];
+}
+
+export interface DeepSeekResponsesContentPart {
+    type: 'input_text' | 'output_text';
+    text: string;
+}
+
+export interface DeepSeekResponsesFunctionCallItem {
+    type: 'function_call';
+    /** OpenAI-style call id (some providers also emit `id`). */
+    call_id?: string;
+    id?: string;
+    name: string;
+    /** JSON string */
+    arguments: string;
+}
+
+export interface DeepSeekResponsesFunctionCallOutputItem {
+    type: 'function_call_output';
+    call_id: string;
+    output: string;
+}
+
+/**
+ * A single SSE event from the Responses API stream.
+ * Events carry `type` + `sequence_number`; the stream ends with
+ * response.completed / response.incomplete / response.failed (no `[DONE]`).
+ */
+export interface DeepSeekResponsesEvent {
+    type: string;
+    sequence_number?: number;
+    output_index?: number;
+    delta?: string;
+    item?: DeepSeekResponsesInputItem & { output_index?: number };
+    response?: DeepSeekResponsesResponse;
+}
+
+export interface DeepSeekResponsesResponse {
+    id: string;
+    object: string;
+    status: string;
+    model?: string;
+    system_fingerprint?: string;
+    output: DeepSeekResponsesInputItem[];
+    error?: {
+        message?: string;
+        code?: string;
+    };
+    usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        total_tokens: number;
+        input_tokens_details?: {
+            cached_tokens?: number;
+        };
+        output_tokens_details?: {
+            reasoning_tokens?: number;
+        };
     };
 }

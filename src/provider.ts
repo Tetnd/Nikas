@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource } from './config.js';
-import { vscodeMessagesToDeepSeek } from './transform/messages.js';
-import { streamDeepSeekChat } from './api/deepseek.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource } from './config.js';
+import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
+import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveVisionDescriber } from './vision/pipeline.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
-import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage } from './api/types.js';
+import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool } from './api/types.js';
 import type { ReplayMarkerMetadata } from './vision/types.js';
 
 /**
@@ -174,6 +174,24 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
                 models.push(modelInfo as vscode.LanguageModelChatInformation);
             }
+
+            // Responses API model (flash only) — picked via the Copilot picker,
+            // intentionally NOT part of DEEPSEEK_MODELS / nika.selectedModel so
+            // the chat-completions handler can never be told to send this id.
+            const responsesModelInfo: vscode.LanguageModelChatInformation & {
+                configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
+            } = {
+                id: DEEPSEEK_RESPONSES_MODEL.id,
+                name: DEEPSEEK_RESPONSES_MODEL.name,
+                family: DEEPSEEK_RESPONSES_MODEL.family,
+                version: DEEPSEEK_RESPONSES_MODEL.version,
+                maxInputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxInputTokens, effectiveInputTokens),
+                maxOutputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxOutputTokens, effectiveOutputTokens),
+                capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
+                detail: DEEPSEEK_RESPONSES_MODEL.detail,
+            };
+            responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
+            models.push(responsesModelInfo as vscode.LanguageModelChatInformation);
         } else if (!options.silent) {
             vscode.window.showWarningMessage(
                 'Nika: DeepSeek API key not configured. DeepSeek models will not appear in the model picker until the key is set.'
@@ -246,6 +264,9 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         }
         if (model.id.startsWith('gemma4:')) {
             return this.handleGemma4Chat(model.id, messages, progress, token);
+        }
+        if (model.id === DEEPSEEK_RESPONSES_MODEL.id) {
+            return this.handleDeepSeekResponsesChat(model.id, messages, options, progress, token);
         }
 
         // ── DeepSeek handler (inline, for minimal diff) ──────────────
@@ -501,6 +522,175 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             // Only report to progress for interactive (non-background) requests.
             // Background summarization requests don't have a visible chat window,
             // and calling progress.report on them is harmless but unnecessary.
+            progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
+            throw wrappedError;
+        } finally {
+            cancelDisposable.dispose();
+        }
+    }
+
+    /**
+     * Handle a chat request routed to the DeepSeek Responses API (POST /responses).
+     *
+     * Currently only `deepseek-v4-flash` is supported on this endpoint, so the
+     * API model is always flash — regardless of `nika.selectedModel` (which is
+     * scoped to the chat-completions handler).
+     *
+     * Reuses the same vision pipeline, message conversion, context truncation,
+     * thinking-effort dropdown, and tool mapping as the chat-completions path —
+     * only the wire format / SSE parsing differs (see streamDeepSeekResponses).
+     */
+    private async handleDeepSeekResponsesChat(
+        modelId: string,
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+        options: vscode.ProvideLanguageModelChatResponseOptions,
+        progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+        token: vscode.CancellationToken
+    ): Promise<void> {
+        const apiKey = await this.secrets.getDeepSeekApiKey();
+        if (!apiKey) {
+            throw new Error(
+                'DeepSeek API key not configured. Run "Nika: Input Deepseek userToken" from the command palette (F1).'
+            );
+        }
+
+        if (token.isCancellationRequested) return;
+
+        // Resolve images to text descriptions (same pipeline as chat completions)
+        const getDescriber = async () => {
+            try {
+                return await this.createVisionDescriber();
+            } catch (err) {
+                visionLog.error('Failed to create vision describer', err);
+                return undefined;
+            }
+        };
+        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
+        const resolvedMessages = visionResolution.messages;
+        const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
+
+        if (visionResolution.initialResponseNotice) {
+            progress.report(new vscode.LanguageModelTextPart(
+                `\n\n${visionResolution.initialResponseNotice}\n\n`
+            ));
+        }
+
+        if (token.isCancellationRequested) return;
+
+        // Convert + truncate to DeepSeek message form, then to Responses input
+        let deepseekMessages = vscodeMessagesToDeepSeek(resolvedMessages);
+        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
+        const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
+
+        // Thinking effort from the picker dropdown / nika.thinkingEffort setting
+        const thinkingEffort = getRequestThinkingEffort(options);
+        const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
+        const thinkingEnabled = thinkingEffort !== 'off';
+
+        // Same headroom boost as chat completions: leave room for reasoning tokens
+        const effectiveMaxTokens = getMaxTokens();
+        const minThinkingTokens = 16_384;
+        const boostedTokens = thinkingEnabled
+            ? Math.max(effectiveMaxTokens, minThinkingTokens)
+            : effectiveMaxTokens;
+
+        const request: DeepSeekResponsesRequest = {
+            // The Responses API only supports deepseek-v4-flash (not Pro).
+            model: 'deepseek-v4-flash',
+            input,
+            temperature: getTemperature(),
+            max_output_tokens: boostedTokens,
+            stream: true,
+            ...reasoningParams,
+        };
+        if (instructions) request.instructions = instructions;
+
+        if (options.tools && options.tools.length > 0) {
+            request.tools = options.tools.map(mapResponsesTool);
+            request.tool_choice = 'auto';
+        }
+
+        // Log request summary
+        const bodySize = new TextEncoder().encode(safeStringify(request)).length;
+        log.info(
+            `Sending DeepSeek Responses request: model=${modelId} (api=deepseek-v4-flash), ` +
+            `inputItems=${Array.isArray(input) ? input.length : 0}, ` +
+            `tools=${options.tools?.length ?? 0}, ` +
+            `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
+            `thinking=${thinkingEnabled}, ` +
+            `max_output_tokens=${boostedTokens.toLocaleString()}, ` +
+            `temperature=${getTemperature()}`
+        );
+        getOutputChannel().appendLine(
+            `[Nika] Responses API: model=${modelId}, inputItems=${Array.isArray(input) ? input.length : 0}, ` +
+            `thinking=${thinkingEnabled}, tools=${options.tools?.length ?? 0}`
+        );
+
+        const abortController = new AbortController();
+        const cancelDisposable = token.onCancellationRequested(() => {
+            abortController.abort();
+        });
+
+        try {
+            const streamResult = await streamDeepSeekResponses(
+                request,
+                apiKey,
+                abortController.signal,
+                // onText
+                (text: string) => {
+                    progress.report(new vscode.LanguageModelTextPart(text));
+                },
+                // onToolCalls
+                (toolCalls) => {
+                    for (const tc of toolCalls) {
+                        progress.report(
+                            new vscode.LanguageModelToolCallPart(tc.id, tc.name, tc.arguments)
+                        );
+                    }
+                },
+                // onComplete
+                (usage) => {
+                    if (usage) {
+                        progress.report(
+                            new vscode.LanguageModelDataPart(
+                                new TextEncoder().encode(
+                                    JSON.stringify({
+                                        prompt_tokens: usage.promptTokens,
+                                        completion_tokens: usage.completionTokens,
+                                        total_tokens: usage.promptTokens + usage.completionTokens,
+                                    })
+                                ),
+                                'usage'
+                            )
+                        );
+                    }
+                    if (replayMarkerMetadata.visionText) {
+                        progress.report(createReplayMarkerPart(replayMarkerMetadata));
+                    }
+                }
+            );
+
+            if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
+                log.info(
+                    `Empty response from DeepSeek Responses (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
+                    `max_output_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                );
+            }
+        } catch (err) {
+            if (abortController.signal.aborted) {
+                return; // Cancelled by user — silently stop
+            }
+            const errorMessage = err instanceof Error ? err.message : String(err || 'unknown error');
+            const wrappedError = new Error(
+                `Nika provider error (model: ${modelId}): ${errorMessage}`
+            );
+            if (err instanceof Error && err.stack) {
+                wrappedError.stack = err.stack;
+            }
+            log.error(
+                `Chat request failed for model "${modelId}" (Responses API, inputItems: ${Array.isArray(input) ? input.length : 0}, tools: ${options.tools?.length ?? 0})`,
+                err
+            );
             progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
             throw wrappedError;
         } finally {
@@ -938,12 +1128,36 @@ function sanitizeSchema(schema: Record<string, unknown> | null | undefined): Rec
 }
 
 /**
+ * Map a VS Code LanguageModelChatTool to the Responses API tool format.
+ *
+ * The Responses API FLATTENS the function definition — `name`, `description`,
+ * and `parameters` are top-level tool fields (NOT nested under `function` like
+ * Chat Completions). Sending the Chat Completions shape fails deserialization
+ * with `tools[0]: missing field name`.
+ */
+function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponsesTool {
+    const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
+    const parameters = sanitizeSchema(rawSchema);
+
+    return {
+        type: 'function',
+        name: tool.name,
+        description: tool.description ?? '',
+        parameters,
+    };
+}
+
+/**
  * Build the `configurationSchema` that makes Copilot Chat render a per-model
- * Thinking Effort dropdown (None / High / Max) next to the model picker.
+ * Thinking Effort dropdown (None / Low / High / Max) next to the model picker.
  *
  * This matches the Vizards approach — the dropdown appears for every model
  * that supports thinking, and the user's choice comes through as
  * `options.modelConfiguration.reasoningEffort` on each request.
+ *
+ * Levels match DeepSeek's Thinking Mode guide: for `deepseek-v4-flash`, `low`
+ * maps to a genuinely lower reasoning effort (distinct from `high`); only Pro
+ * collapses `low` → `high` server-side.
  */
 function buildThinkingEffortSchema() {
     return {
@@ -951,10 +1165,11 @@ function buildThinkingEffortSchema() {
             reasoningEffort: {
                 type: 'string',
                 title: 'Thinking Effort',
-                enum: ['none', 'high', 'max'],
-                enumItemLabels: ['None', 'High', 'Max'],
+                enum: ['none', 'low', 'high', 'max'],
+                enumItemLabels: ['None', 'Low', 'High', 'Max'],
                 enumDescriptions: [
                     'Disable thinking for faster responses',
+                    'Light reasoning — fastest thinking mode, good for simple lookups',
                     'Recommended for most tasks — balanced reasoning',
                     'Maximum reasoning depth for complex agent tasks',
                 ],
@@ -981,6 +1196,7 @@ function getRequestThinkingEffort(
     const configuredEffort = modelConfig?.reasoningEffort ?? cfg?.reasoningEffort;
 
     if (configuredEffort === 'none') return 'off';
+    if (configuredEffort === 'low') return 'low';
     if (configuredEffort === 'high') return 'high';
     if (configuredEffort === 'max') return 'max';
 
@@ -989,17 +1205,22 @@ function getRequestThinkingEffort(
 }
 
 /**
- * Build DeepSeek API thinking parameters from effort level.
+ * Build DeepSeek chat-completions thinking parameters from effort level.
  *
  * DeepSeek's API uses:
  *   thinking.type: "enabled" | "disabled"
- *   reasoning_effort: "high" | "max"
+ *   reasoning_effort: "low" | "high" | "max"
  *
- * Per the API docs, `low` and `medium` are mapped to `high` by the server,
- * and `xhigh` is mapped to `max`. We expose only the valid values directly.
+ * Per the API docs' effort mapping, for `deepseek-v4-flash`:
+ *   low → low (genuinely lighter reasoning)
+ *   high → high
+ *   xhigh → high
+ *   max → max
+ * (Pro collapses low → high; we pass the user's request through either way.)
  *
  * Effort levels:
  *   off  → thinking disabled
+ *   low  → thinking enabled, light reasoning
  *   high → thinking enabled, standard reasoning (default)
  *   max  → thinking enabled, maximum reasoning (for complex agent tasks)
  */
@@ -1013,5 +1234,26 @@ function buildThinkingParams(effort: ThinkingEffort): Partial<DeepSeekRequest> {
     return {
         thinking: { type: 'enabled' },
         reasoning_effort: effort,
+    };
+}
+
+/**
+ * Build Responses API reasoning parameters from effort level.
+ *
+ * The Responses API uses a top-level `reasoning: { effort }` field instead of
+ * chat-completions' `thinking`/`reasoning_effort` pair. Per DeepSeek's
+ * Thinking Mode guide, valid efforts are `none`/`low`/`high`/`max`, where
+ * `none` DISABLES thinking mode (thinking is enabled by default when the
+ * parameter is absent, so omitting `reasoning` would NOT turn it off).
+ */
+function buildResponsesThinkingParams(effort: ThinkingEffort): { reasoning?: { effort: 'none' | 'low' | 'high' | 'max' } } {
+    if (effort === 'off') {
+        return {
+            reasoning: { effort: 'none' },
+        };
+    }
+
+    return {
+        reasoning: { effort },
     };
 }
