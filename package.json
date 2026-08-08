@@ -107,6 +107,12 @@
         "title": "Re-apply Copilot PDF Patches",
         "category": "Nikas",
         "icon": "$(sync)"
+      },
+      {
+        "command": "nikas.addDeepSeekToCopilot",
+        "title": "Add DeepSeek to Copilot (agent window)",
+        "category": "Nikas",
+        "icon": "$(add)"
       }
     ],
     "configuration": {
@@ -290,6 +296,11 @@
           "type": "boolean",
           "default": true,
           "description": "On activation, apply the recommended Copilot agent model assignments (Explore, Plan, Utility, Utility Small, Inline Chat → DeepSeek V4 Flash Responses) for any agent the user hasn't configured yet. Idempotent — never overrides an existing choice. Disable to keep agent models untouched on fresh installs."
+        },
+        "nikas.manageCopilotByok": {
+          "type": "boolean",
+          "default": true,
+          "description": "On activation, register DeepSeek as a Copilot BYOK custom endpoint (writes chatLanguageModels.json) so DeepSeek also appears in the Copilot agent window — which never loads third-party vscode.lm providers. Idempotent — only adds the entry when missing and preserves other providers. Disable to keep Copilot's language-models file untouched."
         }
       }
     }

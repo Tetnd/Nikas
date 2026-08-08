@@ -104,6 +104,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `Nikas: Set Ollama Host` | Configure Ollama server URL (supports remote instances) |
 | `Nikas: Copilot PDF Patch Status` | Show whether the Copilot Chat PDF patches are applied |
 | `Nikas: Re-apply Copilot PDF Patches` | Force re-apply the PDF patches to the installed Copilot Chat bundle |
+| `Nikas: Add DeepSeek to Copilot (agent window)` | Register DeepSeek as a Copilot BYOK custom endpoint so it also appears in the agent window |
 | `Nikas: Check for Updates` | Download and install the latest Nikas release from GitHub |
 | `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
@@ -128,6 +129,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.updateRepo` | `alive2/nika` | GitHub repo used by `Nikas: Check for Updates` — **set to your own fork** |
 | `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Utility, Utility Small, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
+| `nikas.manageCopilotByok` | `true` | On activation, register DeepSeek as a Copilot BYOK custom endpoint (writes `chatLanguageModels.json`) so DeepSeek also appears in the Copilot agent window, which never loads third-party `vscode.lm` providers. Idempotent — only adds the entry when missing, preserves other providers. Disable to leave Copilot's language-models file untouched |
 
 ## How It Works
 
