@@ -4,9 +4,9 @@ import * as vscode from 'vscode';
 import type { LogLevel } from './config.js';
 
 /**
- * File-based logger for Nika with level filtering.
+ * File-based logger for Nikas with level filtering.
  *
- * Writes to `nika.log` in the workspace root (first workspace folder).
+ * Writes to `nikas.log` in the workspace root (first workspace folder).
  * Falls back to the extension's global storage path if no workspace is open.
  *
  * Log format: [ISO timestamp] [LEVEL] message
@@ -29,7 +29,7 @@ const LEVEL_NUM: Record<LogLevel, number> = {
     VERBOSE: 3,
 };
 
-const LOG_FILE_NAME = 'nika.log';
+const LOG_FILE_NAME = 'nikas.log';
 
 let logFilePath: string | null = null;
 let currentLevel: LogLevel = 'INFO';

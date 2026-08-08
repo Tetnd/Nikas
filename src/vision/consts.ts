@@ -17,8 +17,8 @@ export const IMAGE_DESCRIPTION_UNAVAILABLE = '[Image Description unavailable]';
 /** MIME type used for replay markers embedded in assistant responses. */
 export const REPLAY_MARKER_MIME = 'stateful_marker';
 
-/** Writer ID embedded in replay markers to identify Nika-generated markers. */
-export const REPLAY_MARKER_WRITER_ID = 'nika';
+/** Writer ID embedded in replay markers to identify Nikas-generated markers. */
+export const REPLAY_MARKER_WRITER_ID = 'nikas';
 
 /**
  * Prompt sent to the vision model when describing image attachments.

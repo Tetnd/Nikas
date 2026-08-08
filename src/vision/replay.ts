@@ -19,7 +19,7 @@ import { visionLog } from './log.js';
 //   { vision?: { text: string }, reasoning?: { text: string }, segmentId?: string }
 //
 // Example:
-//   nika\{ "vision": { "text": "[Image Description: A screenshot of ...]" } }
+//   nikas\{ "vision": { "text": "[Image Description: A screenshot of ...]" } }
 // ---------------------------------------------------------------------------
 
 export interface ReplayMarkerParseResult {
@@ -91,7 +91,7 @@ export function parseReplayMarkerData(data: Uint8Array): ReplayMarkerParseResult
     const prefix = raw.slice(0, sepIndex);
     const payloadRaw = raw.slice(sepIndex + 1);
 
-    // Accept any known prefix (nika, or any model ID for compatibility)
+    // Accept the Nikas writer prefix (or any model ID for compatibility)
     if (prefix !== REPLAY_MARKER_WRITER_ID) {
         return { valid: false, error: `unknown-writer: ${prefix}` };
     }

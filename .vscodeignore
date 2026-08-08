@@ -8,5 +8,8 @@ tsconfig.json
 logs/**
 CachedProfilesData/**
 machineid
-nika.log
+nikas.log
 *.log
+test-patches.js
+apply-patches.js
+extension.patched.test.js

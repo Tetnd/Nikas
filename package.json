@@ -1,9 +1,9 @@
 {
-  "name": "nika",
-  "displayName": "Nika",
-  "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini)",
+  "name": "nikas",
+  "displayName": "Nikas",
+  "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
   "version": "0.7.0",
-  "publisher": "nika",
+  "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
   "repository": {
@@ -18,88 +18,101 @@
     "Machine Learning"
   ],
   "activationEvents": [
-    "onLanguageModelChatProvider:nika"
+    "onLanguageModelChatProvider:nikas",
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "languageModelChatProviders": [
       {
-        "vendor": "nika",
-        "displayName": "Nika",
-        "managementCommand": "nika.manage"
+        "vendor": "nikas",
+        "displayName": "Nikas",
+        "managementCommand": "nikas.manage"
       }
     ],
     "commands": [
       {
-        "command": "nika.chooseProvider",
+        "command": "nikas.chooseProvider",
         "title": "Choose Provider",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.chooseVisionModel",
+        "command": "nikas.chooseVisionModel",
         "title": "Choose Vision Model",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.setOllamaHost",
+        "command": "nikas.setOllamaHost",
         "title": "Set Ollama Host",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.inputDeepseekToken",
+        "command": "nikas.inputDeepseekToken",
         "title": "Input DeepSeek API Key",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.inputGeminiToken",
+        "command": "nikas.inputGeminiToken",
         "title": "Input Gemini API Key",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.chooseMaxTokens",
+        "command": "nikas.chooseMaxTokens",
         "title": "Max Output Tokens",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.chooseContextWindow",
+        "command": "nikas.chooseContextWindow",
         "title": "Context Window",
-        "category": "Nika"
+        "category": "Nikas"
       },
       {
-        "command": "nika.manage",
-        "title": "Manage Nika Models",
-        "category": "Nika",
+        "command": "nikas.manage",
+        "title": "Manage Nikas Models",
+        "category": "Nikas",
         "icon": "$(settings-gear)"
       },
       {
-        "command": "nika.agentModelAssignments",
+        "command": "nikas.agentModelAssignments",
         "title": "Agent Model Assignments",
-        "category": "Nika",
+        "category": "Nikas",
         "icon": "$(symbol-key)"
       },
       {
-        "command": "nika.setFlashForAllAgents",
+        "command": "nikas.setFlashForAllAgents",
         "title": "Apply Recommended Agent Models",
-        "category": "Nika",
+        "category": "Nikas",
         "icon": "$(rocket)"
       },
       {
-        "command": "nika.checkForUpdates",
+        "command": "nikas.checkForUpdates",
         "title": "Check for Updates",
-        "category": "Nika",
+        "category": "Nikas",
         "icon": "$(cloud-download)"
       },
       {
-        "command": "nika.chooseLogLevel",
+        "command": "nikas.chooseLogLevel",
         "title": "Log Level",
-        "category": "Nika",
+        "category": "Nikas",
         "icon": "$(output)"
+      },
+      {
+        "command": "nikas.copilotPdfStatus",
+        "title": "Copilot PDF Patch Status",
+        "category": "Nikas",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "nikas.reapplyCopilotPdfPatches",
+        "title": "Re-apply Copilot PDF Patches",
+        "category": "Nikas",
+        "icon": "$(sync)"
       }
     ],
     "configuration": {
-      "title": "Nika",
+      "title": "Nikas",
       "properties": {
-        "nika.selectedModel": {
+        "nikas.selectedModel": {
           "type": "string",
           "default": "deepseek-v4-flash",
           "enum": [
@@ -108,7 +121,7 @@
           ],
           "description": "The DeepSeek model to use for chat"
         },
-        "nika.maxTokens": {
+        "nikas.maxTokens": {
           "type": "string",
           "default": "8K",
           "enum": [
@@ -131,14 +144,14 @@
           ],
           "description": "Maximum output tokens per response. DeepSeek V4 supports up to 384K tokens. When thinking mode is on, choose at least 16K so reasoning tokens don't consume the entire budget."
         },
-        "nika.temperature": {
+        "nikas.temperature": {
           "type": "number",
           "default": 0.7,
           "minimum": 0,
           "maximum": 2,
           "description": "Temperature for response generation"
         },
-        "nika.thinkingEffort": {
+        "nikas.thinkingEffort": {
           "type": "string",
           "default": "off",
           "enum": [
@@ -155,7 +168,7 @@
           ],
           "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). On Flash, 'low' gives genuinely lighter reasoning; on Pro, 'low' is treated as 'high'. Higher effort produces more thorough reasoning but slower responses."
         },
-        "nika.visionModel": {
+        "nikas.visionModel": {
           "type": "string",
           "default": "ollama-gemma4",
           "enum": [
@@ -165,12 +178,12 @@
           ],
           "description": "Vision model for image preprocessing. Gemma 4 runs locally via Ollama (no API key needed). Gemini uses Google AI Studio (free tier, needs API key)."
         },
-        "nika.ollamaBaseUrl": {
+        "nikas.ollamaBaseUrl": {
           "type": "string",
           "default": "http://localhost:11434",
           "description": "Ollama server URL. Points to localhost by default, but can be any remote Ollama instance (e.g., http://192.168.1.100:11434). Used when vision model is Gemma 4."
         },
-        "nika.contextWindow": {
+        "nikas.contextWindow": {
           "type": "string",
           "default": "128K",
           "enum": [
@@ -191,12 +204,12 @@
           ],
           "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models."
         },
-        "nika.visionModelKey": {
+        "nikas.visionModelKey": {
           "type": "string",
           "default": "",
-          "description": "Composite key (vendor/id) for a Copilot vision model selected via 'Nika: Choose Vision Model'. When set, overrides nika.visionModel. Cleared automatically when a native vision model is selected."
+          "description": "Composite key (vendor/id) for a Copilot vision model selected via 'Nikas: Choose Vision Model'. When set, overrides nikas.visionModel. Cleared automatically when a native vision model is selected."
         },
-        "nika.visionSource": {
+        "nikas.visionSource": {
           "type": "string",
           "default": "vscode-lm",
           "enum": [
@@ -205,7 +218,7 @@
           ],
           "description": "Source for image descriptions: 'vscode-lm' uses a Copilot model, 'api-endpoint' uses a direct API endpoint."
         },
-        "nika.logLevel": {
+        "nikas.logLevel": {
           "type": "string",
           "default": "INFO",
           "enum": [
@@ -222,7 +235,40 @@
             "Normal operational messages — requests sent, models used, errors",
             "Detailed debugging — full request/response bodies, message dumps"
           ],
-          "description": "Logging verbosity level. Writes to nika.log in the workspace root. Set to OFF to disable logging entirely. Set to VERBOSE when debugging API issues."
+          "description": "Logging verbosity level. Writes to nikas.log in the workspace root. Set to OFF to disable logging entirely. Set to VERBOSE when debugging API issues."
+        },
+        "nikas.autoPatchCopilot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically re-apply the Copilot Chat PDF patches whenever Copilot Chat / VS Code updates wipe them. Disable if you prefer to patch manually."
+        },
+        "nikas.copilotMaxFileSizeMB": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "Max file size (MB) Copilot Chat is patched to accept for attachments (the default Copilot limit is 5 MB). Applied when the Copilot Chat bundle is (re-)patched."
+        },
+        "nikas.autoReloadAfterPatch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically reload the VS Code window right after re-applying Copilot Chat PDF patches (default prompts you instead)."
+        },
+        "nikas.patchBackupRetention": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "description": "How many timestamped backups of the Copilot Chat bundle to keep before pruning. Set 0 to keep none."
+        },
+        "nikas.updateRepo": {
+          "type": "string",
+          "default": "alive2/nika",
+          "description": "GitHub repo (owner/repo) used by 'Nikas: Check for Updates'. Point this at your own fork once you publish Nikas releases."
+        },
+        "nikas.autoCheckUpdates": {
+          "type": "boolean",
+          "default": false,
+          "description": "Periodically check GitHub for Nikas updates (silent when up-to-date). Set nikas.updateRepo to your own release repo first."
         }
       }
     }

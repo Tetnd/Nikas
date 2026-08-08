@@ -1,13 +1,14 @@
-# Nika
+# Nikas
 
-**DeepSeek language model provider for VS Code Copilot Chat**, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini).
+**DeepSeek language model provider for VS Code Copilot Chat**, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) **and automatic restoration of PDF support in Copilot Chat**.
 
-Adds DeepSeek V4 models to Copilot Chat's model picker. Bring your own API key — no GitHub Copilot subscription required.
+Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds DeepSeek V4 models to Copilot Chat's model picker (bring your own API key — no GitHub Copilot subscription required) and — unlike stock Copilot Chat — keeps **PDF attachments working for third-party providers** by automatically re-applying the Copilot Chat PDF patches whenever an update wipes them.
 
 ## Features
 
 - **DeepSeek V4 Flash & Pro** — fast and powerful models in the Copilot Chat model picker
 - **DeepSeek V4 Flash (Responses)** — the same Flash 0731 model served through DeepSeek's newer Responses API (`POST /responses`), built for agent-native tooling
+- **📄 PDF support that survives updates** — Copilot Chat drops PDF attachments for third-party providers. Nikas patches the installed Copilot Chat bundle (8 surgical patches: allow DeepSeek to receive PDFs, raise the 5 MB read limit to 100 MB, let PDFs bypass `omitContents`, drop the `supportsVision` gate, convert `Document` parts to `LanguageModelDataPart`, etc.) and **re-applies them automatically** after every Copilot Chat / VS Code update
 - **Vision preprocessing** — send images in chat and they're automatically described by Gemma 4 (local, via Ollama) or Gemini 2.5 Flash (free tier), then forwarded to DeepSeek
 - **Streaming responses** — real-time token-by-token output
 - **Tool calling** — full support for VS Code's built-in tools (read files, run terminal commands, search, etc.)
@@ -19,10 +20,8 @@ Adds DeepSeek V4 models to Copilot Chat's model picker. Bring your own API key �
 ### 1. Install
 
 ```bash
-code --install-extension nika-0.7.0.vsix
+code --install-extension nikas-0.7.0.vsix
 ```
-
-Or download from [Releases](https://github.com/alive2/nika/releases).
 
 ### 2. Configure
 
@@ -36,10 +35,7 @@ You need a DeepSeek API key. For vision/image support, choose one vision provide
 
 Store the DeepSeek key:
 
-```jsonc
-// In VS Code settings.json
-"nika.deepseekApiKey": "sk-..."
-```
+- `F1` → `Manage Nikas Models` → `Input DeepSeek API Key`
 
 #### Set up Gemma 4 (default)
 
@@ -50,20 +46,13 @@ Install Ollama and pull the model — no API key needed:
 ollama pull gemma4:31b
 ```
 
-Nika connects to Ollama at `http://localhost:11434` by default. To use a remote Ollama instance:
-
-- `F1` → `Manage Nika Models` → `Set Ollama Host`, or
-- `F1` → `Nika: Set Ollama Host`
-
-Enter the remote URL (e.g., `http://192.168.1.100:11434`).
+Nikas connects to Ollama at `http://localhost:11434` by default. To use a remote Ollama instance: `F1` → `Manage Nikas Models` → `Set Ollama Host`.
 
 #### Set up Gemini (alternative)
 
-Only needed if you switch vision models to Gemini:
-
-1. `F1` → `Manage Nika Models` → `Input Gemini API Key`
+1. `F1` → `Manage Nikas Models` → `Input Gemini API Key`
 2. Paste your Gemini API key (`AIza...`)
-3. `F1` → `Manage Nika Models` → `Choose Vision Model` → pick **Gemini 2.5 Flash**
+3. `F1` → `Manage Nikas Models` → `Choose Vision Model` → pick **Gemini 2.5 Flash**
 
 ### 3. Select a chat model
 
@@ -72,37 +61,49 @@ Only needed if you switch vision models to Gemini:
 3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses)**
 4. Start chatting
 
-> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's the same Flash 0731 model, exposed through the agent-native endpoint. It's selected via the Copilot model picker only (it's not part of `Nika: Choose Provider`, which controls the Chat Completions model).
+> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's selected via the Copilot model picker only (it's not part of `Nikas: Choose Provider`).
 
-### 4. Switch vision model
+### 4. PDF support
 
-1. `F1` → `Manage Nika Models` → `Choose Vision Model`
-2. Pick **Gemma 4 (Ollama)** (local, default) or **Gemini 2.5 Flash** (cloud, needs key)
-3. Images are now automatically described before reaching DeepSeek
+Attach a PDF in chat and send it — it should reach DeepSeek as a document part. If a Copilot Chat / VS Code update wiped the patches, Nikas re-applies them automatically (you'll get a notification with a **Reload Now** button). To inspect or force it:
+
+- `F1` → `Nikas: Copilot PDF Patch Status` — shows which of the 8 patches are applied
+- `F1` → `Nikas: Re-apply Copilot PDF Patches` — forces a patch cycle now
+
+The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\extension.js` and keeps timestamped `.bak-*` backups (pruned after `nikas.patchBackupRetention`). All activity is logged to the **Nikas PDF Patcher** output channel and `nikas.log`.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `Nika: Choose Provider` | Select which DeepSeek model to use |
-| `Nika: Choose Vision Model` | Select which vision model preprocesses images (Gemma 4 or Gemini) |
-| `Nika: Set Ollama Host` | Configure Ollama server URL (supports remote instances) |
-| `Manage Nika Models` | Manage API keys, model selection, vision provider, and Ollama host |
+| `Nikas: Choose Provider` | Select which DeepSeek model to use |
+| `Nikas: Choose Vision Model` | Select which vision model preprocesses images (Gemma 4 or Gemini) |
+| `Nikas: Set Ollama Host` | Configure Ollama server URL (supports remote instances) |
+| `Nikas: Copilot PDF Patch Status` | Show whether the Copilot Chat PDF patches are applied |
+| `Nikas: Re-apply Copilot PDF Patches` | Force re-apply the PDF patches to the installed Copilot Chat bundle |
+| `Nikas: Check for Updates` | Download and install the latest Nikas release from GitHub |
+| `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `nika.selectedModel` | `deepseek-v4-flash` | Active chat model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
-| `nika.visionModel` | `ollama-gemma4` | Vision model for image preprocessing (`ollama-gemma4` or `gemini`) |
-| `nika.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances, e.g. `http://192.168.1.100:11434`) |
-| `nika.maxTokens` | `8192` | Maximum output tokens per response |
-| `nika.temperature` | `0.7` | Response creativity (0–2) |
+| `nikas.selectedModel` | `deepseek-v4-flash` | Active chat model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
+| `nikas.visionModel` | `ollama-gemma4` | Vision model for image preprocessing (`ollama-gemma4` or `gemini`) |
+| `nikas.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances) |
+| `nikas.maxTokens` | `8K` | Maximum output tokens per response |
+| `nikas.temperature` | `0.7` | Response creativity (0–2) |
+| `nikas.autoPatchCopilot` | `true` | Auto re-apply the Copilot Chat PDF patches after updates |
+| `nikas.copilotMaxFileSizeMB` | `100` | Max attachment size (MB) Copilot Chat is patched to accept |
+| `nikas.autoReloadAfterPatch` | `false` | Auto-reload the window after re-applying patches (vs. prompting) |
+| `nikas.patchBackupRetention` | `5` | Number of Copilot bundle backups to keep |
+| `nikas.updateRepo` | `alive2/nika` | GitHub repo used by `Nikas: Check for Updates` — **set to your own fork** |
+| `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
 
 ## How It Works
 
 ```
-You send a message (text + optional image)
+You send a message (text + optional image / PDF)
         │
         ▼
 ┌──────────────────────────────┐
@@ -124,11 +125,36 @@ You send a message (text + optional image)
     in Copilot Chat
 ```
 
+### PDF patch lifecycle
+
+```
+VS Code starts / Copilot Chat updates / 15-min timer
+        │
+        ▼
+┌───────────────────────────────────────────┐
+│  Locate Copilot Chat bundle               │
+│  (resources/app/extensions/copilot/dist/) │
+└──────────────┬────────────────────────────┘
+               ▼
+┌──────────────────────────────┐   unchanged
+│  Health check (8 markers)    │──────────────► nothing to do
+└──────────────┬───────────────┘
+               ▼  missing
+┌──────────────────────────────┐
+│  Backup bundle (.bak-*)      │
+│  Apply missing patches       │
+│  Write + verify              │
+└──────────────┬───────────────┘
+               ▼
+   Notify "Re-applied N patches" → Reload Now
+```
+
 ## Requirements
 
 - VS Code 1.109+
 - DeepSeek API key ([get one here](https://platform.deepseek.com/))
 - For vision: [Ollama](https://ollama.com) with `gemma4:31b` (default, local) OR Gemini API key ([free tier](https://aistudio.google.com/apikey))
+- For the PDF auto-patcher: write access to your VS Code install folder (`AppData\Local\Programs\Microsoft VS Code\...`) — the default per-user install is writable
 
 ## Development
 
@@ -145,6 +171,16 @@ To package:
 npm run package
 ```
 
+## Publishing your own Nikas
+
+To ship this as your own extension:
+
+1. Create your own GitHub repo and push this code (or a fork).
+2. Update `nikas.updateRepo` to your `owner/repo`.
+3. Create a release with a `nikas-<version>.vsix` asset (`npm run package`).
+4. Optionally set `nikas.autoCheckUpdates` to `true`.
+
 ## License
 
 MIT
+

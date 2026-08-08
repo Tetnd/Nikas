@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 
 /**
- * Nika configuration keys and defaults.
+ * Nikas configuration keys and defaults.
  * API keys are stored via context.secrets (not here) for security.
  */
-export const CONFIG_SECTION = 'nika';
+export const CONFIG_SECTION = 'nikas';
 
 export const SECRET_KEYS = {
-    deepseekApiKey: 'nika.deepseek.apiKey',
-    geminiApiKey: 'nika.gemini.apiKey',
+    deepseekApiKey: 'nikas.deepseek.apiKey',
+    geminiApiKey: 'nikas.gemini.apiKey',
 } as const;
 
 export const VISION_MODELS = [
@@ -39,7 +39,7 @@ export type VisionModelId = (typeof VISION_MODELS)[number]['id'];
  *
  * Kept SEPARATE from DEEPSEEK_MODELS on purpose:
  * - The Responses API currently only supports `deepseek-v4-flash` (not Pro).
- * - `nika.selectedModel` / "Nika: Choose Provider" drives the chat-completions
+ * - `nikas.selectedModel` / "Nikas: Choose Provider" drives the chat-completions
  *   request model id, so this id must NOT be selectable there (the inline
  *   handler would send it to /chat/completions and get a 400).
  * - It is picked via Copilot Chat's model picker, where routing in
@@ -196,4 +196,56 @@ export const LOG_LEVELS: { id: LogLevel; label: string; description: string }[] 
 
 export function getLogLevelSetting(): LogLevel {
     return (getConfig().get<string>('logLevel') as LogLevel) ?? 'INFO';
+}
+
+// --- Copilot Chat PDF patcher ---
+
+/**
+ * Whether the extension should auto-detect Copilot Chat updates and re-apply
+ * the PDF patches (settings: `nikas.autoPatchCopilot`, default true).
+ */
+export function getAutoPatchEnabled(): boolean {
+    return getConfig().get<boolean>('autoPatchCopilot') ?? true;
+}
+
+/**
+ * Max file size (MB) Copilot Chat is patched to accept for attachments.
+ * Patches the 5 MB hardcoded limit in the installed Copilot bundle.
+ */
+export function getCopilotMaxFileSizeMB(): number {
+    const v = getConfig().get<number>('copilotMaxFileSizeMB');
+    return typeof v === 'number' && v > 0 ? Math.floor(v) : 100;
+}
+
+/**
+ * Whether to auto-reload the window right after re-applying patches
+ * (vs. prompting the user). Default false — safer.
+ */
+export function getAutoReloadAfterPatch(): boolean {
+    return getConfig().get<boolean>('autoReloadAfterPatch') ?? false;
+}
+
+/** Number of `.bak-*` bundle backups to retain. */
+export function getPatchBackupRetention(): number {
+    const v = getConfig().get<number>('patchBackupRetention');
+    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 5;
+}
+
+// --- Self-update ---
+
+/**
+ * GitHub repo (`owner/repo`) used for Nikas self-updates.
+ * Point this at your own fork once you publish Nikas releases.
+ */
+export function getUpdateRepo(): string {
+    const v = getConfig().get<string>('updateRepo');
+    return v?.trim() || 'alive2/nika';
+}
+
+/**
+ * Whether Nikas periodically checks for its own updates on GitHub
+ * (settings: `nikas.autoCheckUpdates`, default false — no repo yet).
+ */
+export function getAutoCheckUpdates(): boolean {
+    return getConfig().get<boolean>('autoCheckUpdates') ?? false;
 }

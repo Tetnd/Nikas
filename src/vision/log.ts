@@ -2,7 +2,7 @@ import { log } from '../log.js';
 
 /**
  * Vision-specific diagnostic logging.
- * Wraps the main Nika logger with a vision prefix for easy filtering.
+ * Wraps the main Nikas logger with a vision prefix for easy filtering.
  */
 
 const PREFIX = '[Vision]';

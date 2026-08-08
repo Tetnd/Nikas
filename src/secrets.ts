@@ -33,7 +33,7 @@ export class SecretStore {
 
     onDidChange(listener: (key: string) => void): vscode.Disposable {
         return this.secrets.onDidChange(e => {
-            if (e.key.startsWith('nika.')) {
+            if (e.key.startsWith('nikas.')) {
                 listener(e.key);
             }
         });

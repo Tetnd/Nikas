@@ -1,24 +1,26 @@
 import * as vscode from 'vscode';
-import { NikaChatProvider } from './provider.js';
+import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
-import { checkForUpdates } from './commands/updateExtension.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting } from './config.js';
+import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
+import { runPatchCycle, logBundleState } from './pdf/manager.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch } from './config.js';
 import { setLogLevel } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
 
 /**
- * Nika VS Code Extension — language model provider for Copilot Chat.
+ * Nikas VS Code Extension — language model provider for Copilot Chat.
  *
- * Provides under the single "Nika" vendor:
+ * Provides under the single "Nikas" vendor:
  * - DeepSeek V4 Flash & Pro (requires DeepSeek API key)
  * - Gemini 2.5 Flash & Flash-Lite (requires Gemini API key)
  * - Gemma 4 via Ollama (local, no key needed)
  * - Configurable vision preprocessing for images (Gemma 4 / Gemini)
- * - Commands: Nika: Choose Provider, Nika: Manage
+ * - Automatic re-application of the Copilot Chat PDF patches (so PDF
+ *   attachments keep working after Copilot / VS Code updates wipe them)
  */
 export async function activate(context: vscode.ExtensionContext) {
-    const provider = new NikaChatProvider(context);
+    const provider = new NikasChatProvider(context);
 
     // Sync log level from settings on startup
     setLogLevel(getLogLevelSetting());
@@ -26,15 +28,18 @@ export async function activate(context: vscode.ExtensionContext) {
     // Listen for log level changes in settings
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('nika.logLevel')) {
+            if (e.affectsConfiguration('nikas.logLevel')) {
                 setLogLevel(getLogLevelSetting());
             }
-        })
+            // Restart the auto-patch scheduling when the setting toggles.
+            if (e.affectsConfiguration('nikas.autoPatchCopilot')) {
+                scheduleAutoPatch(context);
+            }        })
     );
 
-    // Register the single language model chat provider — all models under "Nika"
+    // Register the single language model chat provider — all models under "Nikas"
     context.subscriptions.push(
-        vscode.lm.registerLanguageModelChatProvider('nika', provider)
+        vscode.lm.registerLanguageModelChatProvider('nikas', provider)
     );
 
     // Check if DeepSeek API key is configured on startup
@@ -42,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!apiKey) {
         const setKeyNow = 'Set API Key';
         const response = await vscode.window.showWarningMessage(
-            'Nika: DeepSeek API key not configured. The Nika models will not appear in the Copilot Chat model picker until you set your API key.',
+            'Nikas: DeepSeek API key not configured. The Nikas models will not appear in the Copilot Chat model picker until you set your API key.',
             setKeyNow
         );
         if (response === setKeyNow) {
@@ -54,26 +59,37 @@ export async function activate(context: vscode.ExtensionContext) {
     // cold-start dynamic imports (which can cause transient failures).
     prewarmVisionModules().catch(() => { /* non-fatal */ });
 
+    // Schedule the Copilot Chat PDF auto-patcher:
+    //   - on activation (catches updates that wiped the patches)
+    //   - on extension changes (catches Copilot Chat updates live)
+    //   - periodically (catches external changes / VS Code updates)
+    scheduleAutoPatch(context);
+
+    // Optional self-update checks (only if nikas.autoCheckUpdates is enabled).
+    context.subscriptions.push(scheduleAutoUpdateCheck(context));
+
     // Register commands
     context.subscriptions.push(
-        vscode.commands.registerCommand('nika.chooseProvider', () => chooseProvider()),
-        vscode.commands.registerCommand('nika.chooseVisionModel', () => chooseVisionModel()),
-        vscode.commands.registerCommand('nika.setOllamaHost', () => setOllamaHost()),
-        vscode.commands.registerCommand('nika.inputDeepseekToken', () => inputDeepseekToken(context)),
-        vscode.commands.registerCommand('nika.inputGeminiToken', () => inputGeminiToken(context)),
+        vscode.commands.registerCommand('nikas.chooseProvider', () => chooseProvider()),
+        vscode.commands.registerCommand('nikas.chooseVisionModel', () => chooseVisionModel()),
+        vscode.commands.registerCommand('nikas.setOllamaHost', () => setOllamaHost()),
+        vscode.commands.registerCommand('nikas.inputDeepseekToken', () => inputDeepseekToken(context)),
+        vscode.commands.registerCommand('nikas.inputGeminiToken', () => inputGeminiToken(context)),
 
-        vscode.commands.registerCommand('nika.chooseMaxTokens', () => chooseMaxTokens()),
-        vscode.commands.registerCommand('nika.chooseContextWindow', () => chooseContextWindow()),
-        vscode.commands.registerCommand('nika.agentModelAssignments', () => agentModelAssignments()),
-        vscode.commands.registerCommand('nika.setFlashForAllAgents', () => setFlashForAllAgents()),
-        vscode.commands.registerCommand('nika.chooseLogLevel', () => chooseLogLevel()),
-        vscode.commands.registerCommand('nika.checkForUpdates', () => checkForUpdates(context)),
-        vscode.commands.registerCommand('nika.manage', () => {
+        vscode.commands.registerCommand('nikas.chooseMaxTokens', () => chooseMaxTokens()),
+        vscode.commands.registerCommand('nikas.chooseContextWindow', () => chooseContextWindow()),
+        vscode.commands.registerCommand('nikas.agentModelAssignments', () => agentModelAssignments()),
+        vscode.commands.registerCommand('nikas.setFlashForAllAgents', () => setFlashForAllAgents()),
+        vscode.commands.registerCommand('nikas.chooseLogLevel', () => chooseLogLevel()),
+        vscode.commands.registerCommand('nikas.checkForUpdates', () => checkForUpdates(context)),
+        vscode.commands.registerCommand('nikas.copilotPdfStatus', () => showPdfPatchStatus()),
+        vscode.commands.registerCommand('nikas.reapplyCopilotPdfPatches', () => reapplyPdfPatches(context)),
+        vscode.commands.registerCommand('nikas.manage', () => {
             vscode.window.showQuickPick(
                 [
                     {
                         label: '$(key) Input DeepSeek API Key',
-                        description: 'Set your DeepSeek API key (required for Nika to work)',
+                        description: 'Set your DeepSeek API key (required for Nikas to work)',
                     },
                     {
                         label: '$(list-tree) Choose Provider',
@@ -113,6 +129,14 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'Change Ollama server URL (for Gemma 4 vision)',
                     },
                     {
+                        label: '$(shield) Copilot PDF Patch Status',
+                        description: 'Show whether the Copilot Chat PDF patches are applied',
+                    },
+                    {
+                        label: '$(sync) Re-apply Copilot PDF Patches',
+                        description: 'Force re-apply the PDF patches to the installed Copilot Chat bundle',
+                    },
+                    {
                         label: '$(link-external) Get DeepSeek API Key',
                         description: 'Open DeepSeek Platform to create an API key',
                     },
@@ -125,7 +149,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'Download and install the latest version from GitHub',
                     },
                 ],
-                { title: 'Nika: Manage' }
+                { title: 'Nikas: Manage' }
             ).then(selection => {
                 if (!selection) return;
                 switch (selection.label) {
@@ -133,32 +157,38 @@ export async function activate(context: vscode.ExtensionContext) {
                         inputDeepseekToken(context);
                         break;
                     case '$(list-tree) Choose Provider':
-                        vscode.commands.executeCommand('nika.chooseProvider');
+                        vscode.commands.executeCommand('nikas.chooseProvider');
                         break;
                     case '$(eye) Choose Vision Model':
-                        vscode.commands.executeCommand('nika.chooseVisionModel');
+                        vscode.commands.executeCommand('nikas.chooseVisionModel');
                         break;
 
                     case '$(symbol-method) Max Output Tokens':
-                        vscode.commands.executeCommand('nika.chooseMaxTokens');
+                        vscode.commands.executeCommand('nikas.chooseMaxTokens');
                         break;
                     case '$(window) Context Window':
-                        vscode.commands.executeCommand('nika.chooseContextWindow');
+                        vscode.commands.executeCommand('nikas.chooseContextWindow');
                         break;
                     case '$(output) Log Level':
-                        vscode.commands.executeCommand('nika.chooseLogLevel');
+                        vscode.commands.executeCommand('nikas.chooseLogLevel');
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
-                        vscode.commands.executeCommand('nika.agentModelAssignments');
+                        vscode.commands.executeCommand('nikas.agentModelAssignments');
                         break;
                     case '$(rocket) Apply Recommended Agent Models':
-                        vscode.commands.executeCommand('nika.setFlashForAllAgents');
+                        vscode.commands.executeCommand('nikas.setFlashForAllAgents');
                         break;
                     case '$(key) Input Gemini API Key':
                         inputGeminiToken(context);
                         break;
                     case '$(server) Set Ollama Host':
                         setOllamaHost();
+                        break;
+                    case '$(shield) Copilot PDF Patch Status':
+                        vscode.commands.executeCommand('nikas.copilotPdfStatus');
+                        break;
+                    case '$(sync) Re-apply Copilot PDF Patches':
+                        vscode.commands.executeCommand('nikas.reapplyCopilotPdfPatches');
                         break;
                     case '$(link-external) Get DeepSeek API Key':
                         vscode.env.openExternal(
@@ -171,7 +201,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         );
                         break;
                     case '$(cloud-download) Check for Updates':
-                        vscode.commands.executeCommand('nika.checkForUpdates');
+                        vscode.commands.executeCommand('nikas.checkForUpdates');
                         break;
                 }
             });
@@ -179,12 +209,125 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Copilot Chat PDF auto-patcher
+// ---------------------------------------------------------------------------
+
 /**
- * Prompt for DeepSeek API key (required for Nika to work).
+ * Schedule the PDF patcher on three triggers:
+ *   1. shortly after activation,
+ *   2. whenever any extension is installed/updated (catches Copilot Chat),
+ *   3. on a periodic timer.
+ */
+function scheduleAutoPatch(context: vscode.ExtensionContext): void {
+    if (!getAutoPatchEnabled()) return;
+
+    // 1. Shortly after activation — don't block startup.
+    const startupTimer = setTimeout(() => { void handlePatchCycle(context); }, 3000);
+    context.subscriptions.push(new vscode.Disposable(() => clearTimeout(startupTimer)));
+
+    // 2. Extension install/update events (Copilot Chat updates fire this).
+    context.subscriptions.push(
+        vscode.extensions.onDidChange(debounce(() => { void handlePatchCycle(context); }, 4000))
+    );
+
+    // 3. Periodic re-check (catches external changes / VS Code updates).
+    const interval = setInterval(() => { void handlePatchCycle(context); }, 15 * 60 * 1000);
+    context.subscriptions.push(new vscode.Disposable(() => clearInterval(interval)));
+}
+
+function debounce(fn: () => void, ms: number): () => void {
+    let t: NodeJS.Timeout | undefined;
+    return () => {
+        if (t) clearTimeout(t);
+        t = setTimeout(fn, ms);
+    };
+}
+
+/**
+ * Run one patch cycle and surface a notification only when something
+ * actually changed (patches re-applied after an update wiped them, or a
+ * patch failed to auto-apply). Silent otherwise.
+ */
+async function handlePatchCycle(context: vscode.ExtensionContext): Promise<void> {
+    const report = await runPatchCycle(context);
+
+    if (report.disabled || report.error === 'disabled') return;
+    if (!report.found) return; // no Copilot bundle — already logged
+    if (report.alreadyPatched || report.skippedByHash) return;
+
+    if (report.appliedIds.length > 0) {
+        const names = report.appliedIds.join(', ');
+        if (getAutoReloadAfterPatch()) {
+            vscode.window.showInformationMessage(
+                `Nikas: Re-applied ${report.appliedIds.length} Copilot Chat PDF patch(es) (${names}) that an update had wiped. Reloading VS Code to activate…`
+            );
+            setTimeout(() => { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }, 1500);
+        } else {
+            const reload = 'Reload Now';
+            const choice = await vscode.window.showInformationMessage(
+                `Nikas: Re-applied ${report.appliedIds.length} Copilot Chat PDF patch(es) (${names}) that an update had wiped. Reload VS Code to activate them.`,
+                reload
+            );
+            if (choice === reload) {
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+        }
+    }
+
+    if (report.failedIds.length > 0) {
+        const showOutput = 'Show Output';
+        const choice = await vscode.window.showWarningMessage(
+            `Nikas: Could not auto-apply ${report.failedIds.length} Copilot Chat PDF patch(es) (${report.failedIds.join(', ')}). See the "Nikas PDF Patcher" output for details.`,
+            showOutput
+        );
+        if (choice === showOutput) {
+            logBundleState();
+        }
+    }
+}
+
+/** Command: show the current patch health (read-only). */
+async function showPdfPatchStatus(): Promise<void> {
+    logBundleState();
+}
+
+/** Command: force a full patch cycle and report the outcome. */
+async function reapplyPdfPatches(context: vscode.ExtensionContext): Promise<void> {
+    const report = await runPatchCycle(context, { force: true });
+    if (!report.found) {
+        vscode.window.showWarningMessage(
+            'Nikas: Could not locate the Copilot Chat bundle. It should be at resources/app/extensions/copilot/dist/extension.js inside your VS Code install.'
+        );
+        return;
+    }
+    if (report.appliedIds.length > 0) {
+        vscode.window.showInformationMessage(
+            `Nikas: Applied ${report.appliedIds.length} Copilot Chat PDF patch(es) (${report.appliedIds.join(', ')}). Reload VS Code to activate them.`,
+            'Reload Now'
+        ).then(choice => {
+            if (choice === 'Reload Now') {
+                vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+        });
+    } else if (report.failedIds.length > 0) {
+        vscode.window.showWarningMessage(
+            `Nikas: ${report.failedIds.length} patch(es) could not be auto-applied (${report.failedIds.join(', ')}). See the "Nikas PDF Patcher" output for details.`,
+            'Show Output'
+        ).then(choice => {
+            if (choice === 'Show Output') logBundleState();
+        });
+    } else {
+        vscode.window.showInformationMessage('Nikas: All Copilot Chat PDF patches are already applied. ✅');
+    }
+}
+
+/**
+ * Prompt for DeepSeek API key (required for Nikas to work).
  */
 async function inputDeepseekToken(context: vscode.ExtensionContext): Promise<void> {
     const key = await vscode.window.showInputBox({
-        title: 'Nika: DeepSeek API Key',
+        title: 'Nikas: DeepSeek API Key',
         prompt: 'Enter your DeepSeek API key (from https://platform.deepseek.com/api_keys)',
         password: true,
         placeHolder: 'sk-...',
@@ -199,9 +342,9 @@ async function inputDeepseekToken(context: vscode.ExtensionContext): Promise<voi
 
     if (!key) return;
 
-    await context.secrets.store('nika.deepseek.apiKey', key.trim());
+    await context.secrets.store('nikas.deepseek.apiKey', key.trim());
     vscode.window.showInformationMessage(
-        'Nika: DeepSeek API key saved! The Nika models should now appear in the Copilot Chat model picker.'
+        'Nikas: DeepSeek API key saved! The Nikas models should now appear in the Copilot Chat model picker.'
     );
 }
 
@@ -213,7 +356,7 @@ async function setOllamaHost(): Promise<void> {
     const current = getOllamaBaseUrl();
 
     const url = await vscode.window.showInputBox({
-        title: 'Nika: Ollama Host URL',
+        title: 'Nikas: Ollama Host URL',
         prompt: 'Enter the Ollama server URL (e.g., http://192.168.1.100:11434)',
         value: current,
         placeHolder: 'http://localhost:11434',
@@ -234,14 +377,14 @@ async function setOllamaHost(): Promise<void> {
     if (!url) return;
 
     await config.update('ollamaBaseUrl', url.trim().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
-    vscode.window.showInformationMessage(`Nika: Ollama host set to ${url.trim().replace(/\/$/, '')}`);
+    vscode.window.showInformationMessage(`Nikas: Ollama host set to ${url.trim().replace(/\/$/, '')}`);
 }
 
 /**
- * Vision model picker — lets user choose between Nika-native models
+ * Vision model picker — lets user choose between Nikas-native models
  * (Gemini, Gemma4) and Copilot-provided models (GPT-4o, Claude, etc.).
  *
- * - Nika-native models → set `visionModel`, clear `visionModelKey`
+ * - Nikas-native models → set `visionModel`, clear `visionModelKey`
  * - Copilot models    → set `visionModelKey` (vendor/id), clear `visionModel`
  */
 async function chooseVisionModel(): Promise<void> {
@@ -249,10 +392,10 @@ async function chooseVisionModel(): Promise<void> {
     const currentVisionModel = config.get<string>('visionModel');
     const currentVisionModelKey = getVisionModelKey();
 
-    // Phase 1: Pick category — Nika Native or Copilot
+    // Phase 1: Pick category — Nikas Native or Copilot
     const categoryItems: vscode.QuickPickItem[] = [
         {
-            label: 'Nika Native',
+            label: 'Nikas Native',
             description: 'Gemini, Gemma4 — requires API key or local Ollama',
         },
         {
@@ -262,14 +405,14 @@ async function chooseVisionModel(): Promise<void> {
     ];
 
     const category = await vscode.window.showQuickPick(categoryItems, {
-        title: 'Nika: Choose Vision Model — Source',
+        title: 'Nikas: Choose Vision Model — Source',
         placeHolder: 'Select a source for image descriptions',
     });
 
     if (!category) return;
 
-    if (category.label === 'Nika Native') {
-        // Phase 2a: Nika-native models
+    if (category.label === 'Nikas Native') {
+        // Phase 2a: Nikas-native models
         const items: vscode.QuickPickItem[] = VISION_MODELS.map(m => ({
             label: m.id === currentVisionModel ? `$(check) ${m.name}` : `$(blank) ${m.name}`,
             description: m.description,
@@ -277,7 +420,7 @@ async function chooseVisionModel(): Promise<void> {
         }));
 
         const selected = await vscode.window.showQuickPick(items, {
-            title: 'Nika: Choose Vision Model — Nika Native',
+            title: 'Nikas: Choose Vision Model — Nikas Native',
             placeHolder: 'Select a vision model for image preprocessing',
             matchOnDescription: true,
         });
@@ -290,7 +433,7 @@ async function chooseVisionModel(): Promise<void> {
             await config.update('visionModel', modelId, vscode.ConfigurationTarget.Global);
             await config.update('visionModelKey', undefined, vscode.ConfigurationTarget.Global);
             const modelName = VISION_MODELS.find(m => m.id === modelId)?.name ?? modelId;
-            vscode.window.showInformationMessage(`Nika: Selected ${modelName} for vision`);
+            vscode.window.showInformationMessage(`Nikas: Selected ${modelName} for vision`);
         }
     } else {
         // Phase 2b: Copilot models — fetch live from selectChatModels
@@ -298,7 +441,7 @@ async function chooseVisionModel(): Promise<void> {
 
         if (copilotModels.length === 0) {
             vscode.window.showWarningMessage(
-                'Nika: No Copilot vision models available. Ensure you have a Copilot subscription and vision-capable models enabled.'
+                'Nikas: No Copilot vision models available. Ensure you have a Copilot subscription and vision-capable models enabled.'
             );
             return;
         }
@@ -310,7 +453,7 @@ async function chooseVisionModel(): Promise<void> {
         }));
 
         const selected = await vscode.window.showQuickPick(items, {
-            title: 'Nika: Choose Vision Model — Copilot',
+            title: 'Nikas: Choose Vision Model — Copilot',
             placeHolder: 'Select a vision-capable Copilot model',
             matchOnDescription: true,
         });
@@ -324,7 +467,7 @@ async function chooseVisionModel(): Promise<void> {
             await config.update('visionModel', undefined, vscode.ConfigurationTarget.Global);
             const parts = modelKey.split('/');
             const modelName = parts[1] ?? modelKey;
-            vscode.window.showInformationMessage(`Nika: Selected Copilot model "${modelName}" for vision`);
+            vscode.window.showInformationMessage(`Nikas: Selected Copilot model "${modelName}" for vision`);
         }
     }
 }
@@ -334,7 +477,7 @@ async function chooseVisionModel(): Promise<void> {
  */
 async function inputGeminiToken(context: vscode.ExtensionContext): Promise<void> {
     const key = await vscode.window.showInputBox({
-        title: 'Nika: Gemini API Key (for vision)',
+        title: 'Nikas: Gemini API Key (for vision)',
         prompt: 'Enter your Gemini API key (free at https://aistudio.google.com/apikey)',
         password: true,
         placeHolder: 'AIza...',
@@ -343,9 +486,9 @@ async function inputGeminiToken(context: vscode.ExtensionContext): Promise<void>
 
     if (!key) return;
 
-    await context.secrets.store('nika.gemini.apiKey', key.trim());
+    await context.secrets.store('nikas.gemini.apiKey', key.trim());
     vscode.window.showInformationMessage(
-        'Nika: Gemini API key saved! Image/vision support is now enabled.'
+        'Nikas: Gemini API key saved! Image/vision support is now enabled.'
     );
 }
 
@@ -367,7 +510,7 @@ async function chooseContextWindow(): Promise<void> {
     });
 
     const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Context Window',
+        title: 'Nikas: Context Window',
         placeHolder: 'Select maximum input context size (tokens)',
         matchOnDescription: true,
     });
@@ -379,7 +522,7 @@ async function chooseContextWindow(): Promise<void> {
         await config.update('contextWindow', preset, vscode.ConfigurationTarget.Global);
         const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
         vscode.window.showInformationMessage(
-            `Nika: Context window set to ${preset} (${found?.tokens.toLocaleString()} tokens)`
+            `Nikas: Context window set to ${preset} (${found?.tokens.toLocaleString()} tokens)`
         );
     }
 }
@@ -408,7 +551,7 @@ async function chooseMaxTokens(): Promise<void> {
     });
 
     const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Max Output Tokens',
+        title: 'Nikas: Max Output Tokens',
         placeHolder: 'Select maximum output length. 16K+ recommended when thinking mode is on.',
         matchOnDescription: true,
     });
@@ -421,7 +564,7 @@ async function chooseMaxTokens(): Promise<void> {
         const found = MAX_TOKENS_PRESETS.find(p => p.id === preset);
         const thinkingNote = found?.thinkingRecommended ? ' Good for thinking mode.' : '';
         vscode.window.showInformationMessage(
-            `Nika: Max output tokens set to ${preset} (${found?.tokens.toLocaleString()}).${thinkingNote}`
+            `Nikas: Max output tokens set to ${preset} (${found?.tokens.toLocaleString()}).${thinkingNote}`
         );
     }
 }
@@ -453,7 +596,7 @@ async function agentModelAssignments(): Promise<void> {
     ];
 
     const pick = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Agent Model Assignments',
+        title: 'Nikas: Agent Model Assignments',
         placeHolder: 'Select which agent model to configure',
         matchOnDescription: true,
     });
@@ -479,10 +622,10 @@ async function setFlashForAllAgents(): Promise<void> {
     const target = vscode.ConfigurationTarget.Global;
 
     const settings = [
-        { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nika/deepseek-v4-flash' },
-        { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nika/deepseek-v4-pro' },
-        { key: 'chat.utilityModel', label: 'Utility Model', model: 'nika/deepseek-v4-flash' },
-        { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nika/deepseek-v4-flash' },
+        { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nikas/deepseek-v4-flash' },
+        { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nikas/deepseek-v4-pro' },
+        { key: 'chat.utilityModel', label: 'Utility Model', model: 'nikas/deepseek-v4-flash' },
+        { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nikas/deepseek-v4-flash' },
     ];
 
     const confirm = await vscode.window.showInformationMessage(
@@ -507,11 +650,11 @@ async function setFlashForAllAgents(): Promise<void> {
 
     if (failed === 0) {
         vscode.window.showInformationMessage(
-            `Nika: Agent models updated. Reload window to apply.`
+            `Nikas: Agent models updated. Reload window to apply.`
         );
     } else {
         vscode.window.showWarningMessage(
-            `Nika: Set ${success}/${settings.length} settings. ${failed} failed.`
+            `Nikas: Set ${success}/${settings.length} settings. ${failed} failed.`
         );
     }
 }
@@ -529,8 +672,8 @@ async function chooseLogLevel(): Promise<void> {
     }));
 
     const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Log Level',
-        placeHolder: 'Select logging verbosity (writes to nika.log)',
+        title: 'Nikas: Log Level',
+        placeHolder: 'Select logging verbosity (writes to nikas.log)',
         matchOnDescription: true,
     });
 
@@ -539,7 +682,7 @@ async function chooseLogLevel(): Promise<void> {
     const level = LOG_LEVELS.find(l => selected.label.endsWith(l.label))?.id;
     if (level) {
         await config.update('logLevel', level, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Nika: Log level set to ${level}`);
+        vscode.window.showInformationMessage(`Nikas: Log level set to ${level}`);
     }
 }
 

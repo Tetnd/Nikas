@@ -3,10 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { log } from '../log.js';
+import { getUpdateRepo, getAutoCheckUpdates } from '../config.js';
 
 /**
  * Update command — checks GitHub Releases for a newer version,
  * downloads the .vsix, installs it, and prompts to reload.
+ *
+ * The GitHub repo is configurable via `nikas.updateRepo` (default:
+ * `alive2/nika`) so this fork can be pointed at its own release repo
+ * without a code change.
  *
  * Flow:
  * 1. Fetch latest release from GitHub API
@@ -16,8 +21,12 @@ import { log } from '../log.js';
  * 5. Prompt to reload window
  */
 
-const GITHUB_API = 'https://api.github.com/repos/alive2/nika/releases/latest';
-const USER_AGENT = 'nika-vscode-extension';
+const USER_AGENT = 'nikas-vscode-extension';
+
+function githubApiUrl(): string {
+    const repo = getUpdateRepo();
+    return `https://api.github.com/repos/${repo}/releases/latest`;
+}
 
 interface GitHubRelease {
     tag_name: string;
@@ -54,7 +63,10 @@ function compareVersions(a: [number, number, number], b: [number, number, number
     return 0;
 }
 
-export async function checkForUpdates(context: vscode.ExtensionContext): Promise<void> {
+export async function checkForUpdates(
+    context: vscode.ExtensionContext,
+    opts?: { silent?: boolean },
+): Promise<void> {
     const currentVersion = context.extension.packageJSON.version as string;
     const currentParsed = parseVersion(currentVersion);
 
@@ -65,16 +77,20 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error('Failed to check for updates', err);
-        vscode.window.showErrorMessage(`Nika: Failed to check for updates: ${msg}`);
+        if (!opts?.silent) {
+            vscode.window.showErrorMessage(`Nikas: Failed to check for updates: ${msg}`);
+        }
         return;
     }
 
     const latestParsed = parseVersion(release.tag_name);
 
     if (compareVersions(latestParsed, currentParsed) <= 0) {
-        vscode.window.showInformationMessage(
-            `Nika v${currentVersion} is up to date.`
-        );
+        if (!opts?.silent) {
+            vscode.window.showInformationMessage(
+                `Nikas v${currentVersion} is up to date.`
+            );
+        }
         return;
     }
 
@@ -83,7 +99,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     const download = 'Download & Install';
     const viewRelease = 'View Release Notes';
     const choice = await vscode.window.showInformationMessage(
-        `Nika v${releaseVersion} is available (you have v${currentVersion}). Update now?`,
+        `Nikas v${releaseVersion} is available (you have v${currentVersion}). Update now?`,
         { modal: false },
         download,
         viewRelease
@@ -100,7 +116,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     const vsixAsset = release.assets.find(a => a.name.endsWith('.vsix'));
     if (!vsixAsset) {
         vscode.window.showErrorMessage(
-            'Nika: No .vsix asset found in the latest release. Please install manually from the releases page.'
+            'Nikas: No .vsix asset found in the latest release. Please install manually from the releases page.'
         );
         return;
     }
@@ -112,7 +128,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
     await vscode.window.withProgress(
         {
             location: vscode.ProgressLocation.Notification,
-            title: `Downloading Nika v${releaseVersion}...`,
+            title: `Downloading Nikas v${releaseVersion}...`,
             cancellable: true,
         },
         async (progress, token) => {
@@ -123,7 +139,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
 
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Failed to download update', err);
-                vscode.window.showErrorMessage(`Nika: Download failed: ${msg}`);
+                vscode.window.showErrorMessage(`Nikas: Download failed: ${msg}`);
 
                 // Clean up partial download
                 try { fs.unlinkSync(vsixPath); } catch { /* ignore */ }
@@ -140,7 +156,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Failed to install update', err);
-                vscode.window.showErrorMessage(`Nika: Install failed: ${msg}`);
+                vscode.window.showErrorMessage(`Nikas: Install failed: ${msg}`);
                 try { fs.unlinkSync(vsixPath); } catch { /* ignore */ }
                 return;
             }
@@ -150,7 +166,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
 
             // Prompt to reload
             const reload = await vscode.window.showInformationMessage(
-                `Nika v${releaseVersion} installed! Reload window to activate.`,
+                `Nikas v${releaseVersion} installed! Reload window to activate.`,
                 'Reload Now'
             );
 
@@ -162,7 +178,7 @@ export async function checkForUpdates(context: vscode.ExtensionContext): Promise
 }
 
 async function fetchLatestRelease(): Promise<GitHubRelease> {
-    const response = await fetch(GITHUB_API, {
+    const response = await fetch(githubApiUrl(), {
         headers: {
             'User-Agent': USER_AGENT,
             'Accept': 'application/vnd.github+json',
@@ -231,4 +247,29 @@ async function downloadFile(
 
     const buffer = Buffer.concat(chunks);
     fs.writeFileSync(destPath, buffer);
+}
+
+/**
+ * Periodically check for Nikas updates if `nikas.autoCheckUpdates` is on.
+ * Silent when up-to-date; prompts only when a newer release exists.
+ * Call once from activate(); returns a Disposable.
+ */
+export function scheduleAutoUpdateCheck(context: vscode.ExtensionContext): vscode.Disposable {
+    if (!getAutoCheckUpdates()) {
+        return new vscode.Disposable(() => { /* disabled */ });
+    }
+
+    // First check shortly after startup, then every 6 hours.
+    const first = setTimeout(() => {
+        void checkForUpdates(context, { silent: true });
+    }, 15 * 1000);
+
+    const interval = setInterval(() => {
+        void checkForUpdates(context, { silent: true });
+    }, 6 * 60 * 60 * 1000);
+
+    return new vscode.Disposable(() => {
+        clearTimeout(first);
+        clearInterval(interval);
+    });
 }

@@ -469,7 +469,7 @@ function toVisionImagePart(part: vscode.LanguageModelDataPart): import('./types.
 
 function createVisionProxyMissingNotice(): string {
     return '⚠️ No vision model is configured. Images will not be described. '
-        + 'Run "Nika: Manage → Choose Vision Model" to select one.';
+        + 'Run "Nikas: Manage → Choose Vision Model" to select one.';
 }
 
 function createVisionProxyFailureNotice(errorCode: string, errorMessage: string): string {

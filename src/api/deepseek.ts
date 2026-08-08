@@ -649,7 +649,7 @@ async function handleErrorResponse(response: Response, request?: DeepSeekRequest
             message = `DeepSeek API bad request: ${detail || 'check your request parameters'}`;
             break;
         case 401:
-            message = 'Invalid DeepSeek API key. Run "Nika: Input Deepseek userToken" to update it.';
+            message = 'Invalid DeepSeek API key. Run "Nikas: Input Deepseek userToken" to update it.';
             break;
         case 402:
             message = 'DeepSeek API: insufficient balance. Please top up your DeepSeek account.';

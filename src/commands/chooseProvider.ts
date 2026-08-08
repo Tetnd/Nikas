@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { DEEPSEEK_MODELS, getConfig } from '../config.js';
 
 /**
- * "Nika: Choose Provider" command.
+ * "Nikas: Choose Provider" command.
  *
  * Opens a QuickPick to select the active DeepSeek model.
  * The selection is persisted in VS Code settings.
@@ -18,7 +18,7 @@ export async function chooseProvider(): Promise<void> {
     }));
 
     const selected = await vscode.window.showQuickPick(items, {
-        title: 'Nika: Choose Provider',
+        title: 'Nikas: Choose Provider',
         placeHolder: 'Select a DeepSeek model',
         matchOnDescription: true,
     });
@@ -33,6 +33,6 @@ export async function chooseProvider(): Promise<void> {
     if (modelId) {
         await config.update('selectedModel', modelId, vscode.ConfigurationTarget.Global);
         const modelName = DEEPSEEK_MODELS.find(m => m.id === modelId)?.name ?? modelId;
-        vscode.window.showInformationMessage(`Nika: Selected ${modelName}`);
+        vscode.window.showInformationMessage(`Nikas: Selected ${modelName}`);
     }
 }

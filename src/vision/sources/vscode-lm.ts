@@ -8,7 +8,7 @@ import type { VisionDescriber, VisionDescriptionRequest, VisionLanguageModelOpti
  *
  * Wraps a vscode.LanguageModelChat to describe images. This lets users pick
  * any vision-capable model already available in Copilot (e.g. GPT-4o, Claude,
- * Gemini via Nika's provider, etc.) for image description.
+ * Gemini via Nikas's provider, etc.) for image description.
  */
 
 export class VSCodeLanguageModelVisionDescriber implements VisionDescriber {
@@ -58,7 +58,7 @@ export class VSCodeLanguageModelVisionDescriber implements VisionDescriber {
 const EXCLUDED_VISION_MODEL_IDS = new Set([
     'copilot-utility',
     'copilot-utility-small',
-    // Nika's DeepSeek models — they don't serve as vision describers
+    // Nikas's DeepSeek models — they don't serve as vision describers
     'deepseek-v4-flash',
     'deepseek-v4-pro',
 ]);
@@ -155,14 +155,14 @@ function formatLanguageModelCost(model: vscode.LanguageModelChat): string | unde
  * Get the configured vision prompt, falling back to the default.
  */
 export function getVisionPrompt(): string {
-    const config = vscode.workspace.getConfiguration('nika');
+    const config = vscode.workspace.getConfiguration('nikas');
     return config.get<string>('visionPrompt', IMAGE_DESCRIPTION_PROMPT).trim()
         || IMAGE_DESCRIPTION_PROMPT;
 }
 
 /**
  * Find a vision model by vendor and id using selectChatModels.
- * For Nika-provided vision models, this should find them if registered
+ * For Nikas-provided vision models, this should find them if registered
  * and onDidChangeLanguageModelChatInformation has fired.
  */
 export async function findVisionModelByKey(

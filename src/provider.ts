@@ -12,13 +12,13 @@ import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesR
 import type { ReplayMarkerMetadata } from './vision/types.js';
 
 /**
- * VS Code Output channel for Nika diagnostics.
- * Visible in View → Output → "Nika".
+ * VS Code Output channel for Nikas diagnostics.
+ * Visible in View → Output → "Nikas".
  */
 let _outputChannel: vscode.OutputChannel | undefined;
 function getOutputChannel(): vscode.OutputChannel {
     if (!_outputChannel) {
-        _outputChannel = vscode.window.createOutputChannel('Nika');
+        _outputChannel = vscode.window.createOutputChannel('Nikas');
     }
     return _outputChannel;
 }
@@ -107,17 +107,17 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 }
 
 /**
- * NikaChatProvider — a VS Code LanguageModelChatProvider bringing multiple
- * model families under the single "Nika" vendor.
+ * NikasChatProvider — a VS Code LanguageModelChatProvider bringing multiple
+ * model families under the single "Nikas" vendor.
  *
  * - DeepSeek V4 Flash & Pro → proxied to DeepSeek API
  * - Gemini 2.5 Flash & Flash-Lite → proxied to Gemini API
  * - Gemma 4 (Ollama) → proxied to local Ollama
  *
- * Registered via vscode.lm.registerLanguageModelChatProvider('nika', provider).
- * All models appear in Copilot Chat's model picker under "Nika".
+ * Registered via vscode.lm.registerLanguageModelChatProvider('nikas', provider).
+ * All models appear in Copilot Chat's model picker under "Nikas".
  */
-export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation> {
+export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation> {
     private readonly secrets: SecretStore;
 
     constructor(context: vscode.ExtensionContext) {
@@ -136,7 +136,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
     /**
      * Returns the list of available models. Called by VS Code when the model picker opens.
-     * Shows all configured models under the single "Nika" vendor.
+     * Shows all configured models under the single "Nikas" vendor.
      *
      * - DeepSeek models: require DeepSeek API key
      * - Gemini models: require Gemini API key
@@ -176,7 +176,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             }
 
             // Responses API model (flash only) — picked via the Copilot picker,
-            // intentionally NOT part of DEEPSEEK_MODELS / nika.selectedModel so
+            // intentionally NOT part of DEEPSEEK_MODELS / nikas.selectedModel so
             // the chat-completions handler can never be told to send this id.
             const responsesModelInfo: vscode.LanguageModelChatInformation & {
                 configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
@@ -194,7 +194,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             models.push(responsesModelInfo as vscode.LanguageModelChatInformation);
         } else if (!options.silent) {
             vscode.window.showWarningMessage(
-                'Nika: DeepSeek API key not configured. DeepSeek models will not appear in the model picker until the key is set.'
+                'Nikas: DeepSeek API key not configured. DeepSeek models will not appear in the model picker until the key is set.'
             );
         }
 
@@ -225,7 +225,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         } else if (!options.silent && !deepseekKey) {
             // Only show one warning if neither key is set
             vscode.window.showWarningMessage(
-                'Nika: Gemini API key not configured. Gemini models will not appear in the model picker until the key is set.'
+                'Nikas: Gemini API key not configured. Gemini models will not appear in the model picker until the key is set.'
             );
         }
 
@@ -273,7 +273,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const apiKey = await this.secrets.getDeepSeekApiKey();
         if (!apiKey) {
             throw new Error(
-                'DeepSeek API key not configured. Run "Nika: Input Deepseek userToken" from the command palette (F1).'
+                'DeepSeek API key not configured. Run "Nikas: Input Deepseek userToken" from the command palette (F1).'
             );
         }
 
@@ -338,22 +338,22 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             || (options.modelOptions?.['agentName'] && options.modelOptions?.['agentName'] !== options.modelOptions?.['mode']));
         const agentType = isSubagent ? 'subagent' : (agentName ? `agent` : 'direct');
         const agentLabel = agentName ? ` [${agentType}: ${agentName}]` : '';
-        const msg = `[Nika] Using model: ${modelId}${agentLabel}`;
+        const msg = `[Nikas] Using model: ${modelId}${agentLabel}`;
         console.log(msg);
         getOutputChannel().appendLine(msg);
 
         const ctxWindowTokens = getContextWindowTokens();
-        getOutputChannel().appendLine(`[Nika] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
+        getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
         // Read thinking effort from Copilot Chat's model picker dropdown first,
-        // fall back to the saved nika.thinkingEffort setting.
+        // fall back to the saved nikas.thinkingEffort setting.
         const thinkingEffort = getRequestThinkingEffort(options);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
         const extOpts = options as unknown as Record<string, unknown>;
         const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
-        getOutputChannel().appendLine(`[Nika] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}`);
+        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}`);
 
         // When thinking mode is enabled, ensure enough headroom for reasoning
         // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
@@ -367,7 +367,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
         if (boostedTokens !== effectiveMaxTokens) {
             getOutputChannel().appendLine(
-                `[Nika] Thinking mode enabled — boosting max_tokens from ` +
+                `[Nikas] Thinking mode enabled — boosting max_tokens from ` +
                 `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`
             );
         }
@@ -392,7 +392,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const hasThinking = thinkingEnabled;
         const hasTools = (options.tools?.length ?? 0) > 0;
         if (hasThinking && hasTools) {
-            const warning = `[Nika] WARNING: thinking mode (${getThinkingEffort()}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
+            const warning = `[Nikas] WARNING: thinking mode (${getThinkingEffort()}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
             getOutputChannel().appendLine(warning);
             log.warn(warning);
         }
@@ -400,7 +400,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         // Validate message sequence order before sending
         const sequenceIssues = validateMessageSequence(deepseekMessages);
         if (sequenceIssues.length > 0) {
-            const warning = `[Nika] WARNING: Message sequence validation found ${sequenceIssues.length} issue(s):\n  ${sequenceIssues.join('\n  ')}`;
+            const warning = `[Nikas] WARNING: Message sequence validation found ${sequenceIssues.length} issue(s):\n  ${sequenceIssues.join('\n  ')}`;
             getOutputChannel().appendLine(warning);
             log.warn(warning);
 
@@ -415,7 +415,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             log.verbose(`Full message role sequence (${deepseekMessages.length} messages):\n${roleSequence}`);
         }
 
-        // Log request summary to nika.log
+        // Log request summary to nikas.log
         const bodySize = new TextEncoder().encode(safeStringify(request)).length;
         log.info(
             `Sending DeepSeek request: model=${modelId}, ` +
@@ -496,14 +496,14 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             // so VS Code's ConversationHistorySummarizer gets a useful message.
             const errorMessage = err instanceof Error ? err.message : String(err || 'unknown error');
             const wrappedError = new Error(
-                `Nika provider error (model: ${modelId}): ${errorMessage}`
+                `Nikas provider error (model: ${modelId}): ${errorMessage}`
             );
             // Preserve the original stack if available
             if (err instanceof Error && err.stack) {
                 wrappedError.stack = err.stack;
             }
 
-            // Log to nika.log for offline investigation
+            // Log to nikas.log for offline investigation
             log.error(
                 `Chat request failed for model "${modelId}" (messages: ${deepseekMessages.length}, tools: ${options.tools?.length ?? 0})`,
                 err
@@ -533,7 +533,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
      * Handle a chat request routed to the DeepSeek Responses API (POST /responses).
      *
      * Currently only `deepseek-v4-flash` is supported on this endpoint, so the
-     * API model is always flash — regardless of `nika.selectedModel` (which is
+     * API model is always flash — regardless of `nikas.selectedModel` (which is
      * scoped to the chat-completions handler).
      *
      * Reuses the same vision pipeline, message conversion, context truncation,
@@ -550,7 +550,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         const apiKey = await this.secrets.getDeepSeekApiKey();
         if (!apiKey) {
             throw new Error(
-                'DeepSeek API key not configured. Run "Nika: Input Deepseek userToken" from the command palette (F1).'
+                'DeepSeek API key not configured. Run "Nikas: Input Deepseek userToken" from the command palette (F1).'
             );
         }
 
@@ -582,7 +582,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
         const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
 
-        // Thinking effort from the picker dropdown / nika.thinkingEffort setting
+        // Thinking effort from the picker dropdown / nikas.thinkingEffort setting
         const thinkingEffort = getRequestThinkingEffort(options);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
@@ -622,7 +622,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             `temperature=${getTemperature()}`
         );
         getOutputChannel().appendLine(
-            `[Nika] Responses API: model=${modelId}, inputItems=${Array.isArray(input) ? input.length : 0}, ` +
+            `[Nikas] Responses API: model=${modelId}, inputItems=${Array.isArray(input) ? input.length : 0}, ` +
             `thinking=${thinkingEnabled}, tools=${options.tools?.length ?? 0}`
         );
 
@@ -682,7 +682,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             }
             const errorMessage = err instanceof Error ? err.message : String(err || 'unknown error');
             const wrappedError = new Error(
-                `Nika provider error (model: ${modelId}): ${errorMessage}`
+                `Nikas provider error (model: ${modelId}): ${errorMessage}`
             );
             if (err instanceof Error && err.stack) {
                 wrappedError.stack = err.stack;
@@ -709,7 +709,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
     ): Promise<void> {
         const apiKey = await this.secrets.getGeminiApiKey();
         if (!apiKey) {
-            throw new Error('Gemini API key not configured. Run "Nika: Input Gemini API Key" from the command palette.');
+            throw new Error('Gemini API key not configured. Run "Nikas: Input Gemini API Key" from the command palette.');
         }
 
         if (token.isCancellationRequested) return;
@@ -753,7 +753,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
             if (text) {
                 progress.report(new vscode.LanguageModelTextPart(text));
-                getOutputChannel().appendLine(`[Nika] Gemini response: ${text.slice(0, 100)}...`);
+                getOutputChannel().appendLine(`[Nikas] Gemini response: ${text.slice(0, 100)}...`);
             }
         } catch (err) {
             if (abortController.signal.aborted) return;
@@ -823,7 +823,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
             const text = data.message?.content?.trim() || data.message?.thinking?.trim();
             if (text) {
                 progress.report(new vscode.LanguageModelTextPart(text));
-                getOutputChannel().appendLine(`[Nika] Gemma4 response: ${text.slice(0, 100)}...`);
+                getOutputChannel().appendLine(`[Nikas] Gemma4 response: ${text.slice(0, 100)}...`);
             }
         } catch (err) {
             if (abortController.signal.aborted) return;
@@ -839,7 +839,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
     /**
      * Create a vision describer based on the current configuration.
      *
-     * For Nika-native vision models (Gemini, Gemma4), we call the API directly
+     * For Nikas-native vision models (Gemini, Gemma4), we call the API directly
      * — this is the Vizards "api-endpoint" pattern.
      *
      * For Copilot-provided models (GPT-4o, Claude, etc.), we use selectChatModels
@@ -862,29 +862,30 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         );
 
         // ── Direct API path ───────────────────────────────────────────
-        // Nika-native models (keys starting with "nika/") MUST use the direct API
+        // Nikas-native models (keys starting with "nikas/") MUST use the direct API
         // because the Copilot LM path would route back to our own provider, which
         // only extracts text parts and drops image data — making vision unusable.
         //
-        // The legacy "nika-" prefix is also handled here.
+        // The legacy "nika/" and "nika-" prefixes (from the original Nika
+        // extension) are also handled here so stored settings keep working.
 
-        // Nika-native models by visionModelKey ("nika/gemini-2.5-flash-lite" etc.)
-        if (visionModelKey === 'nika/gemini-2.5-flash-lite') {
+        // Nikas-native models by visionModelKey ("nikas/gemini-2.5-flash-lite" etc.)
+        if (visionModelKey === 'nikas/gemini-2.5-flash-lite' || visionModelKey === 'nika/gemini-2.5-flash-lite') {
             return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
         }
-        if (visionModelKey === 'nika/gemini-2.5-flash') {
+        if (visionModelKey === 'nikas/gemini-2.5-flash' || visionModelKey === 'nika/gemini-2.5-flash') {
             return this.createDirectGeminiDescriber('gemini-2.5-flash');
         }
-        if (visionModelKey === 'nika/gemma4:31b') {
+        if (visionModelKey === 'nikas/gemma4:31b' || visionModelKey === 'nika/gemma4:31b') {
             return this.createDirectGemma4Describer();
         }
 
-        // Legacy nika- prefixed keys
-        if (visionModelKey?.startsWith('nika-')) {
-            return this.createNikaDirectDescriber(visionModelKey);
+        // Legacy nika-/nikas- prefixed keys
+        if (visionModelKey?.startsWith('nikas-') || visionModelKey?.startsWith('nika-')) {
+            return this.createNikasDirectDescriber(visionModelKey);
         }
 
-        // Legacy visionModel setting (from "Nika Native" picker)
+        // Legacy visionModel setting (from "Nikas Native" picker)
         if (!visionModelKey) {
             if (oldVisionModel === 'gemini-flash-lite') {
                 return this.createDirectGeminiDescriber('gemini-2.5-flash-lite');
@@ -898,7 +899,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
         }
 
         // ── Copilot LM path (third-party models only) ─────────────────
-        // For non-Nika visionModelKey (e.g. "copilot/gpt-4o", "github/gpt-4o"),
+        // For non-Nikas visionModelKey (e.g. "copilot/gpt-4o", "github/gpt-4o"),
         // try the Copilot LM path. These models are provided by VS Code itself
         // and properly handle image data parts through sendRequest.
         if (visionModelKey) {
@@ -918,7 +919,7 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
 
     /**
      * Create a direct Gemini describer that calls the Gemini API directly.
-     * This is the Vizards "api-endpoint" pattern for Nika's built-in models.
+     * This is the Vizards "api-endpoint" pattern for Nikas's built-in models.
      */
     private async createDirectGeminiDescriber(
         modelName: string,
@@ -984,9 +985,9 @@ export class NikaChatProvider implements vscode.LanguageModelChatProvider<vscode
     }
 
     /**
-     * Map a Nika provider key to a direct describer.
+     * Map a Nikas provider key to a direct describer.
      */
-    private async createNikaDirectDescriber(
+    private async createNikasDirectDescriber(
         key: string,
     ): Promise<import('./vision/types.js').VisionDescriber | undefined> {
         if (key.includes('gemini-2.5-flash-lite')) {
@@ -1182,10 +1183,10 @@ function buildThinkingEffortSchema() {
 
 /**
  * Read the thinking effort from the request options (set by Copilot Chat's
- * model picker dropdown) or fall back to the saved `nika.thinkingEffort`
+ * model picker dropdown) or fall back to the saved `nikas.thinkingEffort`
  * setting for backward compatibility.
  *
- * Maps 'none' (Copilot dropdown value) → 'off' (Nika's internal value).
+ * Maps 'none' (Copilot dropdown value) → 'off' (Nikas's internal value).
  */
 function getRequestThinkingEffort(
     options: vscode.ProvideLanguageModelChatResponseOptions,
