@@ -103,5 +103,36 @@ const geminiModelsRequiringKey = true;
 check('Nikas Native Gemini flags requiresApiKey=true', geminiModelsRequiringKey);
 // The picker now warns if key missing (logic added in extension.ts)
 
+console.log('\n=== 4. copilot/auto — must pick one of the Gemini models ===');
+// findAutoVisionModel logic (mirrors src/vision/sources/vscode-lm.ts):
+//   1. Gemini models only, Flash preferred
+//   2. Fall back to any model ONLY if no Gemini exists
+function autoSelect(models) {
+    const isGemini = (o) => o.id.toLowerCase().includes('gemini');
+    const isGeminiFlash = (o) => isGemini(o) && o.id.toLowerCase().includes('flash');
+    const gemini = models.filter(isGemini).sort((a, b) =>
+        (isGeminiFlash(a) ? 0 : 1) - (isGeminiFlash(b) ? 0 : 1)
+    );
+    const pool = gemini.length > 0 ? gemini : models;
+    return pool[0] ? `${pool[0].vendor}/${pool[0].id}` : undefined;
+}
+
+// Two genuine Copilot Gemini models (gemini-3-flash + gemini-2.5-pro) plus
+// GPT-4o / Claude. Auto MUST choose one of the two Geminis.
+const autoPick = autoSelect(listed);
+check('auto picks a Gemini model', autoPick === 'copilot/gemini-3-flash' || autoPick === 'copilot/gemini-2.5-pro', `got ${autoPick}`);
+check('auto picks Gemini Flash when available', autoPick === 'copilot/gemini-3-flash', `got ${autoPick}`);
+check('auto NEVER picks non-Gemini when Gemini exists', autoPick !== 'copilot/gpt-4o' && autoPick !== 'copilot/claude-sonnet-4-5', `got ${autoPick}`);
+
+// No Gemini at all → falls back to any vision model
+const noGemini = [
+    { vendor: 'copilot', id: 'gpt-4o', name: 'GPT-4o' },
+    { vendor: 'copilot', id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
+];
+check('auto falls back to any model when no Gemini', autoSelect(noGemini) === 'copilot/gpt-4o', `got ${autoSelect(noGemini)}`);
+
+// Empty list → undefined
+check('auto returns undefined when no models', autoSelect([]) === undefined);
+
 console.log(`\n===== ${pass} passed, ${fail} failed =====`);
 process.exit(fail ? 1 : 0);

@@ -5,6 +5,7 @@ import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './tr
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveVisionDescriber } from './vision/pipeline.js';
+import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
@@ -965,7 +966,18 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // For non-Nikas visionModelKey (e.g. "copilot/gpt-4o", "github/gpt-4o"),
         // try the Copilot LM path. These models are provided by VS Code itself
         // and properly handle image data parts through sendRequest.
-        if (visionModelKey) {
+
+        // Special "copilot/auto" (or "auto") key — auto-select the best Copilot
+        // vision model, preferring Gemini Flash (uses Copilot quota, no key).
+        if (visionModelKey === 'copilot/auto' || visionModelKey === 'auto') {
+            visionLog.info('Auto-selecting Copilot vision model (prefers Gemini Flash)');
+            const autoModel = await findAutoVisionModel();
+            if (autoModel) {
+                visionLog.info(`Auto vision model: ${autoModel.id} (${autoModel.vendor})`);
+                return new VSCodeLanguageModelVisionDescriber(autoModel);
+            }
+            visionLog.warn('Auto vision: no Copilot model available — falling back');
+        } else if (visionModelKey) {
             visionLog.info(`Trying Copilot LM for model: ${visionModelKey}`);
             const describer = await resolveVisionDescriber({
                 source: 'vscode-lm',

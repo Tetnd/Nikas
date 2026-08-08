@@ -168,6 +168,55 @@ export function getVisionPrompt(): string {
 }
 
 /**
+ * Auto-select the best available Copilot vision model.
+ *
+ * Used when `nikas.visionModelKey` is set to `copilot/auto` (or `auto`).
+ *
+ * Preference order (strict Gemini-first):
+ *   1. Any Gemini model — Flash preferred (gemini-2.5-flash, gemini-3-flash, ...)
+ *   2. If NO Gemini model exists, any other vision-capable Copilot model
+ *
+ * So when there are two Gemini models in Copilot, one of them is always
+ * chosen — never a non-Gemini model.
+ *
+ * Returns `undefined` if no Copilot vision model is available.
+ */
+export async function findAutoVisionModel(): Promise<vscode.LanguageModelChat | undefined> {
+    const options = await listVSCodeVisionModels();
+    if (options.length === 0) {
+        visionLog.warn('Auto vision: no Copilot vision models available');
+        return undefined;
+    }
+
+    const isGemini = (o: VisionLanguageModelOption): boolean =>
+        o.id.toLowerCase().includes('gemini');
+    const isGeminiFlash = (o: VisionLanguageModelOption): boolean =>
+        isGemini(o) && o.id.toLowerCase().includes('flash');
+
+    // Gemini models only — sorted so Flash comes first.
+    const gemini = options.filter(isGemini).sort((a, b) =>
+        (isGeminiFlash(a) ? 0 : 1) - (isGeminiFlash(b) ? 0 : 1)
+    );
+
+    // Fall back to any vision model only if no Gemini is available.
+    const pool = gemini.length > 0 ? gemini : options;
+
+    const best = pool[0];
+    visionLog.info(
+        `Auto vision: picked "${best.key}" (${best.name ?? best.id}) ` +
+        `from ${pool.length} Gemini candidate(s)` +
+        (pool === options ? ' (no Gemini — using any model)' : '')
+    );
+
+    const model = await findVisionModelByKey(best.key);
+    if (!model) {
+        visionLog.warn(`Auto vision: model "${best.key}" resolved but could not be fetched`);
+        return undefined;
+    }
+    return model;
+}
+
+/**
  * Find a vision model by vendor and id using selectChatModels.
  * For Nikas-provided vision models, this should find them if registered
  * and onDidChangeLanguageModelChatInformation has fired.
