@@ -6,7 +6,7 @@
  * patches, so this manager:
  *
  *   1. Locates the Copilot Chat bundle (handles VS Code build-hash moves).
- *   2. Runs a marker-based health check for all 8 patches.
+ *   2. Runs a marker-based health check for all 9 patches.
  *   3. Backs up the bundle, applies any missing patches (exact + regex
  *      fallback), writes, then re-verifies.
  *   4. Stores a SHA-256 of the patched bundle so unchanged bundles are

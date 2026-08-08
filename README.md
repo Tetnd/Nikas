@@ -67,7 +67,7 @@ Nikas connects to Ollama at `http://localhost:11434` by default. To use a remote
 
 Attach a PDF in chat and send it — it should reach DeepSeek as a document part. If a Copilot Chat / VS Code update wiped the patches, Nikas re-applies them automatically (you'll get a notification with a **Reload Now** button). To inspect or force it:
 
-- `F1` → `Nikas: Copilot PDF Patch Status` — shows which of the 8 patches are applied
+- `F1` → `Nikas: Copilot PDF Patch Status` — shows which of the 9 patches are applied
 - `F1` → `Nikas: Re-apply Copilot PDF Patches` — forces a patch cycle now
 
 The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\extension.js` and keeps timestamped `.bak-*` backups (pruned after `nikas.patchBackupRetention`). All activity is logged to the **Nikas PDF Patcher** output channel and `nikas.log`.

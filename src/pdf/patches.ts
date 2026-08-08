@@ -26,7 +26,7 @@ export interface PatchReplacement {
 }
 
 export interface PatchDefinition {
-    /** Stable id (P1..P8) — matches the recipe's numbering. */
+    /** Stable id (P1..P9) — matches the recipe's numbering. */
     id: string;
     description: string;
     /** If ANY of these strings is present, the patch is considered applied. */
@@ -219,6 +219,37 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                 },
             ],
             core: true,
+        },
+
+        // ── PATCH 9 — Shorten the grep_search "No matches found" hint ──────
+        //
+        // The Copilot `grep_search` tool appends a verbose 3-line hint to every
+        // zero-result search (unless includeIgnoredFiles is set). It reads the
+        // search.exclude config, lists the (mostly default) patterns, and
+        // produces ~340 chars of boilerplate that gets injected back into the
+        // model context on EVERY empty search. This patch shortens it to a
+        // single actionable line (~95 chars) and drops the config read.
+        {
+            id: 'P9',
+            description: 'Shorten the verbose grep_search "No matches found" hint (less context/token noise)',
+            appliedMarkers: [
+                'w=`If the files are ignored or excluded, retry with "includeIgnoredFiles": true.`',
+            ],
+            replacements: [
+                {
+                    // \n are real LF newlines inside the minified template literal.
+                    find: 'if(!_.length&&!h){let E=this.configurationService.getNonExtensionConfig("search.exclude"),x=[];if(E)for(let[I,S]of Object.entries(E))S&&x.push(I);w=`Your search pattern might be excluded completely by either the search.exclude settings or .*ignore files.\nIf you believe that it should have results, you can check into the .*ignore files and the exclude setting (here are some excluded patterns for reference:[${x.join(",")}]).\nThen if you want to include those files you can call the tool again by setting "includeIgnoredFiles" to true.`}',
+                    replace: 'if(!_.length&&!h){w=`If the files are ignored or excluded, retry with "includeIgnoredFiles": true.`}',
+                },
+            ],
+            regexFallbacks: [
+                {
+                    // Version-drift fallback: shorten only the hint text, keep surrounding syntax.
+                    pattern: /w=`Your search pattern might be excluded completely by either the search\.exclude settings or \.\*ignore files\.[\s\S]*?includeIgnoredFiles" to true\.`/,
+                    replacement: 'w=`If the files are ignored or excluded, retry with "includeIgnoredFiles": true.`',
+                },
+            ],
+            core: false,
         },
     ];
 }
