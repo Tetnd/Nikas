@@ -89,10 +89,12 @@ The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\exte
 | Setting | Default | Description |
 |---|---|---|
 | `nikas.selectedModel` | `deepseek-v4-flash` | Active chat model (`deepseek-v4-flash` or `deepseek-v4-pro`) |
-| `nikas.visionModel` | `ollama-gemma4` | Vision model for image preprocessing (`ollama-gemma4` or `gemini`) |
+| `nikas.visionModel` | `gemini` | Vision model for image preprocessing (`gemini`, `gemini-flash-lite`, or `ollama-gemma4`) |
 | `nikas.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances) |
-| `nikas.maxTokens` | `8K` | Maximum output tokens per response |
+| `nikas.maxTokens` | `16K` | Maximum output tokens per response |
 | `nikas.temperature` | `0.7` | Response creativity (0–2) |
+| `nikas.thinkingEffort` | `off` | Thinking/reasoning effort (`off`, `low`, `high`, `max`) |
+| `nikas.contextWindow` | `950K` | Maximum input context window (32K–950K). 950K stays under the API's 1,048,576-token hard ceiling |
 | `nikas.logLevel` | `INFO` | Logging verbosity (`OFF`, `ERROR`, `WARN`, `INFO`, `VERBOSE`) |
 | `nikas.logMaxSizeMB` | `5` | Max size of `nikas.log` before it rotates (`nikas.log.1`, `.2`, ...). `0` disables rotation |
 | `nikas.logMaxFiles` | `5` | How many rotated log files to keep before pruning the oldest. `0` truncates instead |

@@ -99,8 +99,8 @@ export type MaxTokensPreset = '4K' | '8K' | '16K' | '32K' | '64K' | '128K' | '38
 
 export const MAX_TOKENS_PRESETS: { id: MaxTokensPreset; label: string; tokens: number; description: string; recommended: boolean; thinkingRecommended: boolean }[] = [
     { id: '4K', label: '4K', tokens: 4_096, description: 'Minimal — fastest, lowest cost. Good for simple Q&A and lookups, but easily truncated.', recommended: false, thinkingRecommended: false },
-    { id: '8K', label: '8K', tokens: 8_192, description: 'Default — balanced for most conversations. Sufficient when thinking mode is off. Without thinking, the full budget goes to visible output.', recommended: true, thinkingRecommended: false },
-    { id: '16K', label: '16K', tokens: 16_384, description: 'Thinking mode sweet spot — reserves ~8K for reasoning tokens while leaving ~8K for visible output. Prevents the "empty response" problem.', recommended: false, thinkingRecommended: true },
+    { id: '8K', label: '8K', tokens: 8_192, description: 'Fast, low cost — balanced for simple Q&A when thinking mode is off. Full budget goes to visible output.', recommended: false, thinkingRecommended: false },
+    { id: '16K', label: '16K', tokens: 16_384, description: 'Default — thinking mode sweet spot. Reserves ~8K for reasoning tokens while leaving ~8K for visible output. Prevents the "empty response" problem.', recommended: true, thinkingRecommended: true },
     { id: '32K', label: '32K', tokens: 32_768, description: 'Large responses — complex code generation, long-form content, detailed analysis with thinking.', recommended: false, thinkingRecommended: false },
     { id: '64K', label: '64K', tokens: 65_536, description: 'Very long outputs — document generation, large refactors, multi-step agent tasks.', recommended: false, thinkingRecommended: false },
     { id: '128K', label: '128K', tokens: 131_072, description: 'Extended — maximum practical for extended agent sessions with heavy tool use.', recommended: false, thinkingRecommended: false },
@@ -108,13 +108,13 @@ export const MAX_TOKENS_PRESETS: { id: MaxTokensPreset; label: string; tokens: n
 ];
 
 export function getMaxTokensPreset(): MaxTokensPreset {
-    return (getConfig().get<string>('maxTokens') as MaxTokensPreset) ?? '8K';
+    return (getConfig().get<string>('maxTokens') as MaxTokensPreset) ?? '16K';
 }
 
 export function getMaxTokens(): number {
     const preset = getMaxTokensPreset();
     const found = MAX_TOKENS_PRESETS.find(p => p.id === preset);
-    return found?.tokens ?? 8192;
+    return found?.tokens ?? 16384;
 }
 
 export function getTemperature(): number {
@@ -122,7 +122,7 @@ export function getTemperature(): number {
 }
 
 export function getVisionModel(): VisionModelId {
-    return (getConfig().get<string>('visionModel') as VisionModelId) ?? 'ollama-gemma4';
+    return (getConfig().get<string>('visionModel') as VisionModelId) ?? 'gemini';
 }
 
 /**
@@ -178,10 +178,10 @@ export type ContextWindowPreset = '32K' | '64K' | '128K' | '256K' | '512K' | '95
 export const CONTEXT_WINDOW_PRESETS: { id: ContextWindowPreset; label: string; tokens: number; description: string; recommended: boolean }[] = [
     { id: '32K', label: '32K', tokens: 32_768, description: 'Minimal — most cost-efficient, fastest responses', recommended: false },
     { id: '64K', label: '64K', tokens: 65_536, description: 'Small — good for simple Q&A', recommended: false },
-    { id: '128K', label: '128K', tokens: 131_072, description: 'Balanced — recommended default for most use cases', recommended: true },
+    { id: '128K', label: '128K', tokens: 131_072, description: 'Balanced — good for most use cases', recommended: false },
     { id: '256K', label: '256K', tokens: 262_144, description: 'Large — for complex document analysis', recommended: false },
     { id: '512K', label: '512K', tokens: 524_288, description: 'Extra large — for very long conversations', recommended: false },
-    { id: '950K', label: '950K', tokens: 950_000, description: 'Maximum (safe) — 950K keeps headroom below the API\'s 1,048,576-token hard ceiling even with thinking mode (recommended for complex agent tasks)', recommended: false },
+    { id: '950K', label: '950K', tokens: 950_000, description: 'Default — maximum (safe): keeps headroom below the API\'s 1,048,576-token hard ceiling even with thinking mode (recommended for complex agent tasks)', recommended: true },
 ];
 
 export function getContextWindowPreset(): ContextWindowPreset {
@@ -190,13 +190,13 @@ export function getContextWindowPreset(): ContextWindowPreset {
     // working but stay under the API's 1,048,576-token hard ceiling (1M
     // estimated ≈ 1.4M real tokens → the API rejects those with HTTP 400).
     if (value === '1M') return '950K';
-    return (value as ContextWindowPreset) ?? '128K';
+    return (value as ContextWindowPreset) ?? '950K';
 }
 
 export function getContextWindowTokens(): number {
     const preset = getContextWindowPreset();
     const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
-    return found?.tokens ?? 131_072;
+    return found?.tokens ?? 950_000;
 }
 
 // --- Log Level ---

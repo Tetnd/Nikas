@@ -123,7 +123,7 @@
         },
         "nikas.maxTokens": {
           "type": "string",
-          "default": "8K",
+          "default": "16K",
           "enum": [
             "4K",
             "8K",
@@ -135,8 +135,8 @@
           ],
           "enumDescriptions": [
             "4,096 tokens — Minimal, fastest. Good for simple Q&A.",
-            "8,192 tokens — Default. Balanced for most conversations without thinking mode.",
-            "16,384 tokens — Thinking mode sweet spot. Reserves ~8K for reasoning + ~8K for visible output.",
+            "8,192 tokens — Fast, low cost. Balanced for simple Q&A without thinking mode.",
+            "16,384 tokens — Default. Thinking mode sweet spot. Reserves ~8K for reasoning + ~8K for visible output.",
             "32,768 tokens — Large responses for complex code generation and analysis.",
             "65,536 tokens — Very long outputs for document generation and large refactors.",
             "131,072 tokens — Extended output for heavy agent sessions.",
@@ -170,13 +170,13 @@
         },
         "nikas.visionModel": {
           "type": "string",
-          "default": "ollama-gemma4",
+          "default": "gemini",
           "enum": [
             "ollama-gemma4",
             "gemini",
             "gemini-flash-lite"
           ],
-          "description": "Vision model for image preprocessing. Gemma 4 runs locally via Ollama (no API key needed). Gemini uses Google AI Studio (free tier, needs API key)."
+          "description": "Vision model for image preprocessing. Gemini uses Google AI Studio (free tier, needs API key). Gemma 4 runs locally via Ollama (no API key needed)."
         },
         "nikas.ollamaBaseUrl": {
           "type": "string",
@@ -185,7 +185,7 @@
         },
         "nikas.contextWindow": {
           "type": "string",
-          "default": "128K",
+          "default": "950K",
           "enum": [
             "32K",
             "64K",
@@ -198,10 +198,10 @@
           "enumDescriptions": [
             "32,768 tokens — Minimal, most cost-efficient",
             "65,536 tokens — Small, good for simple Q&A",
-            "131,072 tokens — Balanced, recommended for most use cases",
+            "131,072 tokens — Balanced for most use cases",
             "262,144 tokens — Large, for complex document analysis",
             "524,288 tokens — Extra large, for very long conversations",
-            "950,000 tokens — Maximum (safe): stays under the API's 1,048,576-token hard ceiling even with thinking mode",
+            "950,000 tokens — Default. Maximum (safe): stays under the API's 1,048,576-token hard ceiling even with thinking mode",
             "Legacy — mapped to 950K tokens (the old 1M preset exceeded the API's hard context ceiling)"
           ],
           "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models. Note: the API enforces a hard 1,048,576-token total per request, so the largest safe preset is 950K."
