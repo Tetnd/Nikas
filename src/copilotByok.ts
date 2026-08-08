@@ -54,7 +54,7 @@ const DEEPSEEK_PROVIDER = {
     ],
 };
 
-/** Gemini — vision-capable model for the agent window (OpenAI-compatible chat). */
+/** Gemini — cheap vision-capable models for the agent window (OpenAI-compatible chat). */
 const GEMINI_PROVIDER = {
     name: 'Gemini',
     vendor: 'customendpoint',
@@ -64,6 +64,15 @@ const GEMINI_PROVIDER = {
         {
             id: 'gemini-2.5-flash',
             name: 'Gemini 2.5 Flash (Vision)',
+            url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+            toolCalling: true,
+            vision: true,
+            maxInputTokens: 1000000,
+            maxOutputTokens: 8192,
+        },
+        {
+            id: 'gemini-2.5-flash-lite',
+            name: 'Gemini 2.5 Flash-Lite (Vision)',
             url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
             toolCalling: true,
             vision: true,

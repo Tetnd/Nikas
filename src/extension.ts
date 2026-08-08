@@ -646,17 +646,21 @@ async function agentModelAssignments(): Promise<void> {
 /**
  * Recommended Copilot agent model assignments.
  *
- * Matches the maintainer's working configuration: every agent uses the
- * DeepSeek V4 Flash Responses model (nikas/deepseek-v4-flash-responses) —
+ * Matches the maintainer's working configuration: Explore, Plan, and Inline
+ * chat use DeepSeek V4 Flash Responses (nikas/deepseek-v4-flash-responses) —
  * agent-native tooling with server-side web search. Applies to fresh
  * installs via applyDefaultAgentModels() and to the one-click command
  * setFlashForAllAgents().
+ *
+ * NOTE: chat.utilityModel / chat.utilitySmallModel are intentionally NOT in
+ * this list. Those settings are resolved by Copilot's production endpoint
+ * provider, which only knows GitHub/BYOK model ids — a `nikas/...` value there
+ * can never resolve and spams "No model matched ... override" warnings while
+ * silently falling back to the default. Utility flows keep their default.
  */
 const RECOMMENDED_AGENT_MODELS = [
     { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nikas/deepseek-v4-flash-responses' },
     { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nikas/deepseek-v4-flash-responses' },
-    { key: 'chat.utilityModel', label: 'Utility Model', model: 'nikas/deepseek-v4-flash-responses' },
-    { key: 'chat.utilitySmallModel', label: 'Utility Small Model', model: 'nikas/deepseek-v4-flash-responses' },
     { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nikas/deepseek-v4-flash-responses' },
 ];
 
@@ -684,7 +688,7 @@ async function applyDefaultAgentModels(): Promise<void> {
 
 /**
  * Quick-set agents to the recommended models with one click.
- *   - Explore, Plan, Utility, Utility Small, Inline Chat → DeepSeek V4 Flash (Responses)
+ *   - Explore, Plan, Inline Chat → DeepSeek V4 Flash (Responses)
  */
 async function setFlashForAllAgents(): Promise<void> {
     const config = vscode.workspace.getConfiguration();
