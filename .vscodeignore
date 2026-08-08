@@ -16,4 +16,5 @@ test-rotation.js
 test-truncation-fixed.js
 test-vision-routing.js
 test-pdf-e2e.js
+test-hallucination.js
 extension.patched.test.js

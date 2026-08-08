@@ -53,6 +53,92 @@ function estimateMessageTokens(messages: DeepSeekMessage[]): number {
 }
 
 /**
+ * Short human-readable preview of a message, for truncation diagnostics.
+ * Kept brief — truncation can drop many messages and we only log a few.
+ */
+function messagePreview(msg: DeepSeekMessage, maxLen = 80): string {
+    let text = '';
+    if (typeof msg.content === 'string') {
+        text = msg.content;
+    } else if (Array.isArray(msg.content)) {
+        text = msg.content
+            .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && !!p.text)
+            .map(p => p.text)
+            .join(' ')
+            .slice(0, maxLen);
+    }
+    if (msg.role === 'tool') {
+        return `tool[${msg.tool_call_id ?? '?'}] ${text.replace(/\s+/g, ' ').trim().slice(0, maxLen)}`;
+    }
+    if (msg.role === 'assistant' && msg.tool_calls?.length) {
+        const names = msg.tool_calls.map(tc => tc.function.name).join(',');
+        return `assistant(tool_calls: ${names})`;
+    }
+    const body = text.replace(/\s+/g, ' ').trim();
+    return body ? `${msg.role}: ${body.slice(0, maxLen)}` : `${msg.role}: <empty>`;
+}
+
+/**
+ * Log the context fill / truncation status of a request.
+ *
+ * Emits a WARN (and an output-channel line) when messages had to be dropped —
+ * that is the moment the model starts losing memory of early facts, which is
+ * exactly when hallucination risk begins.
+ */
+function logContextHealth(
+    estimatedTokens: number,
+    availableInputTokens: number,
+    fillPercent: number,
+    dropped: DeepSeekMessage[] = []
+): void {
+    const line =
+        `Context health: ~${estimatedTokens.toLocaleString()} tokens of ` +
+        `${availableInputTokens.toLocaleString()} available ` +
+        `(${fillPercent}% fill, preset ${getContextWindowPreset()})`;
+
+    if (dropped.length > 0) {
+        const droppedTokens = estimateMessageTokens(dropped);
+        const previews = dropped.slice(0, 6).map(messagePreview).map(p => `    ${p}`).join('\n');
+        const msg =
+            `${line}\n` +
+            `  ⚠ TRUNCATION: dropped ${dropped.length} message(s), ` +
+            `~${droppedTokens.toLocaleString()} tokens\n` +
+            `  Oldest dropped content (model can no longer see this):\n${previews}\n` +
+            `  → Early facts are now forgotten. If answers look confident-but-wrong, ` +
+            `this is why. Consider a larger context window or a fresh session.`;
+        log.warn(msg);
+        getOutputChannel().appendLine(`[Nikas] ${msg.replace(/\n/g, '\n[Nikas] ')}`);
+    } else {
+        log.info(line);
+    }
+}
+
+/**
+ * Log actual API token usage against the configured context window.
+ * The local ~4 chars/token estimate can undercount; the API's real
+ * prompt_tokens is the ground truth for how close we are to the limit.
+ */
+function logUsageVsWindow(promptTokens: number, completionTokens: number): void {
+    const windowTokens = getContextWindowTokens();
+    const fillPct = Math.round((promptTokens / windowTokens) * 100);
+    const base =
+        `DeepSeek usage: prompt=${promptTokens.toLocaleString()} ` +
+        `(${fillPct}% of ${windowTokens.toLocaleString()} window), ` +
+        `completion=${completionTokens.toLocaleString()}`;
+    if (fillPct >= 85) {
+        const msg =
+            `${base}\n` +
+            `  ⚠ Prompt is ${fillPct}% of the context window. The next truncation will drop ` +
+            `the oldest messages — the model loses memory of early facts and may hallucinate ` +
+            `about them. Start a new session for fresh context.`;
+        log.warn(msg);
+        getOutputChannel().appendLine(`[Nikas] ${msg.replace(/\n/g, '\n[Nikas] ')}`);
+    } else {
+        log.info(base);
+    }
+}
+
+/**
  * Truncate messages to fit within the configured context window.
  *
  * Preserves the system message (first message) and removes oldest user/assistant
@@ -90,10 +176,14 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
     }
 
     const estimatedTokens = estimateMessageTokens(messages);
+    const fillPercent = Math.round((estimatedTokens / availableInputTokens) * 100);
+
     if (estimatedTokens <= availableInputTokens) {
         // Everything fits — but the sequence may still be invalid (e.g. the
         // conversation ends mid-tool-call during auto-compact). Repair it.
-        return repairTruncatedSequence(systemMessages, otherMessages);
+        const repaired = repairTruncatedSequence(systemMessages, otherMessages);
+        logContextHealth(estimatedTokens, availableInputTokens, fillPercent);
+        return repaired;
     }
 
     // Need to truncate. Keep system message, then keep the most recent messages.
@@ -114,10 +204,11 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 
     const truncated = repairTruncatedSequence(systemMessages, keptMessages);
 
-    log.info(
-        `Context window: truncated from ${messages.length} to ${truncated.length} messages ` +
-        `(~${estimateMessageTokens(messages).toLocaleString()} → ~${estimateMessageTokens(truncated).toLocaleString()} tokens)`
-    );
+    // Identify what the model just "forgot": messages present in the input
+    // that are not in the final (truncated + repaired) sequence.
+    const keptSet = new Set<DeepSeekMessage>(truncated);
+    const dropped = messages.filter(m => !keptSet.has(m));
+    logContextHealth(estimatedTokens, availableInputTokens, fillPercent, dropped);
 
     return truncated;
 }
@@ -530,6 +621,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                                 'usage'
                             )
                         );
+                        // Monitor actual usage vs the configured window
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens);
                     }
 
                     // Inject replay marker if we described images this turn
@@ -727,6 +820,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                                 'usage'
                             )
                         );
+                        // Monitor actual usage vs the configured window
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens);
                     }
                     if (replayMarkerMetadata.visionText) {
                         progress.report(createReplayMarkerPart(replayMarkerMetadata));
