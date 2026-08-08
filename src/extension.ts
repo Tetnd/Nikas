@@ -7,7 +7,6 @@ import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK
 import { setLogLevel } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
-import { ensureDeepSeekCopilotByok, addDeepSeekToCopilot } from './copilotByok.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -73,13 +72,6 @@ export async function activate(context: vscode.ExtensionContext) {
         applyDefaultAgentModels().catch(() => { /* non-fatal */ });
     }
 
-    // Register DeepSeek as a Copilot BYOK custom endpoint so it also appears in
-    // the agent window (which never loads third-party vscode.lm providers).
-    // Idempotent — only adds the entry when missing; preserves user providers.
-    if (getConfig().get<boolean>('manageCopilotByok', true)) {
-        ensureDeepSeekCopilotByok(context).catch(() => { /* non-fatal */ });
-    }
-
     // Optional self-update checks (only if nikas.autoCheckUpdates is enabled).
     context.subscriptions.push(scheduleAutoUpdateCheck(context));
 
@@ -95,7 +87,6 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.chooseContextWindow', () => chooseContextWindow()),
         vscode.commands.registerCommand('nikas.agentModelAssignments', () => agentModelAssignments()),
         vscode.commands.registerCommand('nikas.setFlashForAllAgents', () => setFlashForAllAgents()),
-        vscode.commands.registerCommand('nikas.addDeepSeekToCopilot', () => addDeepSeekToCopilot(context)),
         vscode.commands.registerCommand('nikas.chooseLogLevel', () => chooseLogLevel()),
         vscode.commands.registerCommand('nikas.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nikas.copilotPdfStatus', () => showPdfPatchStatus()),
