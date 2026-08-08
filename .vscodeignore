@@ -12,4 +12,5 @@ nikas.log
 *.log
 test-patches.js
 apply-patches.js
+test-rotation.js
 extension.patched.test.js

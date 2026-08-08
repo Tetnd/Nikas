@@ -93,6 +93,9 @@ The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\exte
 | `nikas.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances) |
 | `nikas.maxTokens` | `8K` | Maximum output tokens per response |
 | `nikas.temperature` | `0.7` | Response creativity (0–2) |
+| `nikas.logLevel` | `INFO` | Logging verbosity (`OFF`, `ERROR`, `WARN`, `INFO`, `VERBOSE`) |
+| `nikas.logMaxSizeMB` | `5` | Max size of `nikas.log` before it rotates (`nikas.log.1`, `.2`, ...). `0` disables rotation |
+| `nikas.logMaxFiles` | `5` | How many rotated log files to keep before pruning the oldest. `0` truncates instead |
 | `nikas.autoPatchCopilot` | `true` | Auto re-apply the Copilot Chat PDF patches after updates |
 | `nikas.copilotMaxFileSizeMB` | `100` | Max attachment size (MB) Copilot Chat is patched to accept |
 | `nikas.autoReloadAfterPatch` | `false` | Auto-reload the window after re-applying patches (vs. prompting) |

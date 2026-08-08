@@ -198,6 +198,28 @@ export function getLogLevelSetting(): LogLevel {
     return (getConfig().get<string>('logLevel') as LogLevel) ?? 'INFO';
 }
 
+// --- Log file rotation ---
+
+/**
+ * Max size (MB) of `nikas.log` before it is rotated to `nikas.log.1`
+ * (then `.2`, `.3`, ...). Set 0 to disable size-based rotation.
+ * Default 5 MB — prevents the log from ever growing to gigabytes.
+ */
+export function getLogMaxSizeMB(): number {
+    const v = getConfig().get<number>('logMaxSizeMB');
+    return typeof v === 'number' && v >= 0 ? v : 5;
+}
+
+/**
+ * How many rotated log files (`nikas.log.1`, `nikas.log.2`, ...) to keep
+ * before pruning the oldest. Set 0 to keep none (log is truncated instead).
+ * Default 5.
+ */
+export function getLogMaxFiles(): number {
+    const v = getConfig().get<number>('logMaxFiles');
+    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 5;
+}
+
 // --- Copilot Chat PDF patcher ---
 
 /**

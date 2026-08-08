@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { LogLevel } from './config.js';
+import { getLogMaxFiles, getLogMaxSizeMB, type LogLevel } from './config.js';
 
 /**
  * File-based logger for Nikas with level filtering.
@@ -57,6 +57,46 @@ function shouldLog(level: LogLevel): boolean {
     return LEVEL_NUM[level] <= LEVEL_NUM[currentLevel];
 }
 
+/**
+ * Rotate `nikas.log` when it exceeds the configured max size, so it can
+ * never grow to gigabytes. Uses `nikas.log.1`, `.2`, ... up to the
+ * configured max file count, then prunes the oldest.
+ */
+function rotateIfNeeded(filePath: string): void {
+    try {
+        const maxBytes = getLogMaxSizeMB() * 1024 * 1024;
+        if (maxBytes <= 0) return; // size-based rotation disabled
+
+        const stat = fs.statSync(filePath);
+        if (stat.size < maxBytes) return; // still under the limit
+
+        const maxFiles = getLogMaxFiles();
+        if (maxFiles <= 0) {
+            // No backups wanted — just truncate the log in place.
+            fs.writeFileSync(filePath, '');
+            return;
+        }
+
+        // Prune the oldest rotated file (highest index).
+        const oldest = `${filePath}.${maxFiles}`;
+        try { fs.unlinkSync(oldest); } catch { /* ignore */ }
+
+        // Shift rotated files down: .N-1 -> .N, ... .1 -> .2
+        for (let i = maxFiles - 1; i >= 1; i--) {
+            try {
+                fs.renameSync(`${filePath}.${i}`, `${filePath}.${i + 1}`);
+            } catch { /* ignore */ }
+        }
+
+        // Rotate the current log -> .1
+        try {
+            fs.renameSync(filePath, `${filePath}.1`);
+        } catch { /* ignore */ }
+    } catch {
+        // File doesn't exist yet or other error — nothing to rotate.
+    }
+}
+
 function writeLine(level: LogLevel, message: string, err?: unknown): void {
     if (!shouldLog(level)) return;
 
@@ -78,7 +118,8 @@ function writeLine(level: LogLevel, message: string, err?: unknown): void {
 
         line += '\n';
 
-        // Append to file (create if doesn't exist)
+        // Rotate first if the log has grown too large, then append.
+        rotateIfNeeded(filePath);
         fs.appendFileSync(filePath, line, 'utf-8');
     } catch {
         // Silently ignore logging failures — don't compound errors

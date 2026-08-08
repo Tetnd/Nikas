@@ -237,6 +237,20 @@
           ],
           "description": "Logging verbosity level. Writes to nikas.log in the workspace root. Set to OFF to disable logging entirely. Set to VERBOSE when debugging API issues."
         },
+        "nikas.logMaxSizeMB": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 1024,
+          "description": "Max size (MB) of nikas.log before it is rotated to nikas.log.1 (then .2, .3, ...). Set 0 to disable size-based rotation. Prevents the log from growing to gigabytes."
+        },
+        "nikas.logMaxFiles": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "How many rotated log files (nikas.log.1, nikas.log.2, ...) to keep before pruning the oldest. Set 0 to keep none (the log is truncated instead of rotated)."
+        },
         "nikas.autoPatchCopilot": {
           "type": "boolean",
           "default": true,
