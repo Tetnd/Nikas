@@ -15,4 +15,5 @@ apply-patches.js
 test-rotation.js
 test-truncation-fixed.js
 test-vision-routing.js
+test-pdf-e2e.js
 extension.patched.test.js

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { log } from '../log.js';
 import { safeStringify } from '../api/sanitize.js';
+import { isPdfMime, pdfDataToTextContent } from '../pdf/extract.js';
 import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem } from '../api/types.js';
 
 /**
@@ -288,23 +289,31 @@ function buildToolResultMessages(
 }
 
 /**
- * Build DeepSeek content parts from text and image parts (no tool parts).
+ * Build DeepSeek content parts from text / image / PDF parts (no tool parts).
+ *
+ * PDF handling: DeepSeek's API does NOT accept file/document inputs, so an
+ * `application/pdf` data part is converted to a TEXT part carrying the
+ * PDF's extracted contents (see src/pdf/extract.ts). Images become
+ * `image_url` data URIs, text passes through.
  */
-function buildContentParts(
+export function buildContentParts(
     parts: readonly vscode.LanguageModelInputPart[]
 ): DeepSeekContentPart[] {
     const contentParts: DeepSeekContentPart[] = [];
 
     for (const part of parts) {
-        if (part instanceof vscode.LanguageModelTextPart) {
+        if (isTextPart(part)) {
             contentParts.push({ type: 'text', text: part.value });
-        } else if (part instanceof vscode.LanguageModelDataPart) {
-            if (isImagePart(part)) {
+        } else if (isDataPart(part)) {
+            if (isImageMime(part.mimeType)) {
                 const dataUri = uint8ArrayToDataUri(part.data, part.mimeType);
                 contentParts.push({
                     type: 'image_url',
                     image_url: { url: dataUri },
                 });
+            } else if (isPdfMime(part.mimeType)) {
+                // DeepSeek cannot ingest the PDF binary — send its text instead.
+                contentParts.push({ type: 'text', text: pdfDataToTextContent(part.data) });
             }
         }
     }
@@ -323,8 +332,19 @@ function mapRole(role: vscode.LanguageModelChatMessageRole): DeepSeekMessage['ro
     }
 }
 
-function isImagePart(part: vscode.LanguageModelDataPart): boolean {
-    return part.mimeType.startsWith('image/');
+/** Structural checks (no `instanceof`) so the core logic is testable in Node. */
+function isTextPart(part: unknown): part is { value: string } {
+    return typeof part === 'object' && part !== null && typeof (part as { value?: unknown }).value === 'string';
+}
+
+function isDataPart(part: unknown): part is { data: Uint8Array; mimeType: string } {
+    return typeof part === 'object' && part !== null
+        && (part as { data?: unknown }).data instanceof Uint8Array
+        && typeof (part as { mimeType?: unknown }).mimeType === 'string';
+}
+
+function isImageMime(mimeType: string): boolean {
+    return mimeType.toLowerCase().startsWith('image/');
 }
 
 function uint8ArrayToDataUri(data: Uint8Array, mimeType: string): string {
