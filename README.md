@@ -72,6 +72,29 @@ Attach a PDF in chat and send it — it should reach DeepSeek as a document part
 
 The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\extension.js` and keeps timestamped `.bak-*` backups (pruned after `nikas.patchBackupRetention`). All activity is logged to the **Nikas PDF Patcher** output channel and `nikas.log`.
 
+## Terminal / CLI (Claude Code with DeepSeek)
+
+Nikas itself is an **IDE-only provider** (it registers a `LanguageModelChatProvider` inside VS Code's extension host, so the standalone Copilot CLI can't load it). To use DeepSeek V4 in a terminal agent, Claude Code can be pointed at DeepSeek's Anthropic-compatible endpoint. A ready-made setup script is included:
+
+```powershell
+# from the repo root — configures Claude Code for DeepSeek in this terminal
+.\claude-deepseek.ps1
+claude
+```
+
+The script prompts for your DeepSeek API key once, then sets (per DeepSeek's official [agent-integration guide](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code)):
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `ANTHROPIC_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek's Anthropic-compatible endpoint |
+| `ANTHROPIC_MODEL` / `OPUS` / `SONNET` | `deepseek-v4-pro[1m]` | Main model (1M window) |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `deepseek-v4-flash` | Fast model tier |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | `deepseek-v4-flash` | Fast subagents |
+| `CLAUDE_CODE_EFFORT_LEVEL` | `max` | Deep reasoning |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `786432` | DeepSeek's official recommendation — matches the ~800K real-token quality limit measured for DeepSeek V4 on the 1M window |
+
+The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed file); remove it to be prompted again.
+
 ## Commands
 
 | Command | Description |
