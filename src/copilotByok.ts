@@ -15,19 +15,27 @@ import { log } from './log.js';
  * providers. The result: DeepSeek works in normal chat but is missing from
  * the agent window's model picker.
  *
- * Fix: register DeepSeek as a BYOK "Custom Endpoint" in Copilot Chat's
- * chatLanguageModels.json (the same file the "Manage Language Models" dialog
- * writes). BYOK providers DO load in the agent window, so DeepSeek then
- * appears everywhere. This module ensures that entry exists, idempotently,
- * without touching the user's other providers.
+ * Fix: register the providers we need as BYOK "Custom Endpoint" entries in
+ * Copilot Chat's chatLanguageModels.json (the same file the "Manage Language
+ * Models" dialog writes). BYOK providers DO load in the agent window.
  *
- * The model is added as `apiType: "responses"` pointed at DeepSeek's Responses
- * API (https://api.deepseek.com/responses) — the same endpoint the extension's
- * "DeepSeek V4 Flash (Responses)" model uses, with the calibrated 950K input
- * window (under the API's 1,048,576 hard ceiling).
+ * Providers ensured:
+ *   1. DeepSeek — `apiType: "responses"` at DeepSeek's Responses API
+ *      (https://api.deepseek.com/responses), text-only (DeepSeek V4 has no
+ *      native vision). This is the agent's main text/coding model, with the
+ *      calibrated 950K input window (under the API's 1,048,576 hard ceiling).
+ *   2. Gemini — `apiType: "chat"` at Google's OpenAI-compatible endpoint
+ *      (https://generativelanguage.googleapis.com/v1beta/openai/chat/completions),
+ *      vision-capable. The agent window has NO vision otherwise — Nikas's
+ *      image-preprocessing pipeline (Gemini describes → DeepSeek gets text)
+ *      is a vscode.lm path that does not run in agent windows. Gemini-BYOK
+ *      is what lets screenshots/images work there.
+ *
+ * Both are ensured idempotently: only added when missing, user's apiKey refs
+ * and other providers are preserved, invalid JSON is backed up and skipped.
  */
 
-/** The DeepSeek custom-endpoint provider entry we ensure exists. */
+/** DeepSeek — text/coding model for the agent window (Responses API). */
 const DEEPSEEK_PROVIDER = {
     name: 'DeepSeek',
     vendor: 'customendpoint',
@@ -46,6 +54,28 @@ const DEEPSEEK_PROVIDER = {
     ],
 };
 
+/** Gemini — vision-capable model for the agent window (OpenAI-compatible chat). */
+const GEMINI_PROVIDER = {
+    name: 'Gemini',
+    vendor: 'customendpoint',
+    apiKey: '${input:chat.lm.secret.gemini}',
+    apiType: 'chat',
+    models: [
+        {
+            id: 'gemini-2.5-flash',
+            name: 'Gemini 2.5 Flash (Vision)',
+            url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+            toolCalling: true,
+            vision: true,
+            maxInputTokens: 1000000,
+            maxOutputTokens: 8192,
+        },
+    ],
+};
+
+/** All providers this module keeps in sync. */
+const BYOK_TARGETS = [DEEPSEEK_PROVIDER, GEMINI_PROVIDER];
+
 /**
  * Resolve the Copilot Chat BYOK config path.
  *
@@ -62,21 +92,19 @@ export function resolveChatLanguageModelsPath(context: vscode.ExtensionContext):
 }
 
 /**
- * Ensure the DeepSeek custom-endpoint entry exists in chatLanguageModels.json.
+ * Ensure a provider entry exists in chatLanguageModels.json.
  *
  * Idempotent and non-destructive:
- *   - If the file is missing, creates it with the DeepSeek entry.
- *   - If an entry with vendor `customendpoint` and name `DeepSeek` already
- *     exists, keeps its apiKey and settings but ensures the flash model entry
- *     is present and correct.
+ *   - If the file is missing, creates it with the given providers.
+ *   - If an entry with the same vendor+name already exists, keeps its apiKey
+ *     and settings but ensures the target model entries are present/correct.
  *   - All OTHER providers are preserved untouched.
  *   - If the file is invalid JSON, it is backed up and left alone (we never
  *     clobber a file we can't parse).
- *
- * Returns whether the file was modified and its path.
  */
-export async function ensureDeepSeekCopilotByok(
-    context: vscode.ExtensionContext
+async function ensureProviders(
+    context: vscode.ExtensionContext,
+    targets: readonly (typeof DEEPSEEK_PROVIDER | typeof GEMINI_PROVIDER)[]
 ): Promise<{ changed: boolean; path: string }> {
     const filePath = resolveChatLanguageModelsPath(context);
 
@@ -97,37 +125,41 @@ export async function ensureDeepSeekCopilotByok(
             try { fs.copyFileSync(filePath, backup); } catch { /* ignore */ }
             log.warn(
                 `Copilot BYOK: chatLanguageModels.json is invalid JSON; backed up to ${backup} and left untouched. ` +
-                `DeepSeek was NOT auto-registered. Fix the file manually or run "Nikas: Add DeepSeek to Copilot".`,
+                `Providers were NOT auto-registered. Fix the file manually or run "Nikas: Add DeepSeek & Gemini to Copilot".`,
                 err
             );
             return { changed: false, path: filePath };
         }
     }
 
-    // Find an existing DeepSeek custom-endpoint entry.
-    const existing = (providers as Record<string, unknown>[]).find(p =>
-        p && p['vendor'] === 'customendpoint' && p['name'] === 'DeepSeek'
-    );
+    const list = providers as Record<string, unknown>[];
 
-    if (existing) {
-        // Preserve the user's apiKey; ensure the model entry is correct.
-        const models = (existing['models'] as Record<string, unknown>[]) ?? [];
-        const hasFlash = models.some(m => m && m['id'] === 'deepseek-v4-flash');
-        const hasCorrectUrl = models.some(m =>
-            m && m['id'] === 'deepseek-v4-flash' && m['url'] === DEEPSEEK_PROVIDER.models[0].url
+    for (const target of targets) {
+        const existing = list.find(p =>
+            p && p['vendor'] === target.vendor && p['name'] === target.name
         );
 
-        if (!hasFlash) {
-            models.push({ ...DEEPSEEK_PROVIDER.models[0] });
-        } else if (!hasCorrectUrl) {
-            const idx = models.findIndex(m => m && m['id'] === 'deepseek-v4-flash');
-            models[idx] = { ...DEEPSEEK_PROVIDER.models[0], ...models[idx] };
-            models[idx]['url'] = DEEPSEEK_PROVIDER.models[0].url;
+        if (existing) {
+            // Preserve the user's apiKey; ensure the model entries are correct.
+            const models = (existing['models'] as Record<string, unknown>[]) ?? [];
+            for (const tm of target.models) {
+                const hasModel = models.some(m => m && m['id'] === tm.id);
+                const hasCorrectUrl = models.some(m =>
+                    m && m['id'] === tm.id && m['url'] === tm.url
+                );
+                if (!hasModel) {
+                    models.push({ ...tm });
+                } else if (!hasCorrectUrl) {
+                    const idx = models.findIndex(m => m && m['id'] === tm.id);
+                    models[idx] = { ...tm, ...models[idx] };
+                    models[idx]['url'] = tm.url;
+                }
+            }
+            existing['models'] = models;
+            if (!existing['apiType']) existing['apiType'] = target.apiType;
+        } else {
+            list.push({ ...target });
         }
-        existing['models'] = models;
-        if (!existing['apiType']) existing['apiType'] = 'responses';
-    } else {
-        providers.push({ ...DEEPSEEK_PROVIDER });
     }
 
     try {
@@ -138,23 +170,33 @@ export async function ensureDeepSeekCopilotByok(
     }
 
     log.info(
-        `Copilot BYOK: ${existed ? 'updated' : 'created'} ${filePath} with DeepSeek custom-endpoint ` +
-        `(deepseek-v4-flash, apiType=responses, 950K window)`
+        `Copilot BYOK: ${existed ? 'updated' : 'created'} ${filePath} with ` +
+        targets.map(t => `${t.name} (${t.models[0].id}, apiType=${t.apiType})`).join(', ')
     );
 
     return { changed: true, path: filePath };
 }
 
+/** Ensure DeepSeek (and Gemini) are registered for Copilot's agent window. */
+export function ensureDeepSeekCopilotByok(context: vscode.ExtensionContext): Promise<{ changed: boolean; path: string }> {
+    return ensureProviders(context, BYOK_TARGETS);
+}
+
+/** Ensure only the Gemini vision provider is registered. */
+export function ensureGeminiCopilotByok(context: vscode.ExtensionContext): Promise<{ changed: boolean; path: string }> {
+    return ensureProviders(context, [GEMINI_PROVIDER]);
+}
+
 /**
- * Command handler — manually (re)add DeepSeek to Copilot's BYOK providers
- * and report the result to the user.
+ * Command handler — manually (re)add DeepSeek + Gemini to Copilot's BYOK
+ * providers and report the result to the user.
  */
 export async function addDeepSeekToCopilot(context: vscode.ExtensionContext): Promise<void> {
     const { changed, path: filePath } = await ensureDeepSeekCopilotByok(context);
     if (changed) {
         const reload = 'Reload Window';
         const choice = await vscode.window.showInformationMessage(
-            'Nikas: Added DeepSeek to Copilot\u2019s language models. Reload the window for it to appear in the model picker (including the agent window).',
+            'Nikas: Added DeepSeek & Gemini to Copilot\u2019s language models. Reload the window for them to appear in the model picker (including the agent window).',
             reload
         );
         if (choice === reload) {
@@ -162,7 +204,7 @@ export async function addDeepSeekToCopilot(context: vscode.ExtensionContext): Pr
         }
     } else {
         vscode.window.showInformationMessage(
-            'Nikas: DeepSeek is already registered in Copilot\u2019s language models.'
+            'Nikas: DeepSeek & Gemini are already registered in Copilot\u2019s language models.'
         );
     }
     log.info(`Copilot BYOK path: ${filePath}`);

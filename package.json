@@ -110,7 +110,7 @@
       },
       {
         "command": "nikas.addDeepSeekToCopilot",
-        "title": "Add DeepSeek to Copilot (agent window)",
+        "title": "Add DeepSeek & Gemini to Copilot (agent window)",
         "category": "Nikas",
         "icon": "$(add)"
       }
