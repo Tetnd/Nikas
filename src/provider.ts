@@ -53,22 +53,30 @@ function estimateMessageTokens(messages: DeepSeekMessage[]): number {
 
 /**
  * Truncate messages to fit within the configured context window.
+ *
  * Preserves the system message (first message) and removes oldest user/assistant
- * messages from the middle when the context is exceeded.
+ * messages when the context is exceeded.
+ *
+ * CRITICAL: the result must remain a VALID DeepSeek message sequence. A naive
+ * newest-kept truncation can break tool-call/tool-result pairs:
+ *   - an `assistant` message with `tool_calls` kept as the LAST message (its
+ *     tool results were older/truncated) → DeepSeek HTTP 400
+ *   - the first kept message being `assistant`/`tool` (leading `user` dropped)
+ *     → DeepSeek HTTP 400 (conversation must start with system/user)
+ * This is exactly what happened during Copilot Chat's auto-compact, which
+ * fires when the conversation is at max size (agent loops end mid-tool-call).
+ *
+ * The repair runs on EVERY request (not just when truncating): a conversation
+ * that already fits can still end mid-tool-call, and DeepSeek rejects that.
  */
 function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekMessage[] {
     const maxContextTokens = getContextWindowTokens();
     const maxOutputTokens = getMaxTokens();
-    // Reserve space for output — input context = total - max_output - safety buffer
-    const availableInputTokens = maxContextTokens - maxOutputTokens - 1024;
+    // Reserve space for output — input context = total - max_output - safety buffer.
+    // Clamp to a small floor so the budget can never go negative (which would
+    // drop every message and produce an empty request → HTTP 400).
+    const availableInputTokens = Math.max(1024, maxContextTokens - maxOutputTokens - 1024);
 
-    const estimatedTokens = estimateMessageTokens(messages);
-    if (estimatedTokens <= availableInputTokens) {
-        return messages;
-    }
-
-    // Need to truncate. Keep system message (index 0 if it's role: 'system'),
-    // then keep the most recent messages.
     const systemMessages: DeepSeekMessage[] = [];
     const otherMessages: DeepSeekMessage[] = [];
 
@@ -80,7 +88,14 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
         }
     }
 
-    // Work from newest to oldest, keeping what fits
+    const estimatedTokens = estimateMessageTokens(messages);
+    if (estimatedTokens <= availableInputTokens) {
+        // Everything fits — but the sequence may still be invalid (e.g. the
+        // conversation ends mid-tool-call during auto-compact). Repair it.
+        return repairTruncatedSequence(systemMessages, otherMessages);
+    }
+
+    // Need to truncate. Keep system message, then keep the most recent messages.
     const keptMessages: DeepSeekMessage[] = [];
     let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages);
 
@@ -96,7 +111,7 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
         }
     }
 
-    const truncated = [...systemMessages, ...keptMessages];
+    const truncated = repairTruncatedSequence(systemMessages, keptMessages);
 
     log.info(
         `Context window: truncated from ${messages.length} to ${truncated.length} messages ` +
@@ -104,6 +119,54 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
     );
 
     return truncated;
+}
+
+/**
+ * Repair a message window so it is a VALID DeepSeek conversation:
+ *   - no `assistant` message with `tool_calls` as the last message (its tool
+ *     results were truncated away) — drop it
+ *   - no orphaned `tool` results whose preceding `assistant tool_calls` was
+ *     dropped — drop them
+ *   - the first non-system message must be `user` (not assistant/tool) — drop
+ *     leading assistant/tool messages until a user message leads
+ * Returns the repaired sequence (never empty when the input had messages).
+ */
+function repairTruncatedSequence(
+    systemMessages: DeepSeekMessage[],
+    kept: DeepSeekMessage[]
+): DeepSeekMessage[] {
+    const result = [...kept];
+
+    // 1. Drop trailing dangling tool groups: an `assistant` with `tool_calls`
+    //    at the very end has no following tool results → invalid. Also drop
+    //    trailing `tool` results whose assistant tool_calls was dropped.
+    while (result.length > 0) {
+        const last = result[result.length - 1];
+        if (last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
+            result.pop(); // dangling tool_calls with no results
+            continue;
+        }
+        if (last.role === 'tool') {
+            // Is this tool result's assistant tool_calls still in the window?
+            const callerId = last.tool_call_id;
+            const hasCaller = result.slice(0, -1).some(m =>
+                m.role === 'assistant' && m.tool_calls?.some(tc => tc.id === callerId)
+            );
+            if (!hasCaller) {
+                result.pop(); // orphaned tool result
+                continue;
+            }
+        }
+        break;
+    }
+
+    // 2. Drop leading non-user messages (assistant/tool) so the conversation
+    //    starts with system/user as DeepSeek requires.
+    while (result.length > 0 && result[0].role !== 'user') {
+        result.shift();
+    }
+
+    return [...systemMessages, ...result];
 }
 
 /**
