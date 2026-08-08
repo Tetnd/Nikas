@@ -17,4 +17,5 @@ test-truncation-fixed.js
 test-vision-routing.js
 test-pdf-e2e.js
 test-hallucination.js
+test-thinking.js
 extension.patched.test.js

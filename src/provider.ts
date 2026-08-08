@@ -27,7 +27,16 @@ function getOutputChannel(): vscode.OutputChannel {
 /**
  * Rough token count estimation for messages.
  * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
+ *
+ * CALIBRATED 2026-08-09: measured against the API's real usage.input_tokens,
+ * the raw ~4 chars/token estimate consistently UNDERCOUNTS by ~40%
+ * (real/est ratio ≈ 1.40, stable from ~100K to ~1M real tokens). Without the
+ * multiplier, a 1M contextWindow corresponds to ~1.39M real tokens — past the
+ * model's 1,048,576 hard ceiling — so the extension's own truncation would
+ * fire only AFTER the API starts rejecting requests with HTTP 400.
  */
+const ESTIMATE_CALIBRATION = 1.4;
+
 function estimateMessageTokens(messages: DeepSeekMessage[]): number {
     let total = 0;
     for (const msg of messages) {
@@ -49,7 +58,9 @@ function estimateMessageTokens(messages: DeepSeekMessage[]): number {
             }
         }
     }
-    return total;
+    // Calibrate the raw 4-char/token estimate to real token counts
+    // (measured real/est ≈ 1.40 on the official API).
+    return Math.ceil(total * ESTIMATE_CALIBRATION);
 }
 
 /**
@@ -547,7 +558,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const hasThinking = thinkingEnabled;
         const hasTools = (options.tools?.length ?? 0) > 0;
         if (hasThinking && hasTools) {
-            const warning = `[Nikas] WARNING: thinking mode (${getThinkingEffort()}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
+            const warning = `[Nikas] WARNING: thinking mode (${thinkingEffort}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
             getOutputChannel().appendLine(warning);
             log.warn(warning);
         }
@@ -751,6 +762,18 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             ? Math.max(effectiveMaxTokens, minThinkingTokens)
             : effectiveMaxTokens;
 
+        // Log which effort is being used (mirrors the chat-completions handler)
+        const extOpts = options as unknown as Record<string, unknown>;
+        const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
+        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}`);
+
+        if (boostedTokens !== effectiveMaxTokens) {
+            getOutputChannel().appendLine(
+                `[Nikas] Thinking mode enabled — boosting max_output_tokens from ` +
+                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`
+            );
+        }
+
         const request: DeepSeekResponsesRequest = {
             // The Responses API only supports deepseek-v4-flash (not Pro).
             model: 'deepseek-v4-flash',
@@ -765,6 +788,16 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (options.tools && options.tools.length > 0) {
             request.tools = options.tools.map(mapResponsesTool);
             request.tool_choice = 'auto';
+        }
+
+        // Detect incompatible parameter combinations (mirrors chat-completions).
+        // The Responses API can also reject thinking + tools together.
+        const hasThinking = thinkingEnabled;
+        const hasTools = (options.tools?.length ?? 0) > 0;
+        if (hasThinking && hasTools) {
+            const warning = `[Nikas] WARNING: thinking mode (${thinkingEffort}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
+            getOutputChannel().appendLine(warning);
+            log.warn(warning);
         }
 
         // Log request summary
@@ -1175,6 +1208,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
     /**
      * Rough token count estimation.
      * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
+     *
+     * Calibrated ×1.4 to match real API token counts (see
+     * ESTIMATE_CALIBRATION) so the Copilot UI meter stays accurate.
      */
     async provideTokenCount(
         _model: vscode.LanguageModelChatInformation,
@@ -1182,7 +1218,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         _token: vscode.CancellationToken
     ): Promise<number> {
         if (typeof text === 'string') {
-            return Math.ceil(text.length / 4);
+            return Math.ceil((text.length / 4) * ESTIMATE_CALIBRATION);
         }
 
         const content = typeof text.content === 'string'
@@ -1195,7 +1231,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 })
                 .join('');
 
-        return Math.ceil(content.length / 4);
+        return Math.ceil((content.length / 4) * ESTIMATE_CALIBRATION);
     }
 }
 

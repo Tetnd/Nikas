@@ -152,16 +152,28 @@ export function getOllamaBaseUrl(): string {
 export type ThinkingEffort = 'off' | 'low' | 'high' | 'max';
 
 export function getThinkingEffort(): ThinkingEffort {
-    return (getConfig().get<string>('thinkingEffort') as ThinkingEffort) ?? 'off';
+    const value = getConfig().get<string>('thinkingEffort') as ThinkingEffort;
+    // Guard against hand-edited settings.json values that aren't valid efforts
+    // (e.g. 'xhigh' or a typo) — those would otherwise be sent to the API as
+    // reasoning_effort and produce a 400.
+    if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
+        return value;
+    }
+    return 'off';
 }
 
 /**
  * Context window presets.
  *
- * DeepSeek V4 models support up to 1M tokens of input context.
+ * DeepSeek V4 models advertise up to 1M tokens of input context, but the API
+ * enforces a HARD ceiling of 1,048,576 total tokens per request (input +
+ * output). The max preset is therefore 950K, which keeps headroom below that
+ * ceiling even with thinking mode burning reasoning tokens, and after the
+ * token estimator was calibrated to real token counts (~1.4× the old ~4
+ * chars/token estimate — see ESTIMATE_CALIBRATION in provider.ts).
  * These presets let users cap the context to control costs and response speed.
  */
-export type ContextWindowPreset = '32K' | '64K' | '128K' | '256K' | '512K' | '1M';
+export type ContextWindowPreset = '32K' | '64K' | '128K' | '256K' | '512K' | '950K';
 
 export const CONTEXT_WINDOW_PRESETS: { id: ContextWindowPreset; label: string; tokens: number; description: string; recommended: boolean }[] = [
     { id: '32K', label: '32K', tokens: 32_768, description: 'Minimal — most cost-efficient, fastest responses', recommended: false },
@@ -169,11 +181,16 @@ export const CONTEXT_WINDOW_PRESETS: { id: ContextWindowPreset; label: string; t
     { id: '128K', label: '128K', tokens: 131_072, description: 'Balanced — recommended default for most use cases', recommended: true },
     { id: '256K', label: '256K', tokens: 262_144, description: 'Large — for complex document analysis', recommended: false },
     { id: '512K', label: '512K', tokens: 524_288, description: 'Extra large — for very long conversations', recommended: false },
-    { id: '1M', label: '1M', tokens: 1_000_000, description: 'Maximum — full DeepSeek context (recommended for complex agent tasks)', recommended: false },
+    { id: '950K', label: '950K', tokens: 950_000, description: 'Maximum (safe) — 950K keeps headroom below the API\'s 1,048,576-token hard ceiling even with thinking mode (recommended for complex agent tasks)', recommended: false },
 ];
 
 export function getContextWindowPreset(): ContextWindowPreset {
-    return (getConfig().get<string>('contextWindow') as ContextWindowPreset) ?? '128K';
+    const value = getConfig().get<string>('contextWindow');
+    // Legacy: the old "1M" preset is mapped to 950K so existing configs keep
+    // working but stay under the API's 1,048,576-token hard ceiling (1M
+    // estimated ≈ 1.4M real tokens → the API rejects those with HTTP 400).
+    if (value === '1M') return '950K';
+    return (value as ContextWindowPreset) ?? '128K';
 }
 
 export function getContextWindowTokens(): number {

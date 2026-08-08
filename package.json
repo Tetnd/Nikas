@@ -192,6 +192,7 @@
             "128K",
             "256K",
             "512K",
+            "950K",
             "1M"
           ],
           "enumDescriptions": [
@@ -200,9 +201,10 @@
             "131,072 tokens — Balanced, recommended for most use cases",
             "262,144 tokens — Large, for complex document analysis",
             "524,288 tokens — Extra large, for very long conversations",
-            "1,000,000 tokens — Maximum, full DeepSeek context for complex agent tasks"
+            "950,000 tokens — Maximum (safe): stays under the API's 1,048,576-token hard ceiling even with thinking mode",
+            "Legacy — mapped to 950K tokens (the old 1M preset exceeded the API's hard context ceiling)"
           ],
-          "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models."
+          "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models. Note: the API enforces a hard 1,048,576-token total per request, so the largest safe preset is 950K."
         },
         "nikas.visionModelKey": {
           "type": "string",

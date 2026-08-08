@@ -1,5 +1,7 @@
 // Tests the FIXED truncation logic (matches src/provider.ts after the fix).
 // Ensures the resulting sequence is always valid for DeepSeek.
+// NOTE: estimator is calibrated ×1.4 (mirrors ESTIMATE_CALIBRATION in provider.ts).
+const ESTIMATE_CALIBRATION = 1.4;
 
 function estimateMessageTokens(messages) {
     let total = 0;
@@ -19,7 +21,7 @@ function estimateMessageTokens(messages) {
             }
         }
     }
-    return total;
+    return Math.ceil(total * ESTIMATE_CALIBRATION);
 }
 
 // ── FIXED logic (copy of src/provider.ts after repair) ──
