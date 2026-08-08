@@ -203,9 +203,9 @@ export async function findAutoVisionModel(): Promise<vscode.LanguageModelChat | 
 
     const best = pool[0];
     visionLog.info(
-        `Auto vision: picked "${best.key}" (${best.name ?? best.id}) ` +
-        `from ${pool.length} Gemini candidate(s)` +
-        (pool === options ? ' (no Gemini — using any model)' : '')
+        `Auto vision: picked "${best.key}" (${best.name ?? best.id}) — ` +
+        `${gemini.length} Gemini candidate(s), ${options.length} total; ` +
+        (gemini.length > 0 ? 'preferred Gemini' : 'no Gemini available — using any model')
     );
 
     const model = await findVisionModelByKey(best.key);
