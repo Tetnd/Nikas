@@ -28,7 +28,14 @@
 #   $env:DEEPSEEK_API_KEY if already set) and stores it in the user profile
 #   so future terminals pick it up automatically.
 #
-#   To undo: remove the NIKAS_CLAUDE block from your PowerShell $PROFILE.
+#   AUTOMATIC MODE (recommended): this script also installs a NIKAS_CLAUDE
+#   block into your PowerShell $PROFILE, so DeepSeek env vars load into
+#   EVERY new terminal automatically — you never need to re-run this script
+#   (just set the key once, then `claude` works in any new terminal).
+#
+#   To undo the automatic mode: delete the NIKAS_CLAUDE block from
+#   $PROFILE (between the "NIKAS_CLAUDE" and "END NIKAS_CLAUDE" markers).
+#   To also forget the stored key: delete %USERPROFILE%\.nikas-claude-key.
 
 param(
     [switch]$KeyOnly  # only (re)set the API key, skip the model env vars
@@ -43,7 +50,7 @@ if (-not $env:DEEPSEEK_API_KEY -and (Test-Path $persistedKey)) {
 }
 
 if (-not $env:DEEPSEEK_API_KEY) {
-    Write-Host "Enter your DeepSeek API key (from https://platform.deepseek.com/api_keys):" -ForegroundColor Cyan
+    Write-Host "Paste your DeepSeek API key (from https://platform.deepseek.com/api_keys)." -ForegroundColor Cyan
     $env:DEEPSEEK_API_KEY = Read-Host -AsSecureString
     # Read-Host -AsSecureString returns a SecureString in some PS versions;
     # ConvertFrom-SecureString below is cross-version safe.
@@ -74,6 +81,48 @@ $env:CLAUDE_CODE_EFFORT_LEVEL = "max"
 # DeepSeek's official recommendation — matches the measured ~800K real-token
 # quality limit for DeepSeek V4 on a 1M window.
 $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = "786432"
+
+# ── 3. Auto-load into the PowerShell profile ─────────────────────────
+# Install a NIKAS_CLAUDE block into $PROFILE so DeepSeek env vars load into
+# EVERY new terminal automatically (no need to re-run this script).
+$profilePath = $PROFILE.CurrentUserAllHosts
+if (-not $profilePath) { $profilePath = $PROFILE }
+if (-not (Test-Path $profilePath)) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $profilePath) | Out-Null
+    New-Item -ItemType File -Force -Path $profilePath | Out-Null
+}
+$profileText = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+if ($profileText -notmatch 'NIKAS_CLAUDE') {
+    $block = @'
+
+# ============================================================
+# NIKAS_CLAUDE - auto-load DeepSeek for Claude Code
+# Installed by Nikas claude-deepseek.ps1. Loads the persisted
+# DeepSeek API key + env vars into every new pwsh terminal.
+# To remove: delete between the NIKAS_CLAUDE markers.
+# ============================================================
+$nikasClaudeKeyFile = "$env:USERPROFILE\.nikas-claude-key"
+if (Test-Path $nikasClaudeKeyFile) {
+    $env:DEEPSEEK_API_KEY = (Get-Content $nikasClaudeKeyFile -Raw).Trim()
+    if ($env:DEEPSEEK_API_KEY) {
+        $env:ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+        $env:ANTHROPIC_AUTH_TOKEN = $env:DEEPSEEK_API_KEY
+        $env:ANTHROPIC_MODEL = "deepseek-v4-pro[1m]"
+        $env:ANTHROPIC_DEFAULT_OPUS_MODEL = "deepseek-v4-pro[1m]"
+        $env:ANTHROPIC_DEFAULT_SONNET_MODEL = "deepseek-v4-pro[1m]"
+        $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "deepseek-v4-flash"
+        $env:CLAUDE_CODE_SUBAGENT_MODEL = "deepseek-v4-flash"
+        $env:CLAUDE_CODE_EFFORT_LEVEL = "max"
+        $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = "786432"
+    }
+}
+# ============================================================
+# END NIKAS_CLAUDE
+# ============================================================
+'@
+    Add-Content -Path $profilePath -Value $block
+    Write-Host "Installed NIKAS_CLAUDE auto-load into $profilePath" -ForegroundColor Green
+}
 
 Write-Host ""
 Write-Host "Claude Code is now pointed at DeepSeek V4:" -ForegroundColor Green
