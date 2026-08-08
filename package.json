@@ -285,6 +285,11 @@
           "type": "boolean",
           "default": false,
           "description": "Periodically check GitHub for Nikas updates (silent when up-to-date). Set nikas.updateRepo to your own release repo first."
+        },
+        "nikas.applyAgentModelsOnActivate": {
+          "type": "boolean",
+          "default": true,
+          "description": "On activation, apply the recommended Copilot agent model assignments (Explore, Plan, Utility, Utility Small, Inline Chat → DeepSeek V4 Flash Responses) for any agent the user hasn't configured yet. Idempotent — never overrides an existing choice. Disable to keep agent models untouched on fresh installs."
         }
       }
     }

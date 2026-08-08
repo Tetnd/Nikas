@@ -104,6 +104,7 @@ The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\exte
 | `nikas.patchBackupRetention` | `5` | Number of Copilot bundle backups to keep |
 | `nikas.updateRepo` | `alive2/nika` | GitHub repo used by `Nikas: Check for Updates` — **set to your own fork** |
 | `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
+| `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Utility, Utility Small, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works
 

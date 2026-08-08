@@ -65,6 +65,13 @@ export async function activate(context: vscode.ExtensionContext) {
     //   - periodically (catches external changes / VS Code updates)
     scheduleAutoPatch(context);
 
+    // Apply the recommended Copilot agent model assignments for any agent the
+    // user hasn't configured yet — a fresh install gets the maintainer's setup
+    // out of the box. Idempotent (never overrides an existing choice).
+    if (getConfig().get<boolean>('applyAgentModelsOnActivate', true)) {
+        applyDefaultAgentModels().catch(() => { /* non-fatal */ });
+    }
+
     // Optional self-update checks (only if nikas.autoCheckUpdates is enabled).
     context.subscriptions.push(scheduleAutoUpdateCheck(context));
 
@@ -628,24 +635,55 @@ async function agentModelAssignments(): Promise<void> {
 }
 
 /**
- * Quick-set agents to recommended models with one click.
- *   - Explore, Utility, Inline Chat → DeepSeek V4 Flash (fast)
- *   - Plan Agent                   → DeepSeek V4 Pro  (deep reasoning)
+ * Recommended Copilot agent model assignments.
+ *
+ * Matches the maintainer's working configuration: every agent uses the
+ * DeepSeek V4 Flash Responses model (nikas/deepseek-v4-flash-responses) —
+ * agent-native tooling with server-side web search. Applies to fresh
+ * installs via applyDefaultAgentModels() and to the one-click command
+ * setFlashForAllAgents().
+ */
+const RECOMMENDED_AGENT_MODELS = [
+    { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nikas/deepseek-v4-flash-responses' },
+    { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nikas/deepseek-v4-flash-responses' },
+    { key: 'chat.utilityModel', label: 'Utility Model', model: 'nikas/deepseek-v4-flash-responses' },
+    { key: 'chat.utilitySmallModel', label: 'Utility Small Model', model: 'nikas/deepseek-v4-flash-responses' },
+    { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nikas/deepseek-v4-flash-responses' },
+];
+
+/**
+ * Apply the recommended agent model assignments for any Copilot agent the
+ * user hasn't explicitly configured yet.
+ *
+ * Idempotent: only fills settings that have neither a global nor a workspace
+ * value (i.e. the user hasn't chosen a model), so it NEVER overrides an
+ * existing user choice. Runs once on activation so a fresh Nikas install
+ * automatically gets the maintainer's agent setup.
+ */
+async function applyDefaultAgentModels(): Promise<void> {
+    const config = vscode.workspace.getConfiguration();
+    for (const s of RECOMMENDED_AGENT_MODELS) {
+        try {
+            const info = config.inspect<string>(s.key);
+            if (info?.globalValue !== undefined || info?.workspaceValue !== undefined) continue;
+            await config.update(s.key, s.model, vscode.ConfigurationTarget.Global);
+        } catch {
+            // Some settings may be read-only or owned by another extension — ignore.
+        }
+    }
+}
+
+/**
+ * Quick-set agents to the recommended models with one click.
+ *   - Explore, Plan, Utility, Utility Small, Inline Chat → DeepSeek V4 Flash (Responses)
  */
 async function setFlashForAllAgents(): Promise<void> {
     const config = vscode.workspace.getConfiguration();
     const target = vscode.ConfigurationTarget.Global;
 
-    const settings = [
-        { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nikas/deepseek-v4-flash' },
-        { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nikas/deepseek-v4-pro' },
-        { key: 'chat.utilityModel', label: 'Utility Model', model: 'nikas/deepseek-v4-flash' },
-        { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nikas/deepseek-v4-flash' },
-    ];
-
     const confirm = await vscode.window.showInformationMessage(
         `Apply recommended agent models?\n\n` +
-        settings.map(s => `  • ${s.label} → ${s.model}`).join('\n'),
+        RECOMMENDED_AGENT_MODELS.map(s => `  • ${s.label} → ${s.model}`).join('\n'),
         { modal: true },
         'Apply'
     );
@@ -654,7 +692,7 @@ async function setFlashForAllAgents(): Promise<void> {
 
     let success = 0;
     let failed = 0;
-    for (const s of settings) {
+    for (const s of RECOMMENDED_AGENT_MODELS) {
         try {
             await config.update(s.key, s.model, target);
             success++;
@@ -669,7 +707,7 @@ async function setFlashForAllAgents(): Promise<void> {
         );
     } else {
         vscode.window.showWarningMessage(
-            `Nikas: Set ${success}/${settings.length} settings. ${failed} failed.`
+            `Nikas: Set ${success}/${RECOMMENDED_AGENT_MODELS.length} settings. ${failed} failed.`
         );
     }
 }
