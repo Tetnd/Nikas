@@ -77,7 +77,7 @@ The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\exte
 Nikas itself is an **IDE-only provider** (it registers a `LanguageModelChatProvider` inside VS Code's extension host, so the standalone Copilot CLI can't load it). To use DeepSeek V4 in a terminal agent, Claude Code can be pointed at DeepSeek's Anthropic-compatible endpoint. A ready-made setup script is included:
 
 ```powershell
-# from the repo root — configures Claude Code for DeepSeek in this terminal
+# from the repo root — configures Claude Code for DeepSeek (key prompt first run)
 .\claude-deepseek.ps1
 claude
 ```
@@ -94,6 +94,8 @@ The script prompts for your DeepSeek API key once, then sets (per DeepSeek's off
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `786432` | DeepSeek's official recommendation — matches the ~800K real-token quality limit measured for DeepSeek V4 on the 1M window |
 
 The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed file); remove it to be prompted again.
+
+**Automatic mode:** the script also installs a `NIKAS_CLAUDE` block into your PowerShell `$PROFILE`, so DeepSeek's env vars load into **every new terminal** automatically — after the first key setup, `claude` just works. To undo: delete the `NIKAS_CLAUDE` block from `$PROFILE`, and delete `%USERPROFILE%\.nikas-claude-key` to forget the key.
 
 ## Commands
 
