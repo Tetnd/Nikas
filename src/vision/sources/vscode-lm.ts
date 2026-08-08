@@ -66,6 +66,13 @@ const EXCLUDED_VISION_MODEL_VENDORS = new Set([
     'deepseek',
     'claude-code',
     'copilotcli',
+    // Nikas's own models (nikas/gemini-*, nikas/gemma4:*) are already offered
+    // under the "Nikas Native" category in the picker and route to the direct
+    // API (Gemini key / Ollama). Listing them under "Copilot Models" is
+    // misleading — picking them would NOT use Copilot quota. The legacy
+    // "nika" vendor from the original Nika extension is excluded too.
+    'nikas',
+    'nika',
 ]);
 
 // A minimal valid 1x1 pixel PNG for probing vision capability.

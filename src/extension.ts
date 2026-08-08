@@ -71,7 +71,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nikas.chooseProvider', () => chooseProvider()),
-        vscode.commands.registerCommand('nikas.chooseVisionModel', () => chooseVisionModel()),
+        vscode.commands.registerCommand('nikas.chooseVisionModel', () => chooseVisionModel(context)),
         vscode.commands.registerCommand('nikas.setOllamaHost', () => setOllamaHost()),
         vscode.commands.registerCommand('nikas.inputDeepseekToken', () => inputDeepseekToken(context)),
         vscode.commands.registerCommand('nikas.inputGeminiToken', () => inputGeminiToken(context)),
@@ -387,7 +387,7 @@ async function setOllamaHost(): Promise<void> {
  * - Nikas-native models → set `visionModel`, clear `visionModelKey`
  * - Copilot models    → set `visionModelKey` (vendor/id), clear `visionModel`
  */
-async function chooseVisionModel(): Promise<void> {
+async function chooseVisionModel(context: vscode.ExtensionContext): Promise<void> {
     const config = getConfig();
     const currentVisionModel = config.get<string>('visionModel');
     const currentVisionModelKey = getVisionModelKey();
@@ -434,6 +434,21 @@ async function chooseVisionModel(): Promise<void> {
             await config.update('visionModelKey', undefined, vscode.ConfigurationTarget.Global);
             const modelName = VISION_MODELS.find(m => m.id === modelId)?.name ?? modelId;
             vscode.window.showInformationMessage(`Nikas: Selected ${modelName} for vision`);
+
+            // If the chosen Nikas-native model needs a Gemini API key, verify it
+            // is configured so the user gets immediate feedback instead of a
+            // silent "no vision model" failure on the next image.
+            const selectedModel = VISION_MODELS.find(m => m.id === modelId);
+            if (selectedModel?.requiresApiKey) {
+                const geminiKey = await context.secrets.get('nikas.gemini.apiKey');
+                if (!geminiKey) {
+                    vscode.window.showWarningMessage(
+                        'Nikas: Gemini API key is not configured. ' +
+                        'Image descriptions will not work until you set it — ' +
+                        'run "Nikas: Manage → Input Gemini API Key" (or use "Copilot Models" instead).'
+                    );
+                }
+            }
         }
     } else {
         // Phase 2b: Copilot models — fetch live from selectChatModels

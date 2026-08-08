@@ -14,4 +14,5 @@ test-patches.js
 apply-patches.js
 test-rotation.js
 test-truncation-fixed.js
+test-vision-routing.js
 extension.patched.test.js
