@@ -278,8 +278,8 @@
         },
         "nikas.updateRepo": {
           "type": "string",
-          "default": "alive2/nika",
-          "description": "GitHub repo (owner/repo) used by 'Nikas: Check for Updates'. Point this at your own fork once you publish Nikas releases."
+          "default": "Tetnd/Nikas",
+          "description": "GitHub repo (owner/repo) used by 'Nikas: Check for Updates'. Points at this project's own fork by default."
         },
         "nikas.autoCheckUpdates": {
           "type": "boolean",

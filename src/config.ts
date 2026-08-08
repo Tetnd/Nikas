@@ -274,11 +274,11 @@ export function getPatchBackupRetention(): number {
 
 /**
  * GitHub repo (`owner/repo`) used for Nikas self-updates.
- * Point this at your own fork once you publish Nikas releases.
+ * Points at this project's own fork by default.
  */
 export function getUpdateRepo(): string {
     const v = getConfig().get<string>('updateRepo');
-    return v?.trim() || 'alive2/nika';
+    return v?.trim() || 'Tetnd/Nikas';
 }
 
 /**

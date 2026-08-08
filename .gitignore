@@ -5,8 +5,3 @@ out/
 CachedProfilesData/
 logs/
 machineid
-
-# Contains the user's DeepSeek API key (prompted + persisted at runtime).
-# Tracked history is clean, but the working copy can hold a real key, so it
-# must never be staged. Run the script from a fresh clone.
-claude-deepseek.ps1

@@ -18,5 +18,4 @@ test-vision-routing.js
 test-pdf-e2e.js
 test-hallucination.js
 test-thinking.js
-claude-deepseek.ps1
 extension.patched.test.js
