@@ -116,6 +116,10 @@ export async function resolveImageMessages(
     const stats = createVisionResolutionStats();
     collectInputImageStats(messages, stats);
 
+    // Diagnosability: summarize every data part (images, PDFs, unknown) seen
+    // across the request so attachment losses are visible in the log.
+    logDataPartSummary(messages);
+
     // Clear the agent-loop cache on new user turns
     clearSessionCacheIfNewTurn(messages);
 
@@ -426,6 +430,29 @@ function collectInputImageStats(
         if (imageParts === 0) continue;
         stats.inputImageMessages += 1;
         stats.inputImageParts += imageParts;
+    }
+}
+
+/** Log a one-line summary of all data parts (image/PDF/unknown) in the request. */
+function logDataPartSummary(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+): void {
+    const byMime = new Map<string, number>();
+    let total = 0;
+    for (const message of messages) {
+        const content = message.content as readonly vscode.LanguageModelInputPart[] | undefined;
+        if (!content) continue;
+        for (const part of content) {
+            const p = part as { data?: unknown; mimeType?: unknown } | null;
+            if (!p || typeof p !== 'object' || p === null) continue;
+            if (!(p.data instanceof Uint8Array) || typeof p.mimeType !== 'string') continue;
+            byMime.set(p.mimeType, (byMime.get(p.mimeType) ?? 0) + 1);
+            total += 1;
+        }
+    }
+    if (total > 0) {
+        const summary = [...byMime.entries()].map(([m, n]) => `${m} x${n}`).join(', ');
+        visionLog.info(`Request data parts (${total}): ${summary}`);
     }
 }
 

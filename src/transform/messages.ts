@@ -355,7 +355,13 @@ export function buildContentParts(
                 });
             } else if (isPdfMime(part.mimeType)) {
                 // DeepSeek cannot ingest the PDF binary — send its text instead.
-                contentParts.push({ type: 'text', text: pdfDataToTextContent(part.data) });
+                const text = pdfDataToTextContent(part.data);
+                log.info(`[PDF] data part mime=${part.mimeType} bytes=${part.data.byteLength} → text (${text.length} chars)`);
+                contentParts.push({ type: 'text', text });
+            } else {
+                // Diagnosability: a data part we don't recognize is silently
+                // dropped — log it so attachment losses are visible.
+                log.info(`[PDF] UNKNOWN data part dropped: mime=${part.mimeType} bytes=${part.data.byteLength}`);
             }
         }
     }
