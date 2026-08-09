@@ -159,8 +159,14 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
             // minified endpoint variable name. Without this, a bundle that already
             // has the patched form with a renamed endpoint (e.g. `!kkn(t)`) would be
             // falsely reported as "P4 missing" forever.
+            //
+            // The `[\s\S]*?` between the `.pdf$` test and the `if(!kkn(...))` gate
+            // tolerates any instrumentation/statements injected between them (e.g.
+            // a `__trace('B-PDF-ENTRY ...')` debug call seen on some builds). It
+            // still does NOT match an unpatched gate, because that has
+            // `!...supportsVision||!kkn(...)` — i.e. no `if(!kkn(` sequence.
             appliedRegexes: [
-                /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{if\(!kkn\([\w$]+(?:\.[\w$]+)*\)\)\{/,
+                /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{[\s\S]*?if\(!kkn\([\w$]+(?:\.[\w$]+)*\)\)\{/,
             ],
             replacements: [
                 {
