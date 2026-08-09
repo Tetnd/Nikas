@@ -20,5 +20,6 @@ test-hallucination.js
 test-thinking.js
 test-directive.js
 test-reasoning.js
+test-routing.js
 ab-thinking.js
 extension.patched.test.js
