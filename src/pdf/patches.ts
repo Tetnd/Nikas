@@ -31,6 +31,13 @@ export interface PatchDefinition {
     description: string;
     /** If ANY of these strings is present, the patch is considered applied. */
     appliedMarkers: string[];
+    /**
+     * Optional regex-based applied markers. If any of these regexes matches,
+     * the patch is considered applied. Useful when the exact applied state
+     * depends on a renamed minified symbol (e.g. the endpoint variable) that
+     * a fixed string can't capture.
+     */
+    appliedRegexes?: RegExp[];
     /** Exact find/replace pairs; the first whose `find` occurs wins. */
     replacements: PatchReplacement[];
     /** Regex fallbacks tried only if no exact find matches (version drift). */
@@ -147,6 +154,14 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
             appliedMarkers: [
                 `if(/\\.pdf$/i.test(o.path)){if(!kkn(this.promptEndpoint)){`,
             ],
+            // The gate is already correct (no supportsVision requirement) when the
+            // PDF branch is gated only by `!kkn(<endpoint>)` — regardless of the
+            // minified endpoint variable name. Without this, a bundle that already
+            // has the patched form with a renamed endpoint (e.g. `!kkn(t)`) would be
+            // falsely reported as "P4 missing" forever.
+            appliedRegexes: [
+                /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{if\(!kkn\([\w$]+(?:\.[\w$]+)*\)\)\{/,
+            ],
             replacements: [
                 {
                     // Current (2026-08) form: negated gate.
@@ -186,9 +201,12 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                 },
             ],
             diagnosticProbes: [
-                `supportsVision`,
+                // The error message only appears inside the actual PDF gate, so it
+                // points the diagnostic at the right spot. (Plain "supportsVision"
+                // is too generic — it also matches model-capability constructors.)
                 `does not support PDF documents`,
                 `.pdf$/i.test(o.path)`,
+                `kkn(`,
             ],
             core: true,
         },

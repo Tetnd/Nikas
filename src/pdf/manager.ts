@@ -130,11 +130,15 @@ export interface PatchHealth {
 }
 
 export function healthCheck(content: string, patches: PatchDefinition[]): PatchHealth[] {
-    return patches.map(p => ({
-        id: p.id,
-        description: p.description,
-        applied: p.appliedMarkers.some(m => content.includes(m)),
-    }));
+    return patches.map(p => {
+        const stringApplied = p.appliedMarkers.some(m => content.includes(m));
+        const regexApplied = (p.appliedRegexes ?? []).some(re => re.test(content));
+        return {
+            id: p.id,
+            description: p.description,
+            applied: stringApplied || regexApplied,
+        };
+    });
 }
 
 export interface ApplyOutcome {
