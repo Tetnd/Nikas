@@ -545,9 +545,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // When thinking mode is enabled, ensure enough headroom for reasoning
         // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
         // alone, leaving nothing for visible output if max_tokens is too low.
+        // NOTE: at `max` effort the model can burn the ENTIRE 16K budget on
+        // reasoning and return an empty response (observed in field logs
+        // 2026-08-09: completion=16,384, finish_reason=length, text="") —
+        // so max gets a larger 32K floor.
         const effectiveMaxTokens = getMaxTokens();
         const thinkingEnabled = thinkingEffort !== 'off';
-        const minThinkingTokens = 16_384;
+        const minThinkingTokens = thinkingEffort === 'max' ? 32_768 : 16_384;
         const boostedTokens = thinkingEnabled
             ? Math.max(effectiveMaxTokens, minThinkingTokens)
             : effectiveMaxTokens;
@@ -575,13 +579,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             request.tool_choice = 'auto';
         }
 
-        // Detect incompatible parameter combinations
-        const hasThinking = thinkingEnabled;
-        const hasTools = (options.tools?.length ?? 0) > 0;
-        if (hasThinking && hasTools) {
-            const warning = `[Nikas] WARNING: thinking mode (${thinkingEffort}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
-            getOutputChannel().appendLine(warning);
-            log.warn(warning);
+        // Note (2026-08-09): the old "thinking+tools may 400" warning was
+        // REMOVED — verified false. The real 400 was the missing
+        // reasoning_text round-trip (fixed in v0.7.9); thinking+tools works
+        // fine now. Log at verbose only for diagnostics.
+        if (thinkingEnabled) {
+            log.verbose(
+                `Thinking mode (${thinkingEffort}) with ${options.tools?.length ?? 0} tool(s) — reasoning round-trip enabled`
+            );
         }
 
         // Validate message sequence order before sending
@@ -798,9 +803,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
-        // Same headroom boost as chat completions: leave room for reasoning tokens
+        // Same headroom boost as chat completions: leave room for reasoning
+        // tokens. `max` effort gets a larger 32K floor (it can burn the whole
+        // 16K budget on reasoning and return an empty response — observed in
+        // field logs 2026-08-09).
         const effectiveMaxTokens = getMaxTokens();
-        const minThinkingTokens = 16_384;
+        const minThinkingTokens = thinkingEffort === 'max' ? 32_768 : 16_384;
         const boostedTokens = thinkingEnabled
             ? Math.max(effectiveMaxTokens, minThinkingTokens)
             : effectiveMaxTokens;
@@ -834,14 +842,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             request.tool_choice = 'auto';
         }
 
-        // Detect incompatible parameter combinations (mirrors chat-completions).
-        // The Responses API can also reject thinking + tools together.
-        const hasThinking = thinkingEnabled;
-        const hasTools = (options.tools?.length ?? 0) > 0;
-        if (hasThinking && hasTools) {
-            const warning = `[Nikas] WARNING: thinking mode (${thinkingEffort}) combined with ${options.tools!.length} tool(s). DeepSeek API may reject requests that include both thinking and tool parameters simultaneously. If you get a 400 error, try disabling thinking mode in settings.`;
-            getOutputChannel().appendLine(warning);
-            log.warn(warning);
+        // Note (2026-08-09): the old "thinking+tools may 400" warning was
+        // REMOVED — verified false. The real 400 was the missing
+        // reasoning_text round-trip (fixed in v0.7.9); thinking+tools works
+        // fine now. Log at verbose only for diagnostics.
+        if (thinkingEnabled) {
+            log.verbose(
+                `Thinking mode (${thinkingEffort}) with ${options.tools?.length ?? 0} tool(s) — reasoning round-trip enabled`
+            );
         }
 
         // Log request summary
