@@ -4,7 +4,7 @@ import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
 import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch } from './config.js';
-import { setLogLevel } from './log.js';
+import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
 import {
@@ -31,6 +31,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Sync log level from settings on startup
     setLogLevel(getLogLevelSetting());
+
+    // Log the loaded version so the running build is always identifiable in
+    // the log — an installed update only takes effect after a window reload.
+    const version: unknown = context.extension.packageJSON?.version;
+    log.info(`Nikas v${String(version ?? 'unknown')} activated`);
 
     // Listen for log level changes in settings
     context.subscriptions.push(
