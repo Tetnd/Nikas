@@ -194,7 +194,7 @@ export function createVisionMarkerBindings(
             if (candidate.role !== vscode.LanguageModelChatMessageRole.User) {
                 continue;
             }
-            if (getVisionParts(candidate).length === 0) {
+            if (getImageParts(candidate).length === 0) {
                 continue;
             }
 

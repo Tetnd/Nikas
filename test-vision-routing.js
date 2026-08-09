@@ -134,15 +134,15 @@ check('auto falls back to any model when no Gemini', autoSelect(noGemini) === 'c
 // Empty list → undefined
 check('auto returns undefined when no models', autoSelect([]) === undefined);
 
-// 5. PDF attachment routing (mirrors pipeline.ts — which describers can read PDFs)
-console.log('\n=== 5. PDF attachment routing ===');
-function canDescribePdfs(source) { return source !== 'vscode-lm'; }
+// 5. PDF data-part detection (mirrors src/vision/replay.ts isPdfDataPart —
+// PDFs are NOT routed to vision; they pass through to the local
+// text-extraction fallback in src/transform/messages.ts, the proven-working
+// v0.7.13 behavior)
+console.log('\n=== 5. PDF data-part detection ===');
 function isPdfDataPart(mimeType) {
     const m = (mimeType || '').toLowerCase();
     return m === 'application/pdf' || m.endsWith('/pdf');
 }
-check('api-endpoint (Gemini direct) can describe PDFs', canDescribePdfs('api-endpoint') === true);
-check('vscode-lm (Copilot model) cannot describe PDFs', canDescribePdfs('vscode-lm') === false);
 check('application/pdf is a PDF data part', isPdfDataPart('application/pdf') === true);
 check('image/png is NOT a PDF data part', isPdfDataPart('image/png') === false);
 check('empty mime is NOT a PDF data part', isPdfDataPart('') === false);

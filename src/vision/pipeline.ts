@@ -9,10 +9,7 @@ import {
     createVisionReplayText,
     createImageDescriptionText,
     getImageParts,
-    getPdfParts,
-    getVisionParts,
-    getNonVisionParts,
-    isImageDataPart,
+    getNonImageParts,
 } from './replay.js';
 import type {
     VisionDescriber,
@@ -148,25 +145,24 @@ export async function resolveImageMessages(
     for (const [messageIndex, message] of messages.entries()) {
         if (token.isCancellationRequested) break;
 
-        const visionParts = getVisionParts(message);
-        if (visionParts.length === 0) {
-            // No images/PDFs — pass through unchanged
+        const imageParts = getImageParts(message);
+        if (imageParts.length === 0) {
+            // No images — pass through unchanged (PDFs stay as non-image parts
+            // and reach the local text-extraction fallback)
             result.push(message as vscode.LanguageModelChatRequestMessage);
             continue;
         }
 
-        const imageParts = getImageParts(message);
-        const pdfParts = getPdfParts(message);
-        const nonVisionParts = getNonVisionParts(message);
+        const nonImageParts = getNonImageParts(message);
 
         // Case A: Replay marker found — use cached description, no API call
         const replayText = markerBindings.get(messageIndex);
         if (replayText) {
             stats.replayedImageMessages += 1;
-            stats.droppedImageParts += visionParts.length;
+            stats.droppedImageParts += imageParts.length;
             result.push(
                 createResolvedMessage(message, [
-                    ...nonVisionParts,
+                    ...nonImageParts,
                     new vscode.LanguageModelTextPart(replayText),
                 ]),
             );
@@ -177,18 +173,19 @@ export async function resolveImageMessages(
         if (messageIndex === currentImageMessageIndex) {
             stats.currentImageMessages += 1;
 
-            // Check agent-loop cache first — same attachment might have been
+            // Check agent-loop cache first — same image might have been
             // described in a previous turn (e.g. the user re-asks with the
             // same attachment). Skip the API call if we have it cached.
-            const cachedText = getCachedVisionByImage(visionParts);
+            const cachedText = getCachedVisionByImage(imageParts);
             if (cachedText !== undefined) {
-                // Empty string = previously failed — keep PDFs so the local
-                // text-extraction fallback can still pull readable text; drop images.
+                // Empty string = previously failed — drop images silently.
+                // (PDFs are NOT vision parts; they survive in nonImageParts
+                // and reach the local text-extraction fallback.)
                 if (cachedText === '') {
-                    visionLog.info(`Skipping failed attachment in message [${messageIndex}] (cached as failed)`);
+                    visionLog.info(`Skipping failed image in message [${messageIndex}] (cached as failed)`);
                     stats.omittedImageMessages += 1;
                     stats.droppedImageParts += imageParts.length;
-                    result.push(createResolvedMessage(message, [...nonVisionParts, ...pdfParts]));
+                    result.push(createResolvedMessage(message, nonImageParts));
                     continue;
                 }
                 visionLog.info(`Reused session-cached vision for current message [${messageIndex}]`);
@@ -197,7 +194,7 @@ export async function resolveImageMessages(
                 stats.markerVisionTextChars = cachedText.length;
                 result.push(
                     createResolvedMessage(message, [
-                        ...nonVisionParts,
+                        ...nonImageParts,
                         new vscode.LanguageModelTextPart(cachedText),
                     ]),
                 );
@@ -209,22 +206,9 @@ export async function resolveImageMessages(
                 visionDescriber = await getDescriber();
             }
 
-            // Copilot LM models (GPT-4o, Claude, ...) accept images but NOT
-            // PDF documents. Direct-API describers (Gemini, Gemma4) handle
-            // `application/pdf` natively — send everything to them.
-            const canDescribePdfs = visionDescriber?.source !== 'vscode-lm';
-            const describeParts = canDescribePdfs ? visionParts : imageParts;
-            if (pdfParts.length > 0 && !canDescribePdfs) {
-                visionLog.warn(
-                    'PDF attachment + Copilot LM vision model: Copilot models do not accept PDFs — ' +
-                    'describing images only; the PDF falls back to local text extraction. ' +
-                    'Pick a Nikas-native Gemini model to have PDFs read by Gemini vision.'
-                );
-            }
-
             const visionResolution = await resolveCurrentVisionText(
-                describeParts,
-                nonVisionParts,
+                imageParts,
+                nonImageParts,
                 visionDescriber,
                 stats,
                 token,
@@ -243,48 +227,40 @@ export async function resolveImageMessages(
             // unavailable we don't want to replay "[Image Description unavailable]"
             // on every subsequent turn. Instead, mark as failed so we skip silently.
             if (!visionResolution.failureNotice && !missingVisionProxy) {
-                setCachedVisionByImage(visionParts, visionText);
+                setCachedVisionByImage(imageParts, visionText);
             } else {
-                markFailedImage(visionParts);
+                markFailedImage(imageParts);
             }
 
-            // Keep PDF parts when they were not described (Copilot LM model,
-            // no describer available, or vision failed) — the transform's
-            // local text-extraction fallback then still delivers the PDF's
-            // readable text to the model.
-            const keepPdfs =
-                pdfParts.length > 0 &&
-                (!canDescribePdfs || missingVisionProxy || visionResolution.failureNotice !== undefined);
             result.push(
                 createResolvedMessage(message, [
-                    ...nonVisionParts,
-                    ...(keepPdfs ? pdfParts : []),
+                    ...nonImageParts,
                     new vscode.LanguageModelTextPart(visionText),
                 ]),
             );
             continue;
         }
 
-        // Case C: Old message with attachments and no marker — check session
-        // cache first, then fall back to dropping images (PDFs are kept so the
-        // local text-extraction fallback still works).
-        const cachedText = getCachedVisionByImage(visionParts);
+        // Case C: Old image message with no marker — check session cache
+        // first, then fall back to dropping images. Non-image parts (text,
+        // PDFs) always survive — PDFs reach the local text-extraction
+        // fallback in vscodeMessagesToDeepSeek.
+        const cachedText = getCachedVisionByImage(imageParts);
         if (cachedText !== undefined) {
-            // Empty string = previously failed — keep PDFs for local text
-            // extraction; drop images silently.
+            // Empty string = previously failed — drop images silently.
             if (cachedText === '') {
-                visionLog.info(`Skipping failed attachment in message [${messageIndex}] (cached as failed)`);
+                visionLog.info(`Skipping failed image in message [${messageIndex}] (cached as failed)`);
                 stats.omittedImageMessages += 1;
                 stats.droppedImageParts += imageParts.length;
-                result.push(createResolvedMessage(message, [...nonVisionParts, ...pdfParts]));
+                result.push(createResolvedMessage(message, nonImageParts));
                 continue;
             }
             stats.replayedImageMessages += 1;
-            stats.droppedImageParts += visionParts.length;
-            visionLog.info(`Reused session-cached vision for message [${messageIndex}] (${visionParts.length} attachment(s))`);
+            stats.droppedImageParts += imageParts.length;
+            visionLog.info(`Reused session-cached vision for message [${messageIndex}] (${imageParts.length} image(s))`);
             result.push(
                 createResolvedMessage(message, [
-                    ...nonVisionParts,
+                    ...nonImageParts,
                     new vscode.LanguageModelTextPart(cachedText),
                 ]),
             );
@@ -293,11 +269,11 @@ export async function resolveImageMessages(
 
         visionLog.info(`No cache hit for message [${messageIndex}] — omitting ${imageParts.length} image(s)`);
 
-        // Case D: Truly old attachment with no marker and no cache — drop
-        // images, but KEEP PDFs so local text extraction still works.
+        // Case D: Truly old image with no marker and no cache — drop images,
+        // keep everything else (text, PDFs).
         stats.omittedImageMessages += 1;
         stats.droppedImageParts += imageParts.length;
-        result.push(createResolvedMessage(message, [...nonVisionParts, ...pdfParts]));
+        result.push(createResolvedMessage(message, nonImageParts));
     }
 
     return {
@@ -446,10 +422,10 @@ function collectInputImageStats(
     stats: VisionResolutionStats,
 ): void {
     for (const message of messages) {
-        const visionParts = getVisionParts(message).length;
-        if (visionParts === 0) continue;
+        const imageParts = getImageParts(message).length;
+        if (imageParts === 0) continue;
         stats.inputImageMessages += 1;
-        stats.inputImageParts += visionParts;
+        stats.inputImageParts += imageParts;
     }
 }
 
@@ -470,7 +446,7 @@ function findCurrentImageMessageIndex(
         if (message.role !== vscode.LanguageModelChatMessageRole.User) {
             continue;
         }
-        if (getVisionParts(message).length > 0) {
+        if (getImageParts(message).length > 0) {
             return index;
         }
     }
