@@ -294,8 +294,22 @@ export function getMessageText(
     return text;
 }
 
+/**
+ * Structural data-part check — deliberately NO `instanceof` (matches
+ * src/transform/messages.ts isDataPart). PDF/image parts created by the
+ * patched Copilot bundle cross an extension-host realm, so
+ * `part instanceof vscode.LanguageModelDataPart` is unreliable: the part
+ * arrives as a plain `{ data: Uint8Array, mimeType: string }` object
+ * (observed 2026-08-09 — text extraction worked, vision skipped the PDF).
+ */
+function isDataPartLike(part: unknown): part is { data: Uint8Array; mimeType: string } {
+    return typeof part === 'object' && part !== null
+        && (part as { data?: unknown }).data instanceof Uint8Array
+        && typeof (part as { mimeType?: unknown }).mimeType === 'string';
+}
+
 export function isImageDataPart(part: unknown): part is vscode.LanguageModelDataPart {
-    return part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/');
+    return isDataPartLike(part) && part.mimeType.startsWith('image/');
 }
 
 /**
@@ -304,7 +318,7 @@ export function isImageDataPart(part: unknown): part is vscode.LanguageModelData
  * text-extraction fallback in vscodeMessagesToDeepSeek.
  */
 export function isPdfDataPart(part: unknown): part is vscode.LanguageModelDataPart {
-    return part instanceof vscode.LanguageModelDataPart && isPdfMime(part.mimeType);
+    return isDataPartLike(part) && isPdfMime(part.mimeType);
 }
 
 /** Any data part the vision pipeline may handle: images or PDFs. */

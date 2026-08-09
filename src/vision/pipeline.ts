@@ -248,12 +248,13 @@ export async function resolveImageMessages(
                 markFailedImage(visionParts);
             }
 
-            // Keep PDF parts when they were not described (Copilot LM model) or
-            // vision failed — the transform's local text-extraction fallback
-            // then still delivers the PDF's readable text to the model.
+            // Keep PDF parts when they were not described (Copilot LM model,
+            // no describer available, or vision failed) — the transform's
+            // local text-extraction fallback then still delivers the PDF's
+            // readable text to the model.
             const keepPdfs =
                 pdfParts.length > 0 &&
-                (!canDescribePdfs || visionResolution.failureNotice !== undefined);
+                (!canDescribePdfs || missingVisionProxy || visionResolution.failureNotice !== undefined);
             result.push(
                 createResolvedMessage(message, [
                     ...nonVisionParts,

@@ -147,5 +147,21 @@ check('application/pdf is a PDF data part', isPdfDataPart('application/pdf') ===
 check('image/png is NOT a PDF data part', isPdfDataPart('image/png') === false);
 check('empty mime is NOT a PDF data part', isPdfDataPart('') === false);
 
+// Structural (duck-typed) part check — patched-bundle parts cross an
+// extension-host realm, so instanceof fails; the pipeline must accept plain
+// {data, mimeType} objects (mirrors src/vision/replay.ts isDataPartLike).
+function isDataPartLike(part) {
+    return typeof part === 'object' && part !== null
+        && part.data instanceof Uint8Array
+        && typeof part.mimeType === 'string';
+}
+function isVisionDataPart(part) {
+    return isDataPartLike(part) && (part.mimeType.startsWith('image/') || isPdfDataPart(part.mimeType));
+}
+check('plain {data,mimeType} PDF object is a vision part', isVisionDataPart({ data: new Uint8Array([1]), mimeType: 'application/pdf' }) === true);
+check('plain PNG object is a vision part', isVisionDataPart({ data: new Uint8Array([1]), mimeType: 'image/png' }) === true);
+check('object without mime is NOT a vision part', isVisionDataPart({ data: new Uint8Array([1]) }) === false);
+check('null is NOT a vision part', isVisionDataPart(null) === false);
+
 console.log(`\n===== ${pass} passed, ${fail} failed =====`);
 process.exit(fail ? 1 : 0);
