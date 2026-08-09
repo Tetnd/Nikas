@@ -30,10 +30,12 @@ function getOutputChannel(): vscode.OutputChannel {
 /**
  * Model-picker metadata (non-public API surface, same shape Copilot Chat
  * consumes). `isBYOK` marks the model as bring-your-own-key so Copilot
- * renders the provider appropriately (upstream Vizards #162).
+ * renders the provider appropriately (upstream Vizards #162). Only
+ * genuinely bring-your-own-key models (Gemini, Gemma) carry the flag;
+ * DeepSeek models deliberately do NOT so they stay plain Nikas models.
  */
 type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
-    isBYOK: true;
+    isBYOK?: true;
     configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
 };
 
@@ -380,7 +382,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
                     capabilities: m.capabilities,
                     detail: m.detail,
-                    isBYOK: true,
                 };
 
                 // Both Flash and Pro support thinking — add the per-model dropdown
@@ -402,7 +403,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 maxOutputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxOutputTokens, effectiveOutputTokens),
                 capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
-                isBYOK: true,
             };
             responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
             models.push(responsesModelInfo);
