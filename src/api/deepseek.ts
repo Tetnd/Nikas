@@ -133,12 +133,15 @@ export async function streamDeepSeekChat(
     const decoder = new TextDecoder();
     let buffer = '';
     const pendingToolCalls = new Map<number, PendingToolCall>();
-    let hasCompleted = false;
     let receivedContent = false;
     let receivedToolCalls = false;
     let finalFinishReason: string | null | undefined;
     let loggedModelIdentity = false;
     let reasoningText = '';
+    // Some OpenAI-compatible providers emit usage on every streaming chunk.
+    // Keep only the LATEST value and report it ONCE when the stream completes
+    // (upstream #145 — reporting each chunk produced duplicate usage parts).
+    let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
 
     try {
         while (true) {
@@ -213,13 +216,12 @@ export async function streamDeepSeekChat(
                         }
                     }
 
-                    // Track usage from final chunk
+                    // Track usage (latest value; reported once at stream end)
                     if (parsed.usage) {
-                        onComplete({
+                        latestUsage = {
                             promptTokens: parsed.usage.prompt_tokens,
                             completionTokens: parsed.usage.completion_tokens,
-                        });
-                        hasCompleted = true;
+                        };
                     }
                 } catch {
                     // Skip unparseable SSE lines
@@ -260,11 +262,10 @@ export async function streamDeepSeekChat(
                             }
                         }
                         if (parsed.usage) {
-                            onComplete({
+                            latestUsage = {
                                 promptTokens: parsed.usage.prompt_tokens,
                                 completionTokens: parsed.usage.completion_tokens,
-                            });
-                            hasCompleted = true;
+                            };
                         }
                     } catch {
                         // Skip unparseable buffer data
@@ -274,10 +275,9 @@ export async function streamDeepSeekChat(
         }
 
         // Always signal completion so VS Code's agent loop can finalize,
-        // even if the API didn't send a usage chunk.
-        if (!hasCompleted) {
-            onComplete();
-        }
+        // even if the API didn't send a usage chunk. Report usage exactly
+        // ONCE (the latest value) — dedupe fix (upstream #145).
+        onComplete(latestUsage);
     } finally {
         reader.releaseLock();
     }
@@ -357,12 +357,14 @@ export async function streamDeepSeekResponses(
     // Function calls arrive as output_item.added (call_id/name) then
     // function_call_arguments.delta (args), keyed by output_index.
     const pendingCalls = new Map<number, PendingToolCall>();
-    let hasCompleted = false;
     let receivedContent = false;
     let receivedToolCalls = false;
     let finalFinishReason: string | null | undefined;
     let failedMessage: string | undefined;
     let reasoningText = '';
+    // Latest usage value; reported exactly once at stream end (dedupe fix,
+    // upstream #145).
+    let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
 
     /**
      * Process one `data:` payload (a single Responses SSE event).
@@ -460,11 +462,11 @@ export async function streamDeepSeekResponses(
                 }
                 const usage = resp?.usage;
                 if (usage) {
-                    hasCompleted = true;
-                    onComplete({
+                    // Keep the latest value; reported once at stream end.
+                    latestUsage = {
                         promptTokens: usage.input_tokens,
                         completionTokens: usage.output_tokens,
-                    });
+                    };
                 }
                 break;
             }
@@ -512,10 +514,9 @@ export async function streamDeepSeekResponses(
         }
 
         // Always signal completion so VS Code's agent loop can finalize,
-        // even if the API didn't send a usage event.
-        if (!hasCompleted) {
-            onComplete();
-        }
+        // even if the API didn't send a usage event. Report usage exactly
+        // ONCE (the latest value) — dedupe fix (upstream #145).
+        onComplete(latestUsage);
 
         if (failedMessage) {
             throw new Error(failedMessage);

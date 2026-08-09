@@ -5,7 +5,7 @@
 //      reasoningEffort) resolution + fallback to nikas.thinkingEffort
 //   2. buildThinkingParams       — chat-completions wire format
 //   3. buildResponsesThinkingParams — Responses API wire format
-//   4. boostedTokens             — max_tokens headroom when thinking is on
+//   4. boostedTokens             — max_tokens sent as-is (boost removed 2026-08-09)
 //   5. CRITICAL: "off" must ALWAYS send the disabling param. DeepSeek V4
 //      enables thinking BY DEFAULT when the param is absent — it silently
 //      burns the whole output budget on reasoning and returns empty text
@@ -52,13 +52,10 @@ function buildResponsesThinkingParams(effort) {
     return { reasoning: { effort } };
 }
 
-function boostedTokens(thinkingEnabled, effectiveMaxTokens, effort) {
-    // `max` effort gets a 32K floor — it can burn the whole 16K budget on
-    // reasoning and return an empty response (field-observed 2026-08-09).
-    const minThinkingTokens = effort === 'max' ? 32_768 : 16_384;
-    return thinkingEnabled
-        ? Math.max(effectiveMaxTokens, minThinkingTokens)
-        : effectiveMaxTokens;
+function boostedTokens(_thinkingEnabled, effectiveMaxTokens, _effort) {
+    // NOTE (2026-08-09): the boost was REMOVED — the configured maxTokens is
+    // sent as-is for every effort level, thinking on or off.
+    return effectiveMaxTokens;
 }
 
 // Effective effort used by the handlers (from dropdown / saved setting).
@@ -104,12 +101,12 @@ check('max → reasoning max', JSON.stringify(buildResponsesThinkingParams('max'
 console.log('\n=== 4. max_tokens boost (boostedTokens) ===');
 check('thinking off + 8K → 8K (no boost)', boostedTokens(false, 8192, 'off') === 8192);
 check('thinking off + 4K → 4K (no boost)', boostedTokens(false, 4096, 'off') === 4096);
-check('thinking on(low) + 8K → 16K (boosted)', boostedTokens(true, 8192, 'low') === 16384);
-check('thinking on(high) + 4K → 16K (boosted)', boostedTokens(true, 4096, 'high') === 16384);
-check('thinking on(max) + 8K → 32K (max floor)', boostedTokens(true, 8192, 'max') === 32768);
-check('thinking on(max) + 16K → 32K (max floor)', boostedTokens(true, 16384, 'max') === 32768);
-check('thinking on(max) + 64K → 64K (already above)', boostedTokens(true, 65536, 'max') === 65536);
-check('thinking on(high) + 32K → 32K (already above min)', boostedTokens(true, 32768, 'high') === 32768);
+check('thinking on(low) + 8K → 8K (no boost)', boostedTokens(true, 8192, 'low') === 8192);
+check('thinking on(high) + 4K → 4K (no boost)', boostedTokens(true, 4096, 'high') === 4096);
+check('thinking on(max) + 8K → 8K (no boost)', boostedTokens(true, 8192, 'max') === 8192);
+check('thinking on(max) + 16K → 16K (no boost)', boostedTokens(true, 16384, 'max') === 16384);
+check('thinking on(max) + 64K → 64K (unchanged)', boostedTokens(true, 65536, 'max') === 65536);
+check('thinking on(high) + 32K → 32K (unchanged)', boostedTokens(true, 32768, 'high') === 32768);
 check('thinking on + 128K → 128K (unchanged)', boostedTokens(true, 131072, 'high') === 131072);
 
 console.log('\n=== 5. End-to-end: effective request shape per effort ===');
@@ -122,11 +119,11 @@ function responsesRequest(effort, baseMax) {
 // off must include the disabling param and NOT boost
 check('chat off request', JSON.stringify(chatRequest('off', 8192)) === '{"max_tokens":8192,"thinking":{"type":"disabled"}}');
 check('responses off request', JSON.stringify(responsesRequest('off', 8192)) === '{"max_output_tokens":8192,"reasoning":{"effort":"none"}}');
-// high must enable + boost
+// thinking must enable but NOT boost
 const ch = chatRequest('high', 8192);
-check('chat high request boosts + enables', ch.max_tokens === 16384 && ch.thinking.type === 'enabled' && ch.reasoning_effort === 'high');
+check('chat high request enables without boost', ch.max_tokens === 8192 && ch.thinking.type === 'enabled' && ch.reasoning_effort === 'high');
 const rr = responsesRequest('max', 8192);
-check('responses max request boosts to 32K + enables', rr.max_output_tokens === 32768 && rr.reasoning.effort === 'max');
+check('responses max request enables without boost', rr.max_output_tokens === 8192 && rr.reasoning.effort === 'max');
 
 console.log('');
 console.log(`===== ${pass} passed, ${fail} failed =====`);

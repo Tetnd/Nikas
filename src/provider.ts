@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getStabilizeToolListEnabled } from './config.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveVisionDescriber } from './vision/pipeline.js';
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
+import { classifyProviderRequest, shouldForceThinkingNone } from './routing.js';
+import { processToolFlow } from './tools/flow.js';
+import { assertToolsWithinLimit } from './tools/request.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
 import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool } from './api/types.js';
@@ -23,6 +26,16 @@ function getOutputChannel(): vscode.OutputChannel {
     }
     return _outputChannel;
 }
+
+/**
+ * Model-picker metadata (non-public API surface, same shape Copilot Chat
+ * consumes). `isBYOK` marks the model as bring-your-own-key so Copilot
+ * renders the provider appropriately (upstream Vizards #162).
+ */
+type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
+    isBYOK: true;
+    configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
+};
 
 /**
  * Emit DeepSeek's thinking-mode chain-of-thought as a native VS Code
@@ -345,7 +358,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         options: { silent: boolean },
         _token: vscode.CancellationToken
     ): Promise<vscode.LanguageModelChatInformation[]> {
-        const models: vscode.LanguageModelChatInformation[] = [];
+        const models: ModelPickerChatInformation[] = [];
         const deepseekKey = await this.secrets.getDeepSeekApiKey();
         const geminiKey = await this.secrets.getGeminiApiKey();
 
@@ -354,9 +367,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             const effectiveInputTokens = getContextWindowTokens();
             const effectiveOutputTokens = getMaxTokens();
             for (const m of DEEPSEEK_MODELS) {
-                const modelInfo: vscode.LanguageModelChatInformation & {
-                    configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
-                } = {
+                const modelInfo: ModelPickerChatInformation = {
                     id: m.id,
                     name: m.name,
                     family: m.family,
@@ -365,21 +376,20 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
                     capabilities: m.capabilities,
                     detail: m.detail,
+                    isBYOK: true,
                 };
 
                 // Both Flash and Pro support thinking — add the per-model dropdown
                 // in Copilot Chat's model picker (matching Vizards UX).
                 modelInfo.configurationSchema = buildThinkingEffortSchema();
 
-                models.push(modelInfo as vscode.LanguageModelChatInformation);
+                models.push(modelInfo);
             }
 
             // Responses API model (flash only) — picked via the Copilot picker,
             // intentionally NOT part of DEEPSEEK_MODELS / nikas.selectedModel so
             // the chat-completions handler can never be told to send this id.
-            const responsesModelInfo: vscode.LanguageModelChatInformation & {
-                configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
-            } = {
+            const responsesModelInfo: ModelPickerChatInformation = {
                 id: DEEPSEEK_RESPONSES_MODEL.id,
                 name: DEEPSEEK_RESPONSES_MODEL.name,
                 family: DEEPSEEK_RESPONSES_MODEL.family,
@@ -388,9 +398,10 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 maxOutputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxOutputTokens, effectiveOutputTokens),
                 capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
+                isBYOK: true,
             };
             responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
-            models.push(responsesModelInfo as vscode.LanguageModelChatInformation);
+            models.push(responsesModelInfo);
         } else if (!options.silent) {
             vscode.window.showWarningMessage(
                 'Nikas: DeepSeek API key not configured. DeepSeek models will not appear in the model picker until the key is set.'
@@ -409,6 +420,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     maxOutputTokens: 8_192,
                     capabilities: { imageInput: true },
                     detail: 'Google Gemini 2.5 Flash — free tier',
+                    isBYOK: true,
                 },
                 {
                     id: 'gemini-2.5-flash-lite',
@@ -419,6 +431,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     maxOutputTokens: 8_192,
                     capabilities: { imageInput: true },
                     detail: 'Google Gemini 2.5 Flash-Lite — fastest, most cost-efficient',
+                    isBYOK: true,
                 }
             );
         } else if (!options.silent && !deepseekKey) {
@@ -438,6 +451,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             maxOutputTokens: 4_096,
             capabilities: { imageInput: true },
             detail: 'Local Gemma 4 via Ollama — runs on your machine',
+            isBYOK: true,
         });
 
         return models;
@@ -479,6 +493,21 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Check for cancellation
         if (token.isCancellationRequested) return;
 
+        // Process the tool preflight flow: strip provider-owned preflight
+        // artifacts from the history, and (when the experimental stabilize
+        // setting is on) pre-activate VS Code/Copilot virtual tools. When
+        // preflight calls were emitted, this request is complete — the real
+        // DeepSeek request happens once the tool list is stable.
+        const toolFlow = processToolFlow({
+            stabilizeToolList: getStabilizeToolListEnabled(),
+            messages,
+            tools: options.tools,
+            progress,
+        });
+        if (toolFlow.preflightHandled) {
+            return;
+        }
+
         // Resolve images to text descriptions (replay markers / vision model)
         // This operates on raw VS Code messages BEFORE conversion to DeepSeek format.
         // Wrap in try-catch so a describer failure doesn't crash the whole request.
@@ -490,7 +519,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 return undefined;
             }
         };
-        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
+        const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
         const resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
 
@@ -509,6 +538,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (visionResolution.initialResponseNotice) {
             progress.report(new vscode.LanguageModelTextPart(
                 `\n\n${visionResolution.initialResponseNotice}\n\n`
+            ));
+        }
+
+        // Show any tool-flow notices (e.g. unstable tool list) to the user
+        if (toolFlow.initialResponseNotice) {
+            progress.report(new vscode.LanguageModelTextPart(
+                `\n\n${toolFlow.initialResponseNotice}\n\n`
             ));
         }
 
@@ -561,41 +597,39 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
         // Read thinking effort from Copilot Chat's model picker dropdown first,
-        // fall back to the saved nikas.thinkingEffort setting.
-        const thinkingEffort = getRequestThinkingEffort(options);
+        // fall back to the saved nikas.thinkingEffort setting. Internal helper
+        // requests (chat titles, commit messages, settings resolver, ...) get
+        // thinking FORCED OFF — they are invisible to the user, so max-effort
+        // reasoning there is pure latency + cost (upstream #137).
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const forcedThinkingOff = shouldForceThinkingNone(requestKind);
+        const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
         const extOpts = options as unknown as Record<string, unknown>;
         const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
-        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}`);
+        getOutputChannel().appendLine(
+            `[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}` +
+            (forcedThinkingOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+        );
+        if (forcedThinkingOff) {
+            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
+        }
 
-        // When thinking mode is enabled, ensure enough headroom for reasoning
-        // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
-        // alone, leaving nothing for visible output if max_tokens is too low.
-        // NOTE: at `max` effort the model can burn the ENTIRE 16K budget on
-        // reasoning and return an empty response (observed in field logs
-        // 2026-08-09: completion=16,384, finish_reason=length, text="") —
-        // so max gets a larger 32K floor.
+        // NOTE (2026-08-09): the max-output token boost was REMOVED — the
+        // configured maxTokens is now sent as-is for every effort level.
+        // (max effort previously got a 32K floor because field logs showed it
+        // could burn a 16K budget on reasoning and return an empty response;
+        // users who hit that can raise nikas.maxTokens.)
         const effectiveMaxTokens = getMaxTokens();
         const thinkingEnabled = thinkingEffort !== 'off';
-        const minThinkingTokens = thinkingEffort === 'max' ? 32_768 : 16_384;
-        const boostedTokens = thinkingEnabled
-            ? Math.max(effectiveMaxTokens, minThinkingTokens)
-            : effectiveMaxTokens;
-
-        if (boostedTokens !== effectiveMaxTokens) {
-            getOutputChannel().appendLine(
-                `[Nikas] Thinking mode enabled — boosting max_tokens from ` +
-                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`
-            );
-        }
 
         const request: DeepSeekRequest = {
             model: modelId,
             messages: deepseekMessages,
             temperature: getTemperature(),
-            max_tokens: boostedTokens,
+            max_tokens: effectiveMaxTokens,
             stream: true,
             ...thinkingParams,
             stream_options: { include_usage: true },
@@ -604,6 +638,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Add tools if provided in options
         if (options.tools && options.tools.length > 0) {
             request.tools = options.tools.map(mapTool);
+            // DeepSeek supports at most 128 functions per request (upstream #77).
+            assertToolsWithinLimit(request.tools, 'chat-completions');
             request.tool_choice = 'auto';
         }
 
@@ -643,7 +679,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `tools=${options.tools?.length ?? 0}, ` +
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
-            `max_tokens=${boostedTokens.toLocaleString()}, ` +
+            `max_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
             `temperature=${getTemperature()}`
         );
 
@@ -704,7 +740,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
                 log.info(
                     `Empty response from DeepSeek (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
-                    `max_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                    `max_tokens: ${effectiveMaxTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
 
@@ -753,7 +789,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 `Error context: model=${modelId}, ` +
                 `thinking=${thinkingEnabled}, ` +
                 `tools=${options.tools?.length ?? 0}, ` +
-                `max_tokens=${boostedTokens}, ` +
+                `max_tokens=${effectiveMaxTokens}, ` +
                 `temperature=${getTemperature()}, ` +
                 `bodySize=${(new TextEncoder().encode(safeStringify(request)).length / 1024).toFixed(1)}KB, ` +
                 `contextWindow=${getContextWindowPreset()}`
@@ -796,6 +832,17 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         if (token.isCancellationRequested) return;
 
+        // Process the tool preflight flow (see chat handler for rationale).
+        const toolFlow = processToolFlow({
+            stabilizeToolList: getStabilizeToolListEnabled(),
+            messages,
+            tools: options.tools,
+            progress,
+        });
+        if (toolFlow.preflightHandled) {
+            return;
+        }
+
         // Resolve images to text descriptions (same pipeline as chat completions)
         const getDescriber = async () => {
             try {
@@ -805,13 +852,20 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 return undefined;
             }
         };
-        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
+        const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
         const resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
 
         if (visionResolution.initialResponseNotice) {
             progress.report(new vscode.LanguageModelTextPart(
                 `\n\n${visionResolution.initialResponseNotice}\n\n`
+            ));
+        }
+
+        // Show any tool-flow notices (e.g. unstable tool list) to the user
+        if (toolFlow.initialResponseNotice) {
+            progress.report(new vscode.LanguageModelTextPart(
+                `\n\n${toolFlow.initialResponseNotice}\n\n`
             ));
         }
 
@@ -829,31 +883,28 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // reducing the tool set. (Controlled by nikas.concisePrompt.)
         const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
 
-        // Thinking effort from the picker dropdown / nikas.thinkingEffort setting
-        const thinkingEffort = getRequestThinkingEffort(options);
+        // Thinking effort from the picker dropdown / nikas.thinkingEffort setting.
+        // Internal helper requests get thinking FORCED OFF (upstream #137).
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const forcedThinkingOff = shouldForceThinkingNone(requestKind);
+        const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
-        // Same headroom boost as chat completions: leave room for reasoning
-        // tokens. `max` effort gets a larger 32K floor (it can burn the whole
-        // 16K budget on reasoning and return an empty response — observed in
-        // field logs 2026-08-09).
+        // NOTE (2026-08-09): the max-output token boost was REMOVED — the
+        // configured maxTokens is now sent as-is for every effort level
+        // (mirrors the chat-completions handler).
         const effectiveMaxTokens = getMaxTokens();
-        const minThinkingTokens = thinkingEffort === 'max' ? 32_768 : 16_384;
-        const boostedTokens = thinkingEnabled
-            ? Math.max(effectiveMaxTokens, minThinkingTokens)
-            : effectiveMaxTokens;
 
         // Log which effort is being used (mirrors the chat-completions handler)
         const extOpts = options as unknown as Record<string, unknown>;
         const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
-        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}`);
-
-        if (boostedTokens !== effectiveMaxTokens) {
-            getOutputChannel().appendLine(
-                `[Nikas] Thinking mode enabled — boosting max_output_tokens from ` +
-                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`
-            );
+        getOutputChannel().appendLine(
+            `[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}` +
+            (forcedThinkingOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+        );
+        if (forcedThinkingOff) {
+            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
         }
 
         const request: DeepSeekResponsesRequest = {
@@ -861,7 +912,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             model: 'deepseek-v4-flash',
             input,
             temperature: getTemperature(),
-            max_output_tokens: boostedTokens,
+            max_output_tokens: effectiveMaxTokens,
             stream: true,
             ...reasoningParams,
         };
@@ -870,6 +921,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         if (options.tools && options.tools.length > 0) {
             request.tools = options.tools.map(mapResponsesTool);
+            // DeepSeek supports at most 128 functions per request (upstream #77).
+            assertToolsWithinLimit(request.tools, 'responses');
             request.tool_choice = 'auto';
         }
 
@@ -891,7 +944,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `tools=${options.tools?.length ?? 0}, ` +
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
-            `max_output_tokens=${boostedTokens.toLocaleString()}, ` +
+            `max_output_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
             `temperature=${getTemperature()}`
         );
         getOutputChannel().appendLine(
@@ -948,7 +1001,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
                 log.info(
                     `Empty response from DeepSeek Responses (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
-                    `max_output_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                    `max_output_tokens: ${effectiveMaxTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
 

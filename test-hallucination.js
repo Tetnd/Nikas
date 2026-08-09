@@ -37,8 +37,9 @@
  *                                eats the whole output budget → empty replies.
  *                                The extension always sends the param, so we
  *                                must too, or we measure empty responses.)
- *   --thinking=low|high|max    — enable thinking; the harness then uses the
- *                                extension's boosted output budget (16K)
+ *   --thinking=low|high|max    — enable thinking; the harness sends the
+ *                                configured max output as-is (boost removed
+ *                                2026-08-09)
  *
  * USAGE
  * -----
@@ -413,13 +414,11 @@ function thinkingParamsFor(thinking, api) {
 }
 
 /**
- * Output token budget, mirroring provider.ts boostedTokens:
- *   thinking off → maxTokens (default 8K)
- *   thinking on  → max(8K, 16K) so reasoning gets headroom and visible
- *                  output still fits (the "empty response" fix)
+ * Output token budget, mirroring provider.ts (boost removed 2026-08-09):
+ *   the configured maxTokens is sent as-is, thinking on or off.
  */
-function outputBudgetFor(thinking, baseMax) {
-    return thinking === 'off' ? baseMax : Math.max(baseMax, 16384);
+function outputBudgetFor(_thinking, baseMax) {
+    return baseMax;
 }
 
 async function ask(messages, key, model, maxTokens = 256, api = 'chat', thinking = 'off') {

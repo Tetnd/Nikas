@@ -280,6 +280,18 @@ export function getLogMaxFiles(): number {
     return typeof v === 'number' && v >= 0 ? Math.floor(v) : 5;
 }
 
+// --- Experimental ---
+
+/**
+ * Whether to pre-activate VS Code/Copilot virtual `activate_*` tools so the
+ * `tools` array stays stable across turns (improves DeepSeek context-cache hit
+ * rate). Experimental — default off. Setting: `nikas.experimental.stabilizeToolList`.
+ * Ported from upstream Vizards/deepseek-v4-for-copilot (#77).
+ */
+export function getStabilizeToolListEnabled(): boolean {
+    return getConfig().get<boolean>('experimental.stabilizeToolList', false);
+}
+
 // --- Copilot Chat PDF patcher ---
 
 /**
