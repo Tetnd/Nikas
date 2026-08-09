@@ -161,10 +161,53 @@ export function applyMissing(content: string, missing: PatchDefinition[]): Apply
             failedIds.push(patch.id);
             failedReasons[patch.id] = res.reason;
             warn(`Could NOT auto-apply ${patch.id} (${patch.description}): ${res.reason}`);
+            // Dump the surrounding bundle context so a maintainer can see the
+            // new structure without needing the whole (multi-MB) bundle file.
+            const ctx = extractDiagnosticContext(working, patch);
+            if (ctx) {
+                warn(`  Diagnostic context for ${patch.id} (around "${ctx.probe}"):`);
+                warn(`  --- START (${ctx.before.length} chars before / ${ctx.after.length} chars after) ---`);
+                warn(`  ${ctx.snippet}`);
+                warn(`  --- END ${patch.id} diagnostic ---`);
+            }
         }
     }
 
     return { content: working, appliedIds, failedIds, failedReasons };
+}
+
+/**
+ * Extract a short context window from the bundle around the first diagnostic
+ * probe that survives version drift, so a failed patch can be diagnosed from
+ * the log alone. Returns undefined if no probe is found.
+ */
+export function extractDiagnosticContext(
+    content: string,
+    patch: PatchDefinition,
+    windowChars = 220
+): { probe: string; before: string; after: string; snippet: string } | undefined {
+    const probes = patch.diagnosticProbes ?? [];
+    // Fall back to the first replacement's `find` prefix if no probes defined —
+    // still better than nothing.
+    const candidates = probes.length > 0
+        ? probes
+        : (patch.replacements[0]?.find ?? []).length > 0
+            ? [patch.replacements[0].find.slice(0, 40)]
+            : [];
+
+    for (const probe of candidates) {
+        const idx = content.indexOf(probe);
+        if (idx === -1) continue;
+        const start = Math.max(0, idx - windowChars);
+        const end = Math.min(content.length, idx + probe.length + windowChars);
+        return {
+            probe,
+            before: content.slice(start, idx),
+            after: content.slice(idx + probe.length, end),
+            snippet: content.slice(start, end),
+        };
+    }
+    return undefined;
 }
 
 function applyOne(content: string, patch: PatchDefinition): { success: boolean; content: string; reason: string } {

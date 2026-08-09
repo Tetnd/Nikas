@@ -35,6 +35,14 @@ export interface PatchDefinition {
     replacements: PatchReplacement[];
     /** Regex fallbacks tried only if no exact find matches (version drift). */
     regexFallbacks?: { pattern: RegExp; replacement: string | ((substring: string, ...args: any[]) => string) }[];
+    /**
+     * Diagnostic probes: distinctive substrings that are likely to survive
+     * version drift and sit NEAR the code this patch targets. When a patch
+     * can't be applied, the manager dumps a short context window around the
+     * first probe found so a maintainer can see the new bundle structure
+     * without needing the whole (multi-MB) bundle file.
+     */
+    diagnosticProbes?: string[];
     /** Core patches are essential; supporting ones are best-effort extras. */
     core: boolean;
 }
@@ -73,6 +81,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replacement: (m: string) => `${m}||(n.family||"").startsWith("deepseek")`,
                 },
             ],
+            diagnosticProbes: [
+                `startsWith("deepseek")`,
+                `function kkn`,
+                `does not support PDF`,
+            ],
             core: true,
         },
 
@@ -98,6 +111,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replacement: `$1=1024*1024*${mb};`,
                 },
             ],
+            diagnosticProbes: [
+                `1024*1024*5`,
+                `max file size`,
+                `too large to read`,
+            ],
             core: true,
         },
 
@@ -113,6 +131,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     find: `if(this.props.omitContents){let u=this.promptPathRepresentationService.getFilePath(o),d={};return this.props.variableName&&(d.id=this.props.variableName),d.filePath=u,vscpp(W,{name:"attachment",attrs:d})}`,
                     replace: `if(this.props.omitContents&&!/\\.pdf$/i.test(o.path)){let u=this.promptPathRepresentationService.getFilePath(o),d={};return this.props.variableName&&(d.id=this.props.variableName),d.filePath=u,vscpp(W,{name:"attachment",attrs:d})}`,
                 },
+            ],
+            diagnosticProbes: [
+                `omitContents`,
+                `getFilePath`,
+                `attachment`,
             ],
             core: true,
         },
@@ -152,6 +175,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replacement: (_m: string, endpoint: string) => `if(kkn(${endpoint}))`,
                 },
             ],
+            diagnosticProbes: [
+                `supportsVision`,
+                `does not support PDF documents`,
+                `.pdf$/i.test(o.path)`,
+            ],
             core: true,
         },
 
@@ -168,6 +196,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replace: `if(t.type===VD.ChatCompletionContentPartKind.Document){let dd=t.documentData,db=typeof dd.data=="string"?Buffer.from(dd.data,"base64"):Buffer.from(dd.data);return new FA.LanguageModelDataPart(new Uint8Array(db),dd.mediaType||"application/pdf")}`,
                 },
             ],
+            diagnosticProbes: [
+                `ChatCompletionContentPartKind.Document`,
+                `documentData`,
+                `LanguageModelDataPart`,
+            ],
             core: true,
         },
 
@@ -183,6 +216,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     find: `t.mimeType!==is.StatefulMarker&&e.push({type:"image",source:{type:"base64",data:Buffer.from(t.data).toString("base64"),media_type:t.mimeType}})`,
                     replace: `t.mimeType!==is.StatefulMarker&&(t.mimeType==="application/pdf"?e.push({type:"document",source:{type:"base64",data:Buffer.from(t.data).toString("base64"),media_type:"application/pdf"}}):e.push({type:"image",source:{type:"base64",data:Buffer.from(t.data).toString("base64"),media_type:t.mimeType}}))`,
                 },
+            ],
+            diagnosticProbes: [
+                `StatefulMarker`,
+                `media_type:t.mimeType`,
+                `type:"image",source`,
             ],
             core: false,
         },
@@ -202,6 +240,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     pattern: /let d=Buffer\.from\(u\)\.toString\("base64"\);return vscpp\(t2t\.UserMessage,\{priority:0\},vscpp\((?!Lu\.Document)/,
                     replacement: `let d=Buffer.from(u).toString("base64");return vscpp(t2t.UserMessage,{priority:0},vscpp(Lu.Document,{data:d,mediaType:"application/pdf"}),vscpp(`,
                 },
+            ],
+            diagnosticProbes: [
+                `UserMessage,{priority:0}`,
+                `Buffer.from(u).toString("base64")`,
+                `Lu.Document`,
             ],
             core: false,
         },
@@ -234,6 +277,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replacement: `this.props.chatVariables.filter(v=>s(v)||c(v))`,
                 },
             ],
+            diagnosticProbes: [
+                `chatVariables.filter`,
+                `StatefulMarker`,
+                `filter(v=>s(v)`,
+            ],
             core: true,
         },
 
@@ -264,6 +312,11 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     pattern: /w=`Your search pattern might be excluded completely by either the search\.exclude settings or \.\*ignore files\.[\s\S]*?includeIgnoredFiles" to true\.`/,
                     replacement: 'w=`If the files are ignored or excluded, retry with "includeIgnoredFiles": true.`',
                 },
+            ],
+            diagnosticProbes: [
+                'Your search pattern might be excluded',
+                'includeIgnoredFiles',
+                'search.exclude',
             ],
             core: false,
         },

@@ -103,6 +103,12 @@ Attach a PDF in chat and send it — it should reach DeepSeek as a document part
 
 The patcher writes the bundle to `...\resources\app\extensions\copilot\dist\extension.js` and keeps timestamped `.bak-*` backups (pruned after `nikas.patchBackupRetention`). All activity is logged to the **Nikas PDF Patcher** output channel and `nikas.log`.
 
+> **When a patch can't auto-apply** (Copilot shipped a new bundle structure), the patcher
+> logs a **diagnostic context window** around the affected code — a ~440-character snippet
+> from the live bundle near where the patch should have applied. You can paste that snippet
+> (from the **Nikas PDF Patcher** output) into an issue instead of sending the whole
+> multi-megabyte bundle, and the next patch can be written precisely against it.
+
 ## Terminal / CLI (Claude Code with DeepSeek)
 
 Nikas itself is an **IDE-only provider** (it registers a `LanguageModelChatProvider` inside VS Code's extension host, so the standalone Copilot CLI can't load it). To use DeepSeek V4 in a terminal agent, Claude Code can be pointed at DeepSeek's Anthropic-compatible endpoint. A ready-made setup script is included:
