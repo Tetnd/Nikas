@@ -1483,10 +1483,10 @@ function buildThinkingEffortSchema() {
                 enum: ['none', 'low', 'high', 'max'],
                 enumItemLabels: ['None', 'Low', 'High', 'Max'],
                 enumDescriptions: [
-                    'None (default) — best performance: fastest, lowest cost, no empty-response risk. A/B on Flash shows no code-quality gain from thinking',
+                    'None (default) — fastest, lowest cost. Best for simple Q&A and quick tasks',
                     'Low — light reasoning, faster than High/Max',
-                    'High — heavier reasoning; only if you observe a quality gain',
-                    'Max — deepest reasoning, but slowest and heaviest per-tool-round overhead in agent mode',
+                    'High — balanced reasoning',
+                    'Max — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)',
                 ],
                 default: 'none',
                 group: 'navigation',

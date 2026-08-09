@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.10",
+  "version": "0.7.11",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -182,12 +182,12 @@
             "max"
           ],
           "enumDescriptions": [
-            "Off (default) — best performance: fastest, lowest cost, no empty-response risk. A/B on Flash shows no code-quality gain from thinking",
+            "Off (default) — fastest, lowest cost. Best for simple Q&A and quick tasks",
             "Low — light reasoning, faster than High/Max",
-            "High — heavier reasoning; only if you observe a quality gain",
-            "Max — deepest reasoning, but slowest and heaviest per-tool-round overhead in agent mode"
+            "High — balanced reasoning",
+            "Max — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
           ],
-          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to off — the best-performance setting (fastest, lowest cost, no empty-response risk). An A/B code-contract benchmark on Flash showed thinking mode did NOT improve code quality (off 92% vs high 42–83%, max 83–92%), so only raise the effort if you observe a quality gain for your use case. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
+          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Tradeoff verified 2026-08-09: on a small code-contract task, off scored 92% vs max 83-92% (no clear gain); but on a full weather-app build (same prompt), max took ~5x longer and produced a much better final product. So: off for speed and simple tasks, max for complex builds where quality matters most. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
         },
         "nikas.concisePrompt": {
           "type": "boolean",
