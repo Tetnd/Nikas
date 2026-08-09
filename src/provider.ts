@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -487,6 +487,22 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
 
+        // Optionally inject the "no process narration" directive into the first
+        // system message (chat-completions path). See the Responses handler for
+        // the rationale — this stops the model narrating its process as visible
+        // reply text in agent mode WITHOUT reducing the tool set.
+        if (getConcisePrompt() && deepseekMessages.length > 0) {
+            const first = deepseekMessages[0];
+            if (first.role === 'system') {
+                const base = typeof first.content === 'string'
+                    ? first.content
+                    : Array.isArray(first.content)
+                        ? first.content.map(p => p.type === 'text' ? p.text : '').join('')
+                        : '';
+                first.content = `${base}\n\n${CONCISE_PROMPT_DIRECTIVE}`;
+            }
+        }
+
         if (token.isCancellationRequested) return;
 
         // Build the API request
@@ -750,6 +766,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
         const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
 
+        // Optionally inject the "no process narration" directive into the system
+        // prompt. In agent mode Flash tends to narrate its process as visible
+        // reply text ("Let me check...", "I'll search for..."), which reads as
+        // "spamming thinking as replies". This directive stops that WITHOUT
+        // reducing the tool set. (Controlled by nikas.concisePrompt.)
+        const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
+
         // Thinking effort from the picker dropdown / nikas.thinkingEffort setting
         const thinkingEffort = getRequestThinkingEffort(options);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
@@ -783,7 +806,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             stream: true,
             ...reasoningParams,
         };
-        if (instructions) request.instructions = instructions;
+        if (instructions) request.instructions = instructions + conciseDirective;
+        else if (conciseDirective) request.instructions = CONCISE_PROMPT_DIRECTIVE;
 
         if (options.tools && options.tools.length > 0) {
             request.tools = options.tools.map(mapResponsesTool);

@@ -121,6 +121,32 @@ export function getTemperature(): number {
     return getConfig().get<number>('temperature') ?? 0.7;
 }
 
+/**
+ * Whether to inject a "concise / no process narration" directive into agent
+ * requests.
+ *
+ * In agent mode DeepSeek V4 Flash tends to NARRATE its process as visible
+ * reply text ("Let me check...", "I'll search for...", "First I need to...")
+ * instead of quietly calling tools and answering. This reads as "the agent is
+ * spamming thinking as replies". The directive below tells it to stop doing
+ * that — go straight to tool calls / concise answers — WITHOUT reducing the
+ * tool set. Defaults to on; disable if you prefer the narration.
+ */
+export function getConcisePrompt(): boolean {
+    return getConfig().get<boolean>('concisePrompt') ?? true;
+}
+
+/**
+ * The behavioral directive appended to the system prompt when
+ * `nikas.concisePrompt` is enabled. Kept short so it costs ~40 tokens and
+ * doesn't crowd the context window.
+ */
+export const CONCISE_PROMPT_DIRECTIVE =
+    'Do not narrate your process or announce what you are about to do. ' +
+    'Do not include filler like "Let me", "I will", "First", or "Now". ' +
+    'In agent mode, call tools directly and give only the final, concise result.';
+
+
 export function getVisionModel(): VisionModelId {
     return (getConfig().get<string>('visionModel') as VisionModelId) ?? 'gemini';
 }
