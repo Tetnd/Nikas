@@ -21,6 +21,13 @@ export interface StreamResult {
     receivedContent: boolean;
     receivedToolCalls: boolean;
     finishReason: string | null | undefined;
+    /**
+     * Thinking-mode chain-of-thought captured from this response
+     * (delta.reasoning_content on chat; response.reasoning_text.delta on
+     * Responses). Must be passed back on the next request when tools are
+     * used with thinking enabled, or the API returns HTTP 400.
+     */
+    reasoningText?: string;
 }
 
 /**
@@ -131,6 +138,7 @@ export async function streamDeepSeekChat(
     let receivedToolCalls = false;
     let finalFinishReason: string | null | undefined;
     let loggedModelIdentity = false;
+    let reasoningText = '';
 
     try {
         while (true) {
@@ -173,6 +181,13 @@ export async function streamDeepSeekChat(
 
                         if (choice.finish_reason) {
                             finalFinishReason = choice.finish_reason;
+                        }
+
+                        // Capture thinking-mode CoT (chat-completions streams it
+                        // alongside content; MUST be passed back next turn when
+                        // tools are used, or the API returns 400).
+                        if (delta.reasoning_content) {
+                            reasoningText += delta.reasoning_content;
                         }
 
                         // Handle text content
@@ -224,6 +239,9 @@ export async function streamDeepSeekChat(
                             const delta = choice.delta;
                             if (!delta) continue;
                             if (choice.finish_reason) finalFinishReason = choice.finish_reason;
+                            if (delta.reasoning_content) {
+                                reasoningText += delta.reasoning_content;
+                            }
                             if (delta.content) {
                                 receivedContent = true;
                                 onText(delta.content);
@@ -264,7 +282,12 @@ export async function streamDeepSeekChat(
         reader.releaseLock();
     }
 
-    return { receivedContent, receivedToolCalls, finishReason: finalFinishReason };
+    return {
+        receivedContent,
+        receivedToolCalls,
+        finishReason: finalFinishReason,
+        reasoningText: reasoningText || undefined,
+    };
 }
 
 /**
@@ -339,6 +362,7 @@ export async function streamDeepSeekResponses(
     let receivedToolCalls = false;
     let finalFinishReason: string | null | undefined;
     let failedMessage: string | undefined;
+    let reasoningText = '';
 
     /**
      * Process one `data:` payload (a single Responses SSE event).
@@ -358,6 +382,16 @@ export async function streamDeepSeekResponses(
                 if (event.delta) {
                     receivedContent = true;
                     onText(event.delta);
+                }
+                break;
+
+            // Thinking-mode CoT, streamed as reasoning_text deltas. MUST be
+            // passed back next turn when tools are used, or the API returns
+            // HTTP 400 ("The reasoning_text in the thinking mode must be
+            // passed back to the API.").
+            case 'response.reasoning_text.delta':
+                if (event.delta) {
+                    reasoningText += event.delta;
                 }
                 break;
 
@@ -400,6 +434,15 @@ export async function streamDeepSeekResponses(
                         onToolCalls([completed]);
                     }
                     pendingCalls.delete(idx);
+                }
+                // Some Responses API variants deliver the full reasoning item
+                // on output_item.done instead of (or in addition to) the
+                // reasoning_text.delta stream — capture it here too.
+                if (item && item.type === 'reasoning_text' && typeof item.text === 'string' && item.text) {
+                    reasoningText = item.text;
+                }
+                if (item && item.type === 'reasoning' && typeof item.summary === 'string' && item.summary) {
+                    reasoningText = item.summary;
                 }
                 break;
             }
@@ -481,7 +524,12 @@ export async function streamDeepSeekResponses(
         reader.releaseLock();
     }
 
-    return { receivedContent, receivedToolCalls, finishReason: finalFinishReason };
+    return {
+        receivedContent,
+        receivedToolCalls,
+        finishReason: finalFinishReason,
+        reasoningText: reasoningText || undefined,
+    };
 }
 
 /** Parse tool call arguments JSON defensively (mirrors finalizeToolCalls). */

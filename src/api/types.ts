@@ -7,6 +7,13 @@ export interface DeepSeekMessage {
     name?: string;
     tool_call_id?: string;
     tool_calls?: DeepSeekToolCall[];
+    /**
+     * Chain-of-thought (thinking mode). DeepSeek REQUIRES this to be passed
+     * back on assistant messages when tools are used with thinking enabled —
+     * omitting it makes the API return HTTP 400
+     * ("The reasoning_text in the thinking mode must be passed back").
+     */
+    reasoning_content?: string;
 }
 
 export interface DeepSeekContentPart {
@@ -80,6 +87,8 @@ export interface DeepSeekChoice {
 export interface DeepSeekDelta {
     role?: string;
     content?: string;
+    /** Thinking-mode CoT, streamed alongside content (chat-completions). */
+    reasoning_content?: string;
     tool_calls?: DeepSeekToolCallDelta[];
 }
 
@@ -149,8 +158,31 @@ export interface DeepSeekResponsesTool {
 
 export type DeepSeekResponsesInputItem =
     | DeepSeekResponsesMessageItem
+    | DeepSeekResponsesReasoningTextItem
+    | DeepSeekResponsesReasoningSummaryItem
     | DeepSeekResponsesFunctionCallItem
     | DeepSeekResponsesFunctionCallOutputItem;
+
+/**
+ * Thinking-mode reasoning item. DeepSeek REQUIRES the model's reasoning_text
+ * to be passed back as an input item in subsequent requests when tools are
+ * used with thinking enabled (HTTP 400 otherwise). It must be placed right
+ * before the assistant message / function_call it belongs to.
+ */
+export interface DeepSeekResponsesReasoningTextItem {
+    type: 'reasoning_text';
+    text: string;
+}
+
+/**
+ * OpenAI-style reasoning item (some Responses API variants emit the CoT as
+ * `reasoning` with a `summary` instead of `reasoning_text` with `text`).
+ * Captured from the stream so it can be round-tripped verbatim.
+ */
+export interface DeepSeekResponsesReasoningSummaryItem {
+    type: 'reasoning';
+    summary: string | Array<{ type: 'summary_text'; text: string }>;
+}
 
 export interface DeepSeekResponsesMessageItem {
     type: 'message';

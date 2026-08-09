@@ -57,6 +57,11 @@ function estimateMessageTokens(messages: DeepSeekMessage[]): number {
                 total += Math.ceil(tc.function.arguments.length / 4);
             }
         }
+        // Thinking-mode CoT round-tripped on assistant messages also consumes
+        // context — count it so truncation fires before the API ceiling.
+        if (msg.reasoning_content) {
+            total += Math.ceil(msg.reasoning_content.length / 4);
+        }
     }
     // Calibrate the raw 4-char/token estimate to real token counts
     // (measured real/est ≈ 1.40 on the official API).
@@ -669,6 +674,21 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     `max_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
+
+            // Round-trip thinking-mode CoT. When tools are used with thinking
+            // enabled, DeepSeek REQUIRES the reasoning_text to be passed back
+            // on the next request (HTTP 400 otherwise). We attach it to the
+            // replay marker so the next turn can re-inject it as
+            // reasoning_content / reasoning_text.
+            if (streamResult.reasoningText) {
+                progress.report(createReplayMarkerPart({
+                    ...replayMarkerMetadata,
+                    reasoningText: streamResult.reasoningText,
+                }));
+                log.verbose(
+                    `Captured thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
+                );
+            }
         } catch (err) {
             if (abortController.signal.aborted) {
                 // Cancelled by user — silently stop
@@ -890,6 +910,19 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 log.info(
                     `Empty response from DeepSeek Responses (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
                     `max_output_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                );
+            }
+
+            // Round-trip thinking-mode CoT (see chat handler for rationale).
+            // With tools + thinking, DeepSeek REQUIRES reasoning_text to be
+            // passed back, or it returns HTTP 400.
+            if (streamResult.reasoningText) {
+                progress.report(createReplayMarkerPart({
+                    ...replayMarkerMetadata,
+                    reasoningText: streamResult.reasoningText,
+                }));
+                log.verbose(
+                    `Captured Responses thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
                 );
             }
         } catch (err) {

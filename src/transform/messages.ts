@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { log } from '../log.js';
 import { safeStringify } from '../api/sanitize.js';
 import { isPdfMime, pdfDataToTextContent } from '../pdf/extract.js';
+import { parseReplayMarkerData, REPLAY_MARKER_MIME } from '../vision/replay.js';
 import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem } from '../api/types.js';
 
 /**
@@ -60,7 +61,34 @@ function vscodeMessageToDeepSeek(
         return [{ role, content: '', name: msg.name }];
     }
 
-    return [{ role, content: contentParts, name: msg.name }];
+    const built: DeepSeekMessage = { role, content: contentParts, name: msg.name };
+
+    // If this is an assistant message carrying a replay marker with reasoning
+    // (thinking-mode CoT captured on a previous turn), round-trip it so the
+    // API doesn't return HTTP 400 on the tools+thinking path.
+    if (role === 'assistant') {
+        const reasoning = extractReasoningFromParts(parts);
+        if (reasoning) built.reasoning_content = reasoning;
+    }
+
+    return [built];
+}
+
+/**
+ * Extract the thinking-mode reasoning text from a replay marker part, if any.
+ * The marker is a LanguageModelDataPart with MIME `stateful_marker` carrying
+ * `{ reasoning: { text } }` metadata. Returns undefined when absent.
+ */
+function extractReasoningFromParts(parts: readonly vscode.LanguageModelInputPart[]): string | undefined {
+    for (const part of parts) {
+        if (!(part instanceof vscode.LanguageModelDataPart)) continue;
+        if (part.mimeType !== REPLAY_MARKER_MIME) continue;
+        const marker = parseReplayMarkerData(part.data);
+        if (marker.valid && marker.reasoningText) {
+            return marker.reasoningText;
+        }
+    }
+    return undefined;
 }
 
 /**
@@ -192,6 +220,15 @@ export function deepseekMessagesToResponsesInput(
         }
 
         if (msg.role === 'assistant') {
+            // Thinking mode + tools: DeepSeek REQUIRES the assistant's
+            // reasoning_text to be passed back as an input item right before
+            // the message / function_call it belongs to (HTTP 400 otherwise).
+            if (msg.reasoning_content) {
+                input.push({
+                    type: 'reasoning_text',
+                    text: msg.reasoning_content,
+                });
+            }
             const text = messageText(msg);
             if (text) {
                 input.push({ type: 'message', role: 'assistant', content: text });
@@ -253,6 +290,11 @@ function buildAssistantToolCallMessage(
         content: textContent.length > 0 ? textContent.join('\n') : null,
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
+
+    // Thinking mode + tools: DeepSeek REQUIRES the assistant's reasoning_text
+    // to be passed back, or it returns HTTP 400. Round-trip it from the marker.
+    const reasoning = extractReasoningFromParts(parts);
+    if (reasoning) msg.reasoning_content = reasoning;
 
     if (name) msg.name = name;
     return msg;

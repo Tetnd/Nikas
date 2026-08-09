@@ -9,6 +9,8 @@ import {
 import type { ReplayMarkerMetadata, VisionResolutionStats } from './types.js';
 import { visionLog } from './log.js';
 
+export { REPLAY_MARKER_MIME };
+
 // ---------------------------------------------------------------------------
 // Replay Marker Format
 // ---------------------------------------------------------------------------
