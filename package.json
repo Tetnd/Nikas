@@ -161,12 +161,12 @@
             "max"
           ],
           "enumDescriptions": [
-            "No thinking mode — fastest responses",
-            "Light reasoning — faster thinking mode, good for simple lookups",
-            "Standard reasoning (default for most requests)",
-            "Maximum reasoning effort (used for complex agent tasks)"
+            "Off (default) — best performance: fastest, lowest cost, no empty-response risk. A/B on Flash shows no code-quality gain from thinking",
+            "Low — light reasoning, faster than High/Max",
+            "High — heavier reasoning; only if you observe a quality gain",
+            "Max — deepest reasoning, but slowest and heaviest per-tool-round overhead in agent mode"
           ],
-          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). On Flash, 'low' gives genuinely lighter reasoning; on Pro, 'low' is treated as 'high'. Higher effort produces more thorough reasoning but slower responses."
+          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to off — the best-performance setting (fastest, lowest cost, no empty-response risk). An A/B code-contract benchmark on Flash showed thinking mode did NOT improve code quality (off 92% vs high 42–83%, max 83–92%), so only raise the effort if you observe a quality gain for your use case. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
         },
         "nikas.visionModel": {
           "type": "string",
