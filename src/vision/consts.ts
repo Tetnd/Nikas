@@ -21,16 +21,19 @@ export const REPLAY_MARKER_MIME = 'stateful_marker';
 export const REPLAY_MARKER_WRITER_ID = 'nikas';
 
 /**
- * Prompt sent to the vision model when describing image attachments.
+ * Prompt sent to the vision model when describing image/PDF attachments.
  * Returns one concise factual description suitable for inserting into a text-only chat prompt.
  */
 export const IMAGE_DESCRIPTION_PROMPT =
-    'Describe all image attachments in this message.\n\n' +
-    'If there is one image, describe it directly.\n' +
-    'If there are multiple images:\n' +
-    '1. Describe each image separately, preserving their order.\n' +
+    'Describe all attached images and/or PDF documents in this message.\n\n' +
+    'If there is one attachment, describe it directly.\n' +
+    'If there are multiple attachments:\n' +
+    '1. Describe each one separately, preserving their order.\n' +
     '2. Then provide a combined description explaining the overall context and ' +
-    'relationships across the images.\n\n' +
+    'relationships across the attachments.\n\n' +
+    'For PDF documents, read the pages and transcribe the meaningful content — ' +
+    'text, tables, code, diagrams, and layout — as completely and accurately as ' +
+    'possible, including any text visible in scanned pages.\n\n' +
     'Return one concise factual description suitable for inserting into a ' +
     'text-only chat prompt. Include visible text, objects, UI elements, people, ' +
     'and relevant context. Do not invent details.';

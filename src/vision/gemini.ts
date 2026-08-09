@@ -47,10 +47,13 @@ interface GeminiCandidate {
 export type { VisionResult };
 
 /**
- * Describe a single image using a Gemini model.
+ * Describe a single image or PDF document using a Gemini model.
  *
- * @param imageData Raw image bytes
- * @param mimeType Image MIME type (e.g. 'image/png')
+ * Gemini handles `application/pdf` inline data natively (including scanned
+ * PDFs), so the same call covers both images and documents.
+ *
+ * @param imageData Raw attachment bytes
+ * @param mimeType MIME type (e.g. 'image/png' or 'application/pdf')
  * @param apiKey Google AI Studio API key
  * @param modelName Gemini model name (default: 'gemini-2.5-flash')
  * @param prompt Optional custom prompt

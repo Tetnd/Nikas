@@ -6,6 +6,7 @@ import {
     IMAGE_DESCRIPTION_SUFFIX,
     IMAGE_DESCRIPTION_UNAVAILABLE,
 } from './consts.js';
+import { isPdfMime } from '../pdf/extract.js';
 import type { ReplayMarkerMetadata, VisionResolutionStats } from './types.js';
 import { visionLog } from './log.js';
 
@@ -193,7 +194,7 @@ export function createVisionMarkerBindings(
             if (candidate.role !== vscode.LanguageModelChatMessageRole.User) {
                 continue;
             }
-            if (getImageParts(candidate).length === 0) {
+            if (getVisionParts(candidate).length === 0) {
                 continue;
             }
 
@@ -231,6 +232,32 @@ export function getImageParts(
 }
 
 /**
+ * Extract PDF data parts (application/pdf) from a message.
+ *
+ * PDFs are vision-eligible when the describer can read documents (Gemini
+ * direct API), otherwise they fall back to the local text-extraction in
+ * vscodeMessagesToDeepSeek.
+ */
+export function getPdfParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): vscode.LanguageModelDataPart[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
+        isPdfDataPart,
+    );
+}
+
+/**
+ * Extract ALL vision-eligible data parts (images + PDFs) from a message.
+ */
+export function getVisionParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): vscode.LanguageModelDataPart[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
+        isVisionDataPart,
+    );
+}
+
+/**
  * Extract non-image parts from a message.
  */
 export function getNonImageParts(
@@ -238,6 +265,17 @@ export function getNonImageParts(
 ): vscode.LanguageModelInputPart[] {
     return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
         (part) => !isImageDataPart(part),
+    );
+}
+
+/**
+ * Extract parts that are neither images nor PDFs.
+ */
+export function getNonVisionParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): vscode.LanguageModelInputPart[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
+        (part) => !isVisionDataPart(part),
     );
 }
 
@@ -258,6 +296,20 @@ export function getMessageText(
 
 export function isImageDataPart(part: unknown): part is vscode.LanguageModelDataPart {
     return part instanceof vscode.LanguageModelDataPart && part.mimeType.startsWith('image/');
+}
+
+/**
+ * PDF data parts (application/pdf) — vision-eligible when the describer
+ * supports documents (Gemini direct API), otherwise handled by the local
+ * text-extraction fallback in vscodeMessagesToDeepSeek.
+ */
+export function isPdfDataPart(part: unknown): part is vscode.LanguageModelDataPart {
+    return part instanceof vscode.LanguageModelDataPart && isPdfMime(part.mimeType);
+}
+
+/** Any data part the vision pipeline may handle: images or PDFs. */
+export function isVisionDataPart(part: unknown): part is vscode.LanguageModelDataPart {
+    return isImageDataPart(part) || isPdfDataPart(part);
 }
 
 /**

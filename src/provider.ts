@@ -527,7 +527,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (visionResolution.stats.inputImageParts > 0) {
             const s = visionResolution.stats;
             visionLog.info(
-                `Vision: ${s.inputImageParts} image(s) in ${s.inputImageMessages} message(s) ` +
+                `Vision: ${s.inputImageParts} attachment(s) in ${s.inputImageMessages} message(s) ` +
                 `→ current=${s.currentImageMessages} generated=${s.generatedImageMessages} ` +
                 `replayed=${s.replayedImageMessages} omitted=${s.omittedImageMessages} ` +
                 `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages}`
