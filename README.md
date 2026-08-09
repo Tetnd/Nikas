@@ -20,7 +20,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 ### 1. Install
 
 **Easiest way — one-click installer (Windows):**
-Put `install.ps1` and `nikas-0.7.1.vsix` in the **same folder**, then double-click
+Put `install.ps1` and `nikas-0.7.2.vsix` in the **same folder**, then double-click
 `install.ps1` (or right-click → *Run with PowerShell*). It finds the `.vsix` next to
 itself, checks it's valid, and installs it with the correct path — no typing needed.
 
@@ -29,10 +29,10 @@ wrong folder causes the *"no such file or directory"* error.
 
 ```bash
 # Correct — absolute path:
-code --install-extension "C:\Users\You\Downloads\nikas-0.7.1.vsix"
+code --install-extension "C:\Users\You\Downloads\nikas-0.7.2.vsix"
 
 # Wrong — fails with "no such file or directory" if the file isn't in the current folder:
-code --install-extension nikas-0.7.1.vsix
+code --install-extension nikas-0.7.2.vsix
 ```
 
 > The `.vsix` is ~114 KB. If the file you received is much smaller, it was probably

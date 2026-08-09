@@ -136,6 +136,22 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                     replace: `if(kkn(this.promptEndpoint))`,
                 },
             ],
+            regexFallbacks: [
+                {
+                    // Negated gate, version-drift tolerant: the endpoint accessor
+                    // (this.promptEndpoint / t / etc.) may be renamed by minifiers.
+                    // Strips the `supportsVision` requirement while preserving the
+                    // exact endpoint expression so the rest of the gate still works.
+                    pattern: /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{if\(!([\w$]+(?:\.[\w$]+)*)\.supportsVision\|\|!kkn\(\1\)\)\{/,
+                    replacement: (_m: string, endpoint: string) =>
+                        `if(\/\\.pdf\$/i.test(o.path)){if(!kkn(${endpoint})){`,
+                },
+                {
+                    // Positive gate, older form (original recipe): if(kkn(<endpoint>)&&<endpoint>.supportsVision)
+                    pattern: /if\(kkn\(([\w$]+(?:\.[\w$]+)*)\)&&\1\.supportsVision\)/,
+                    replacement: (_m: string, endpoint: string) => `if(kkn(${endpoint}))`,
+                },
+            ],
             core: true,
         },
 
