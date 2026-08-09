@@ -856,6 +856,17 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
 
+        // Log vision stats for diagnostics (mirrors the chat-completions handler)
+        if (visionResolution.stats.inputImageParts > 0) {
+            const s = visionResolution.stats;
+            visionLog.info(
+                `Vision: ${s.inputImageParts} attachment(s) in ${s.inputImageMessages} message(s) ` +
+                `→ current=${s.currentImageMessages} generated=${s.generatedImageMessages} ` +
+                `replayed=${s.replayedImageMessages} omitted=${s.omittedImageMessages} ` +
+                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages}`
+            );
+        }
+
         if (visionResolution.initialResponseNotice) {
             progress.report(new vscode.LanguageModelTextPart(
                 `\n\n${visionResolution.initialResponseNotice}\n\n`
