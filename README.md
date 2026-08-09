@@ -19,17 +19,57 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 
 ### 1. Install
 
+**Easiest way — one-click installer (Windows):**
+Put `install.ps1` and `nikas-0.7.1.vsix` in the **same folder**, then double-click
+`install.ps1` (or right-click → *Run with PowerShell*). It finds the `.vsix` next to
+itself, checks it's valid, and installs it with the correct path — no typing needed.
+
+**Manual (command line):** use the **full path** to the `.vsix`. Running it from the
+wrong folder causes the *"no such file or directory"* error.
+
 ```bash
+# Correct — absolute path:
+code --install-extension "C:\Users\You\Downloads\nikas-0.7.1.vsix"
+
+# Wrong — fails with "no such file or directory" if the file isn't in the current folder:
 code --install-extension nikas-0.7.1.vsix
 ```
 
-### 2. Configure
+> The `.vsix` is ~114 KB. If the file you received is much smaller, it was probably
+> truncated during transfer — ask the sender to re-send it.
 
-You need a DeepSeek API key. For vision/image support, choose one vision provider:
+### 2. Run the setup wizard (recommended)
+
+The moment the extension activates, a **status bar item** appears at the bottom-left.
+If Nikas isn't configured yet it shows **"Nikas: Set up"** — click it (or run
+`F1` → **`Nikas: Setup (First-Time Wizard)`**) to launch a guided wizard that walks
+you through everything in one place:
+
+1. **Set your DeepSeek API key** (required) — or click "Get a DeepSeek API Key" to open [platform.deepseek.com](https://platform.deepseek.com/) and create one.
+2. **Choose a vision provider** (optional, for image support) — Gemini (cloud) or Gemma 4 (local).
+3. **Choose a chat model** — defaults to DeepSeek V4 Flash.
+
+Once you've set your API key, the status bar changes to **"Nikas: Ready"** ✅.
+
+> If you skip the wizard, you can always reopen it anytime via
+> `F1` → `Nikas: Setup (First-Time Wizard)`, or `F1` → `Manage Nikas Models` → `Setup Wizard`.
+
+### 3. Select a chat model
+
+1. Open Copilot Chat (`Ctrl+Shift+I`)
+2. Click the model picker dropdown at the top
+3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses)**
+4. Start chatting
+
+> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's selected via the Copilot model picker only (it's not part of `Nikas: Choose Provider`).
+
+### Manual configuration (skip the wizard)
+
+You only need a DeepSeek API key for chat. Vision is optional:
 
 | Key / Setup | Where to get it | Purpose |
 |---|---|---|
-| DeepSeek API key | [platform.deepseek.com](https://platform.deepseek.com/) | Chat responses |
+| DeepSeek API key | [platform.deepseek.com](https://platform.deepseek.com/) | Chat responses (required) |
 | Gemma 4 via Ollama | `ollama pull gemma4:31b` | Vision preprocessing (local, default) |
 | Gemini API key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (free) | Vision preprocessing (cloud, alternative) |
 
@@ -53,15 +93,6 @@ Nikas connects to Ollama at `http://localhost:11434` by default. To use a remote
 1. `F1` → `Manage Nikas Models` → `Input Gemini API Key`
 2. Paste your Gemini API key (`AIza...`)
 3. `F1` → `Manage Nikas Models` → `Choose Vision Model` → pick **Gemini 2.5 Flash**
-
-### 3. Select a chat model
-
-1. Open Copilot Chat (`Ctrl+Shift+I`)
-2. Click the model picker dropdown at the top
-3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses)**
-4. Start chatting
-
-> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's selected via the Copilot model picker only (it's not part of `Nikas: Choose Provider`).
 
 ### 4. PDF support
 
@@ -101,6 +132,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 
 | Command | Description |
 |---|---|
+| `Nikas: Setup (First-Time Wizard)` | Guided setup — API key, vision provider, and model in one place |
 | `Nikas: Choose Provider` | Select which DeepSeek model to use |
 | `Nikas: Choose Vision Model` | Select which vision model preprocesses images (Gemma 4 or Gemini) |
 | `Nikas: Set Ollama Host` | Configure Ollama server URL (supports remote instances) |

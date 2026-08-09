@@ -32,6 +32,12 @@
     ],
     "commands": [
       {
+        "command": "nikas.setup",
+        "title": "Setup (First-Time Wizard)",
+        "category": "Nikas",
+        "icon": "$(rocket)"
+      },
+      {
         "command": "nikas.chooseProvider",
         "title": "Choose Provider",
         "category": "Nikas"
@@ -109,6 +115,21 @@
         "icon": "$(sync)"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "nikas.setup",
+          "when": "true"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "nikas.setup",
+          "when": "view == copilot.chat.view",
+          "group": "navigation@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "Nikas",
       "properties": {

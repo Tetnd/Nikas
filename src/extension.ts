@@ -7,6 +7,13 @@ import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK
 import { setLogLevel } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
+import {
+    runSetup,
+    getSetupState,
+    isConfigured,
+    createSetupStatusBarItem,
+    updateSetupStatusBar,
+} from './commands/setup.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -42,17 +49,40 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.lm.registerLanguageModelChatProvider('nikas', provider)
     );
 
-    // Check if DeepSeek API key is configured on startup
-    const apiKey = await provider.getApiKey();
-    if (!apiKey) {
-        const setKeyNow = 'Set API Key';
-        const response = await vscode.window.showWarningMessage(
-            'Nikas: DeepSeek API key not configured. The Nikas models will not appear in the Copilot Chat model picker until you set your API key.',
-            setKeyNow
-        );
-        if (response === setKeyNow) {
-            inputDeepseekToken(context);
+    // ── First-run setup onboarding ─────────────────────────────────────
+    // Create the status bar item that reflects whether Nikas is configured.
+    const setupStatusBar = createSetupStatusBarItem();
+    context.subscriptions.push(setupStatusBar);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('nikas.setup', () => runSetup(context))
+    );
+
+    // Refresh the status bar whenever the API key or relevant config changes.
+    const refreshSetupState = async () => {
+        try {
+            const state = await getSetupState(context);
+            updateSetupStatusBar(setupStatusBar, state);
+            return state;
+        } catch {
+            return undefined;
         }
+    };
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('nikas')) {
+                void refreshSetupState();
+            }
+        })
+    );
+    context.subscriptions.push(
+        context.secrets.onDidChange(() => { void refreshSetupState(); })
+    );
+
+    // Check if DeepSeek API key is configured on startup.
+    const setupState = await getSetupState(context);
+    updateSetupStatusBar(setupStatusBar, setupState);
+    if (!isConfigured(setupState)) {
+        await showFirstRunWelcome(context);
     }
 
     // Pre-warm vision modules so the first chat request doesn't have to
@@ -94,6 +124,10 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.manage', () => {
             vscode.window.showQuickPick(
                 [
+                    {
+                        label: '$(rocket) Setup Wizard',
+                        description: 'Guided first-time setup — API key, vision, and model in one place',
+                    },
                     {
                         label: '$(key) Input DeepSeek API Key',
                         description: 'Set your DeepSeek API key (required for Nikas to work)',
@@ -160,6 +194,9 @@ export async function activate(context: vscode.ExtensionContext) {
             ).then(selection => {
                 if (!selection) return;
                 switch (selection.label) {
+                    case '$(rocket) Setup Wizard':
+                        runSetup(context);
+                        break;
                     case '$(key) Input DeepSeek API Key':
                         inputDeepseekToken(context);
                         break;
@@ -214,6 +251,32 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         })
     );
+}
+
+// ---------------------------------------------------------------------------
+// First-run welcome / onboarding
+// ---------------------------------------------------------------------------
+
+/**
+ * Show a friendly, actionable first-run welcome when Nikas has no DeepSeek
+ * API key configured. Gives the new user a single obvious "Start Setup"
+ * button instead of a bare warning.
+ */
+async function showFirstRunWelcome(context: vscode.ExtensionContext): Promise<void> {
+    const startSetup = 'Start Setup';
+    const howTo = 'How to Use';
+    const response = await vscode.window.showWarningMessage(
+        '👋 Welcome to Nikas! Set up your DeepSeek API key to start chatting with ' +
+        'DeepSeek V4 models in Copilot Chat. It takes under a minute.',
+        startSetup,
+        howTo
+    );
+
+    if (response === startSetup) {
+        await runSetup(context);
+    } else if (response === howTo) {
+        await vscode.commands.executeCommand('workbench.action.chat.open');
+    }
 }
 
 // ---------------------------------------------------------------------------
