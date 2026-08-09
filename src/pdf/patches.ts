@@ -162,16 +162,26 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
             regexFallbacks: [
                 {
                     // Negated gate, version-drift tolerant: the endpoint accessor
-                    // (this.promptEndpoint / t / etc.) may be renamed by minifiers.
-                    // Strips the `supportsVision` requirement while preserving the
-                    // exact endpoint expression so the rest of the gate still works.
-                    pattern: /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{if\(!([\w$]+(?:\.[\w$]+)*)\.supportsVision\|\|!kkn\(\1\)\)\{/,
-                    replacement: (_m: string, endpoint: string) =>
-                        `if(\/\\.pdf\$/i.test(o.path)){if(!kkn(${endpoint})){`,
+                    // (this.promptEndpoint / t / e.model / etc.) may be renamed by
+                    // minifiers, and the `supportsVision` check may appear before OR
+                    // after the `kkn(...)` call. Matches the PDF gate with a
+                    // `supportsVision` requirement and strips it, keeping the
+                    // `kkn(...)` allowlist check (captured via its argument).
+                    pattern: /if\(\/\\\.pdf\$\/i\.test\(o\.path\)\)\{if\((![\w$]+(?:\.[\w$]+)*\.supportsVision\|\|!kkn\(([\w$]+(?:\.[\w$]+)*)\)|!kkn\(([\w$]+(?:\.[\w$]+)*)\)\|\|![\w$]+(?:\.[\w$]+)*\.supportsVision)\)\{/,
+                    replacement: (_m: string, _a: string, b: string | undefined, c: string | undefined) => {
+                        const endpoint = b || c || 'this.promptEndpoint';
+                        return `if(\/\\.pdf\$/i.test(o.path)){if(!kkn(${endpoint})){`;
+                    },
                 },
                 {
                     // Positive gate, older form (original recipe): if(kkn(<endpoint>)&&<endpoint>.supportsVision)
                     pattern: /if\(kkn\(([\w$]+(?:\.[\w$]+)*)\)&&\1\.supportsVision\)/,
+                    replacement: (_m: string, endpoint: string) => `if(kkn(${endpoint}))`,
+                },
+                {
+                    // Positive gate, tolerant of differing endpoint expressions:
+                    // if(kkn(<a>)&&<b>.supportsVision) → if(kkn(<a>))
+                    pattern: /if\(kkn\(([\w$]+(?:\.[\w$]+)*)\)&&[\w$]+(?:\.[\w$]+)*\.supportsVision\)/,
                     replacement: (_m: string, endpoint: string) => `if(kkn(${endpoint}))`,
                 },
             ],
