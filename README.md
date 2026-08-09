@@ -20,7 +20,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 ### 1. Install
 
 ```bash
-code --install-extension nikas-0.7.0.vsix
+code --install-extension nikas-0.7.1.vsix
 ```
 
 ### 2. Configure
