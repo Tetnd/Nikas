@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -192,7 +192,7 @@
         "nikas.concisePrompt": {
           "type": "boolean",
           "default": true,
-          "description": "Inject a short directive telling the model not to narrate its process as visible reply text (\"Let me check...\", \"I'll search for...\") and to go straight to tool calls / concise answers. Fixes the \"agent spams thinking as replies\" behavior in agent mode WITHOUT reducing the tool set. Disable to keep the narration."
+          "description": "Inject an agent directive into the system prompt that mirrors Copilot's native coding_agent_instructions: persist end-to-end, take action instead of proposing solutions, prefer edit tools, batch tool calls, and always call a tool instead of narrating a plan. Fixes the \"agent spams thinking as replies\" / \"spins\" behavior in agent mode WITHOUT reducing the tool set. Disable to keep the narration."
         },
         "nikas.visionModel": {
           "type": "string",

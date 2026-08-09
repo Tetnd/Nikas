@@ -4,6 +4,13 @@
 
 Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds DeepSeek V4 models to Copilot Chat's model picker (bring your own API key — no GitHub Copilot subscription required) and — unlike stock Copilot Chat — keeps **PDF attachments working for third-party providers** by automatically re-applying the Copilot Chat PDF patches whenever an update wipes them.
 
+## Why this extension?
+
+- **Don't replace Copilot — power it up.** No new sidebar, no new chat UI to learn. Just a new model in the picker you already use.
+- **Agent mode, tool calling, instructions, MCP, skills — all of it still works.** Copilot's entire stack, now running on DeepSeek.
+- **Vision on a text-only model.** DeepSeek V4 can't see images. This extension proxies any image you drop into chat through another Copilot model you already have, then feeds the description to DeepSeek — transparently.
+- **BYOK, pay DeepSeek directly.** Your API key, your bill, your rate limits. Stored in the OS keychain, never on disk.
+
 ## Features
 
 - **DeepSeek V4 Flash & Pro** — fast and powerful models in the Copilot Chat model picker
@@ -20,7 +27,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 ### 1. Install
 
 **Easiest way — one-click installer (Windows):**
-Put `install.ps1` and `nikas-0.7.7.vsix` in the **same folder**, then double-click
+Put `install.ps1` and `nikas-0.7.8.vsix` in the **same folder**, then double-click
 `install.ps1` (or right-click → *Run with PowerShell*). It finds the `.vsix` next to
 itself, checks it's valid, and installs it with the correct path — no typing needed.
 
@@ -29,10 +36,10 @@ wrong folder causes the *"no such file or directory"* error.
 
 ```bash
 # Correct — absolute path:
-code --install-extension "C:\Users\You\Downloads\nikas-0.7.7.vsix"
+code --install-extension "C:\Users\You\Downloads\nikas-0.7.8.vsix"
 
 # Wrong — fails with "no such file or directory" if the file isn't in the current folder:
-code --install-extension nikas-0.7.7.vsix
+code --install-extension nikas-0.7.8.vsix
 ```
 
 > The `.vsix` is ~114 KB. If the file you received is much smaller, it was probably

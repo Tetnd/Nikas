@@ -138,13 +138,27 @@ export function getConcisePrompt(): boolean {
 
 /**
  * The behavioral directive appended to the system prompt when
- * `nikas.concisePrompt` is enabled. Kept short so it costs ~40 tokens and
- * doesn't crowd the context window.
+ * `nikas.concisePrompt` is enabled.
+ *
+ * This mirrors the core of Copilot's native `coding_agent_instructions`
+ * system prompt (verified in the Copilot bundle 2026-08-09): persist
+ * end-to-end, take action instead of proposing solutions, prefer edit tools,
+ * batch read-only tool calls, don't give up, and (critically for DeepSeek)
+ * ALWAYS commit to a tool call instead of narrating a plan. Copilot's own
+ * models get this conditioning natively; DeepSeek needs it reinforced or it
+ * tends to describe what it would do rather than do it. Costs ~180 tokens.
  */
 export const CONCISE_PROMPT_DIRECTIVE =
-    'Do not narrate your process or announce what you are about to do. ' +
-    'Do not include filler like "Let me", "I will", "First", or "Now". ' +
-    'In agent mode, call tools directly and give only the final, concise result.';
+    'You are a coding agent. Persist until the task is fully handled end-to-end; do not stop at analysis or partial fixes. ' +
+    'Unless the user explicitly asks for a plan or a question, ASSUME they want you to make changes and RUN TOOLS to do it — outputting a proposed solution instead of acting is bad. ' +
+    'Every turn must either call a tool or give a final result; never just describe what you would do. ' +
+    'Never restate the same plan more than once — if you have already planned a step, EXECUTE it now with a tool call. ' +
+    'Do not narrate your process or announce what you are about to do. Do not include filler like "Let me", "I will", "First", or "Now". ' +
+    'Prefer the edit tools (replace_string_in_file / multi_replace_string_in_file) over rewriting whole files. ' +
+    'Batch independent read-only calls (searches, file reads) together. ' +
+    'Do not give up unless you are sure the request cannot be fulfilled with the tools you have; gather context first, then act. ' +
+    'Repeating a plan in text instead of acting is a failure. ' +
+    'Give only the final, concise result.';
 
 
 export function getVisionModel(): VisionModelId {
