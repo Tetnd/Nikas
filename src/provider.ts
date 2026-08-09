@@ -1327,11 +1327,54 @@ function sanitizeSchema(schema: Record<string, unknown> | null | undefined): Rec
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
         return FALLBACK_SCHEMA;
     }
-    // Ensure it has `type: "object"` at minimum
-    if (!schema.type || schema.type !== 'object') {
-        return { ...schema, type: 'object' };
+    // Recursively clean the schema: ensure every object schema has a valid
+    // `type`, and strip any `type: null` (which DeepSeek rejects with a 400 —
+    // e.g. the `container-tools_get-config` tool ships a null schema).
+    const cleaned = cleanSchemaNode(schema);
+    if (!cleaned.type || cleaned.type !== 'object') {
+        return { ...cleaned, type: 'object' };
     }
-    return schema;
+    return cleaned;
+}
+
+/**
+ * Recursively normalize a JSON Schema so that no `type` is `null` and every
+ * object/array schema carries a valid `type`. Returns a NEW object (does not
+ * mutate the input). Unknown/primitive leaves are left as-is.
+ */
+function cleanSchemaNode(node: unknown): Record<string, unknown> {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+        return { ...FALLBACK_SCHEMA, ...(typeof node === 'object' && node ? { ...node as Record<string, unknown> } : {}) };
+    }
+    const out: Record<string, unknown> = { ...(node as Record<string, unknown>) };
+
+    // A `type: null` is invalid — drop it so the node inherits a valid type.
+    if (Object.prototype.hasOwnProperty.call(out, 'type') && (out.type === null || out.type === undefined)) {
+        delete out.type;
+    }
+
+    // Recurse into nested schema containers.
+    if (out.properties && typeof out.properties === 'object') {
+        const props: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(out.properties as Record<string, unknown>)) {
+            props[k] = cleanSchemaNode(v as Record<string, unknown>);
+        }
+        out.properties = props;
+    }
+    if (out.items && typeof out.items === 'object') {
+        out.items = cleanSchemaNode(out.items as Record<string, unknown>);
+    }
+    if (Array.isArray(out.anyOf)) {
+        out.anyOf = out.anyOf.map((v) => cleanSchemaNode(v as Record<string, unknown>));
+    }
+    if (Array.isArray(out.allOf)) {
+        out.allOf = out.allOf.map((v) => cleanSchemaNode(v as Record<string, unknown>));
+    }
+    if (Array.isArray(out.oneOf)) {
+        out.oneOf = out.oneOf.map((v) => cleanSchemaNode(v as Record<string, unknown>));
+    }
+
+    return out;
 }
 
 /**
