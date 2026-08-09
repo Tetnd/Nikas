@@ -25,6 +25,34 @@ function getOutputChannel(): vscode.OutputChannel {
 }
 
 /**
+ * Emit DeepSeek's thinking-mode chain-of-thought as a native VS Code
+ * "thinking" part so it renders in the chat UI exactly like Copilot's own
+ * models (collapsed thinking block). Uses the PROPOSED
+ * `LanguageModelThinkingPart` API (`vscode.proposed.languageModelThinkingPart`):
+ * available at runtime in recent VS Code builds but not in the stable
+ * `@types/vscode`, so we feature-detect and cast. On older VS Code builds the
+ * reasoning is still round-tripped via the replay marker (no 400) but not
+ * displayed.
+ */
+function reportThinkingPart(
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    text: string,
+): void {
+    if (!text) return;
+    try {
+        // Accessing the member can throw when the proposal is not enabled
+        // (VS Code gates proposed API), so the whole access is try/caught.
+        const vscodeAny = vscode as unknown as Record<string, unknown>;
+        const ctor = vscodeAny.LanguageModelThinkingPart;
+        if (typeof ctor !== 'function') return;
+        const part = new (ctor as new (value: string) => unknown)(text);
+        progress.report(part as vscode.LanguageModelResponsePart);
+    } catch (err) {
+        log.verbose(`Failed to emit thinking part: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
+/**
  * Rough token count estimation for messages.
  * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
  *
@@ -686,6 +714,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             // replay marker so the next turn can re-inject it as
             // reasoning_content / reasoning_text.
             if (streamResult.reasoningText) {
+                // Show the CoT natively in the chat UI (collapsed thinking
+                // block, like Copilot's own models) where the API supports it.
+                reportThinkingPart(progress, streamResult.reasoningText);
                 progress.report(createReplayMarkerPart({
                     ...replayMarkerMetadata,
                     reasoningText: streamResult.reasoningText,
@@ -925,6 +956,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             // With tools + thinking, DeepSeek REQUIRES reasoning_text to be
             // passed back, or it returns HTTP 400.
             if (streamResult.reasoningText) {
+                // Show the CoT natively in the chat UI (collapsed thinking
+                // block, like Copilot's own models) where the API supports it.
+                reportThinkingPart(progress, streamResult.reasoningText);
                 progress.report(createReplayMarkerPart({
                     ...replayMarkerMetadata,
                     reasoningText: streamResult.reasoningText,
@@ -1483,12 +1517,12 @@ function buildThinkingEffortSchema() {
                 enum: ['none', 'low', 'high', 'max'],
                 enumItemLabels: ['None', 'Low', 'High', 'Max'],
                 enumDescriptions: [
-                    'None (default) — fastest, lowest cost. Best for simple Q&A and quick tasks',
+                    'None — fastest, lowest cost. Best for simple Q&A and quick tasks',
                     'Low — light reasoning, faster than High/Max',
                     'High — balanced reasoning',
-                    'Max — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)',
+                    'Max (default) — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)',
                 ],
-                default: 'none',
+                default: 'max',
                 group: 'navigation',
             },
         },

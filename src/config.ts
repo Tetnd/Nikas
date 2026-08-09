@@ -199,7 +199,10 @@ export function getThinkingEffort(): ThinkingEffort {
     if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
         return value;
     }
-    return 'off';
+    // Default to max — the weather-app A/B (2026-08-09) showed max produces
+    // the best final product (verified in the field); off is fastest but
+    // produces weaker complex builds.
+    return 'max';
 }
 
 /**

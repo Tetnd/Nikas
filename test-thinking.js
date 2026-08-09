@@ -18,7 +18,7 @@
 const VALID_EFFORTS = new Set(['off', 'low', 'high', 'max']);
 
 function getThinkingEffortSafe(value) {
-    return VALID_EFFORTS.has(value) ? value : 'off';
+    return VALID_EFFORTS.has(value) ? value : 'max';
 }
 
 function getRequestThinkingEffort(options, savedSetting) {
@@ -86,8 +86,8 @@ check('configuration max → max', resolveEffort({ configuration: { reasoningEff
 check('no dropdown → saved setting', resolveEffort({}, 'low') === 'low');
 check('no dropdown, empty options → saved setting', resolveEffort(undefined, 'max') === 'max');
 // Invalid saved value must not leak to the API
-check('invalid saved value → off (guarded)', resolveEffort({}, 'xhigh') === 'off');
-check('invalid saved value → off (guarded 2)', resolveEffort({}, 'yes') === 'off');
+check('invalid saved value → max (guarded)', resolveEffort({}, 'xhigh') === 'max');
+check('invalid saved value → max (guarded 2)', resolveEffort({}, 'yes') === 'max');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');

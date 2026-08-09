@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -22,6 +22,9 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "enabledApiProposals": [
+    "languageModelThinkingPart"
+  ],
   "contributes": {
     "languageModelChatProviders": [
       {
@@ -174,7 +177,7 @@
         },
         "nikas.thinkingEffort": {
           "type": "string",
-          "default": "off",
+          "default": "max",
           "enum": [
             "off",
             "low",
@@ -182,12 +185,12 @@
             "max"
           ],
           "enumDescriptions": [
-            "Off (default) — fastest, lowest cost. Best for simple Q&A and quick tasks",
+            "Off — fastest, lowest cost. Best for simple Q&A and quick tasks",
             "Low — light reasoning, faster than High/Max",
             "High — balanced reasoning",
-            "Max — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
+            "Max (default) — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
           ],
-          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Tradeoff verified 2026-08-09: on a small code-contract task, off scored 92% vs max 83-92% (no clear gain); but on a full weather-app build (same prompt), max took ~5x longer and produced a much better final product. So: off for speed and simple tasks, max for complex builds where quality matters most. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
+          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to max — the weather-app A/B (2026-08-09) showed max produces the best final product for complex builds (at ~5x the time/cost of off). Switch to off for speed on simple tasks. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
         },
         "nikas.concisePrompt": {
           "type": "boolean",
