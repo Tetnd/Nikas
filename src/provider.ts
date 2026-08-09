@@ -331,9 +331,13 @@ function repairTruncatedSequence(
  */
 export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation> {
     private readonly secrets: SecretStore;
+    /** Loaded build version — stamped on every request log line for diagnosability. */
+    private readonly buildVersion: string;
 
     constructor(context: vscode.ExtensionContext) {
         this.secrets = new SecretStore(context.secrets);
+        const version: unknown = context.extension.packageJSON?.version;
+        this.buildVersion = String(version ?? 'unknown');
     }
 
     /** Expose key check so the extension can prompt on startup. */
@@ -680,7 +684,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
             `max_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
-            `temperature=${getTemperature()}`
+            `temperature=${getTemperature()}, ` +
+            `build=v${this.buildVersion}`
         );
 
         // Create an AbortController for cancellation
@@ -956,11 +961,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
             `max_output_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
-            `temperature=${getTemperature()}`
+            `temperature=${getTemperature()}, ` +
+            `build=v${this.buildVersion}`
         );
         getOutputChannel().appendLine(
             `[Nikas] Responses API: model=${modelId}, inputItems=${Array.isArray(input) ? input.length : 0}, ` +
-            `thinking=${thinkingEnabled}, tools=${options.tools?.length ?? 0}`
+            `thinking=${thinkingEnabled}, tools=${options.tools?.length ?? 0}, build=v${this.buildVersion}`
         );
 
         const abortController = new AbortController();
