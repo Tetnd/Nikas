@@ -232,4 +232,138 @@ function testScenario(name, messages, maxContext, maxOutput) {
 }
 
 console.log(`\n===== ${scenarios} targeted + 200 fuzz → ${safe} safe, ${failures} failing =====`);
+
+// ── 7. Coalescing consecutive user messages (messages.ts fix) ──
+// DeepSeek merges consecutive user messages server-side, but a clean
+// alternating sequence is better. Copilot's agent loop produces adjacent
+// user messages (e.g. tool-result messages emit role:"user" text right
+// before the next real user turn) — coalescing normalizes them once, in
+// vscodeMessagesToDeepSeek, so validateMessageSequence stays quiet.
+console.log('\n=== 7. Coalesce consecutive user messages ===');
+function mergeUserContent(a, b) {
+    const textParts = [];
+    const structured = [];
+    const collect = (c) => {
+        if (typeof c === 'string') { if (c.trim()) textParts.push(c); }
+        else if (Array.isArray(c)) {
+            for (const p of c) {
+                if (p.type === 'text') { if (p.text && p.text.trim()) textParts.push(p.text); }
+                else structured.push(p);
+            }
+        }
+    };
+    collect(a); collect(b);
+    if (structured.length === 0) return textParts.join('\n');
+    const merged = [];
+    if (textParts.length > 0) merged.push({ type: 'text', text: textParts.join('\n') });
+    merged.push(...structured);
+    return merged;
+}
+function coalesceConsecutiveUserMessages(messages) {
+    if (messages.length < 2) return messages;
+    const result = [];
+    for (const msg of messages) {
+        const prev = result[result.length - 1];
+        if (prev && prev.role === 'user' && msg.role === 'user') {
+            prev.content = mergeUserContent(prev.content, msg.content);
+            if (!prev.name && msg.name) prev.name = msg.name;
+        } else {
+            result.push({ ...msg });
+        }
+    }
+    return result;
+}
+let cPass = 0, cFail = 0;
+function ccheck(name, cond, detail) {
+    if (cond) { cPass++; console.log(`  PASS ${name}`); }
+    else { cFail++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+}
+
+{
+    // string + string → single string
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'user', content: 'first' },
+        { role: 'user', content: 'second' },
+    ]);
+    ccheck('two string users → one message', out.length === 1 && out[0].role === 'user');
+    ccheck('strings joined with newline', out[0].content === 'first\nsecond', JSON.stringify(out[0].content));
+}
+{
+    // three consecutive users → one
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'user', content: 'a' },
+        { role: 'user', content: 'b' },
+        { role: 'user', content: 'c' },
+    ]);
+    ccheck('three users → one', out.length === 1 && out[0].content === 'a\nb\nc', JSON.stringify(out));
+}
+{
+    // non-user messages break the run and are preserved
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'user', content: 'u1' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'u2' },
+        { role: 'user', content: 'u3' },
+        { role: 'tool', tool_call_id: 'c1', content: 'r1' },
+    ]);
+    const roles = out.map(m => m.role);
+    ccheck('roles preserved/merged', JSON.stringify(roles) === JSON.stringify(['user', 'assistant', 'user', 'tool']), JSON.stringify(roles));
+    ccheck('u2+u3 merged', out[2].content === 'u2\nu3', JSON.stringify(out[2].content));
+}
+{
+    // structured content (image_url) merged with text
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] },
+        { role: 'user', content: 'what is this' },
+    ]);
+    ccheck('structured+string merged into one user', out.length === 1);
+    ccheck('image part preserved', Array.isArray(out[0].content) && out[0].content.some(p => p.type === 'image_url'));
+    ccheck('text inline in structured merge', Array.isArray(out[0].content) && out[0].content.some(p => p.type === 'text' && p.text === 'what is this'), JSON.stringify(out[0].content));
+}
+{
+    // does not mutate the caller's array
+    const input = [
+        { role: 'user', content: 'x' },
+        { role: 'user', content: 'y' },
+    ];
+    const out = coalesceConsecutiveUserMessages(input);
+    ccheck('output is a new array', out !== input);
+    ccheck('input not mutated', input.length === 2 && input[0].content === 'x', JSON.stringify(input));
+}
+{
+    // realistic agent loop: tool-result user text adjacent to next user turn
+    const seq = coalesceConsecutiveUserMessages([
+        { role: 'user', content: 'Find the file' },                                          // real user turn
+        { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'grep', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'c1', content: 'no matches' },
+        { role: 'user', content: 'please continue' },                                        // text alongside tool result
+        { role: 'user', content: 'Actually try a different search' },                        // next real user turn
+    ]);
+    const issues = findDeepSeekIssues(seq);
+    ccheck('agent-loop sequence has zero issues after coalescing', issues.length === 0, JSON.stringify(issues));
+    const userIdx = seq.map(m => m.role).indexOf('user');
+    ccheck('adjacent users merged into one', seq[userIdx + 1]?.role === 'assistant', JSON.stringify(seq.map(m => m.role)));
+    ccheck('tool result preserved', seq.some(m => m.role === 'tool' && m.tool_call_id === 'c1'));
+}
+{
+    // empty + text edge: merging never introduces an empty-content user
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'user', content: '  ' },
+        { role: 'user', content: 'real text' },
+    ]);
+    ccheck('whitespace user merged away', out.length === 1 && out[0].content === 'real text', JSON.stringify(out));
+}
+{
+    // system-first sequence untouched
+    const out = coalesceConsecutiveUserMessages([
+        { role: 'system', content: 'You are an assistant.' },
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+    ]);
+    ccheck('system/assistant not merged', out.length === 3 && out[0].role === 'system' && out[1].role === 'user' && out[2].role === 'assistant');
+}
+console.log(`  → ${cPass} coalescing checks passed, ${cFail} failed`);
+failures += cFail;
+
+console.log(`\n===== ${scenarios} targeted + 200 fuzz + coalescing → ${safe} safe, ${failures} failing =====`);
 process.exit(failures ? 1 : 0);

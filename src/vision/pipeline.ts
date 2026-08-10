@@ -582,6 +582,24 @@ function collectInputImageStats(
     }
 }
 
+/**
+ * Structural "ordinary conversation part, not an attachment" check.
+ *
+ * Matches the shape of LanguageModelTextPart ({value}), LanguageModelToolCallPart
+ * ({callId,name,input}) and LanguageModelToolResultPart ({callId,output,isError})
+ * WITHOUT `instanceof` — patched-bundle parts cross an extension-host realm
+ * where instanceof is unreliable (see replay.ts normalizeDataPart). These parts
+ * appear in EVERY request, so logging them as "unknown shapes" (as seen in the
+ * `rn{value}` noise) would drown out genuinely novel attachment forms.
+ */
+function isNonBinaryPart(part: unknown): boolean {
+    if (typeof part !== 'object' || part === null) return true; // primitives aren't attachments
+    const obj = part as Record<string, unknown>;
+    if (typeof obj.value === 'string') return true;  // LanguageModelTextPart
+    if (typeof obj.callId === 'string') return true; // tool call / tool result part
+    return false;
+}
+
 /** Log a one-line summary of all data parts (image/PDF/unknown) in the request. */
 function logDataPartSummary(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
@@ -597,6 +615,10 @@ function logDataPartSummary(
             if (norm) {
                 byMime.set(norm.mimeType, (byMime.get(norm.mimeType) ?? 0) + 1);
                 total += 1;
+            } else if (isNonBinaryPart(part)) {
+                // Text / tool parts are normal conversation content, not
+                // attachments — skip so only novel shapes are surfaced.
+                continue;
             } else if (typeof part === 'object' && part !== null) {
                 // Not a recognized binary part — log its shape once so new
                 // attachment forms are visible instead of silently dropped.

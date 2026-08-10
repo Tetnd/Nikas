@@ -20,7 +20,66 @@ export async function vscodeMessagesToDeepSeek(
     messages: readonly vscode.LanguageModelChatRequestMessage[]
 ): Promise<DeepSeekMessage[]> {
     const results = await Promise.all(messages.map(msg => vscodeMessageToDeepSeek(msg)));
-    return results.flat();
+    return coalesceConsecutiveUserMessages(results.flat());
+}
+
+/**
+ * Coalesce consecutive `user` messages into one.
+ *
+ * DeepSeek's API tolerates consecutive user messages (it merges them
+ * server-side), but a clean alternating sequence is better: it cuts
+ * per-message overhead and keeps `validateMessageSequence` (provider.ts)
+ * from warning on agent-loop requests. Copilot's agent loop legitimately
+ * produces adjacent user messages — e.g. `buildToolResultMessages` emits a
+ * `role:"user"` message for text that accompanies tool results, which can
+ * land directly before the next real user turn. Merging here (single point,
+ * before truncation) fixes both the chat-completions and Responses paths.
+ */
+function coalesceConsecutiveUserMessages(messages: DeepSeekMessage[]): DeepSeekMessage[] {
+    if (messages.length < 2) return messages;
+    const result: DeepSeekMessage[] = [];
+    for (const msg of messages) {
+        const prev = result[result.length - 1];
+        if (prev && prev.role === 'user' && msg.role === 'user') {
+            prev.content = mergeUserContent(prev.content, msg.content);
+            if (!prev.name && msg.name) prev.name = msg.name;
+        } else {
+            // Shallow copy so the caller's objects are never mutated.
+            result.push({ ...msg });
+        }
+    }
+    return result;
+}
+
+/** Merge the content of two adjacent user messages into one message's content. */
+function mergeUserContent(
+    a: DeepSeekMessage['content'],
+    b: DeepSeekMessage['content'],
+): DeepSeekMessage['content'] {
+    const textParts: string[] = [];
+    const structuredParts: DeepSeekContentPart[] = [];
+    const collect = (c: DeepSeekMessage['content']): void => {
+        if (typeof c === 'string') {
+            if (c.trim()) textParts.push(c);
+        } else if (Array.isArray(c)) {
+            for (const p of c) {
+                if (p.type === 'text') {
+                    if (p.text?.trim()) textParts.push(p.text);
+                } else {
+                    structuredParts.push(p); // image_url etc. — preserved in order
+                }
+            }
+        }
+    };
+    collect(a);
+    collect(b);
+    // Pure text → single string (DeepSeek's preferred compact shape).
+    if (structuredParts.length === 0) return textParts.join('\n');
+    // Mixed → keep text inline as one text part, then any structured parts.
+    const merged: DeepSeekContentPart[] = [];
+    if (textParts.length > 0) merged.push({ type: 'text', text: textParts.join('\n') });
+    merged.push(...structuredParts);
+    return merged;
 }
 
 /**

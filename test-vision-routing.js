@@ -186,5 +186,57 @@ check('object without mime is NOT a data part', normalizeDataPart({ data: new Ui
 check('null is NOT a data part', normalizeDataPart(null) === undefined);
 check('non-object is NOT a data part', normalizeDataPart('pdf') === undefined);
 
+// 6. Request-part summary: ordinary text/tool parts must NOT be flagged as
+// "unknown shapes" (the rn{value} noise fix). Mirrors src/vision/pipeline.ts
+// isNonBinaryPart + logDataPartSummary. Only genuinely novel object shapes
+// should be surfaced so new attachment forms stay visible.
+console.log('\n=== 6. Request part summary: no noise for text/tool parts ===');
+function isNonBinaryPart(part) {
+    if (typeof part !== 'object' || part === null) return true;
+    if (typeof part.value === 'string') return true;   // LanguageModelTextPart
+    if (typeof part.callId === 'string') return true;  // tool call / tool result
+    return false;
+}
+function summarizeParts(parts) {
+    const byMime = new Map();
+    const unknownShapes = [];
+    let total = 0;
+    for (const part of parts) {
+        const norm = normalizeDataPart(part);
+        if (norm) {
+            byMime.set(norm.mimeType, (byMime.get(norm.mimeType) ?? 0) + 1);
+            total += 1;
+        } else if (isNonBinaryPart(part)) {
+            continue;
+        } else if (typeof part === 'object' && part !== null) {
+            const keys = Object.keys(part).sort().join(',');
+            const ctor = part.constructor?.name ?? '?';
+            const sig = `${ctor}{${keys}}`;
+            if (!unknownShapes.includes(sig)) unknownShapes.push(sig);
+        }
+    }
+    return { total, unknownShapes, byMime };
+}
+
+// A realistic request: one text part + one tool call + one tool result.
+// BEFORE the fix this logged "rn{value}" on EVERY request.
+const plainText = { value: 'Hello' };                       // minified ctor 'rn'
+const toolCall = { callId: 'c1', name: 'grep_search', input: {} };
+const toolResult = { callId: 'c1', output: [], isError: false };
+const image = { data: new Uint8Array([1]), mimeType: 'image/png' };
+
+let s = summarizeParts([plainText, toolCall, toolResult, image]);
+check('text part NOT flagged as unknown shape', s.unknownShapes.length === 0, JSON.stringify(s.unknownShapes));
+check('data part still counted', s.total === 1 && s.byMime.get('image/png') === 1);
+
+s = summarizeParts([plainText, plainText, plainText]);
+check('only-text request produces NO unknown shapes and NO data', s.unknownShapes.length === 0 && s.total === 0);
+
+// A genuinely novel object (no value/callId) must still be surfaced.
+const novelShape = { blob: new Uint8Array([1]), kind: 'x-unknown' };
+s = summarizeParts([plainText, novelShape]);
+check('novel object shape still flagged', s.unknownShapes.length === 1 && s.unknownShapes[0].includes('{blob,kind}'), JSON.stringify(s.unknownShapes));
+check('empty/primitive parts are skipped (not flagged)', summarizeParts([null, undefined, 42, 'str']).unknownShapes.length === 0);
+
 console.log(`\n===== ${pass} passed, ${fail} failed =====`);
 process.exit(fail ? 1 : 0);
