@@ -163,7 +163,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL (supports remote instances) |
 | `nikas.maxTokens` | `16K` | Maximum output tokens per response |
 | `nikas.temperature` | `0.7` | Response creativity (0–2) |
-| `nikas.thinkingEffort` | `max` | Thinking/reasoning effort (`off`, `low`, `high`, `max`) — max gives the best quality for complex builds (default); off is fastest for simple tasks |
+| `nikas.thinkingEffort` | `off` | Thinking/reasoning effort (`off`, `low`, `high`, `max`) — off is the default, matching upstream Nika (the creator's default); max gives the best quality for complex builds but is slowest and most expensive |
 | `nikas.contextWindow` | `950K` | Maximum input context window (32K–950K). 950K stays under the API's 1,048,576-token hard ceiling |
 | `nikas.logLevel` | `INFO` | Logging verbosity (`OFF`, `ERROR`, `WARN`, `INFO`, `VERBOSE`) |
 | `nikas.logMaxSizeMB` | `5` | Max size of `nikas.log` before it rotates (`nikas.log.1`, `.2`, ...). `0` disables rotation |

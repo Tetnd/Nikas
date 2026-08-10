@@ -18,7 +18,7 @@
 const VALID_EFFORTS = new Set(['off', 'low', 'high', 'max']);
 
 function getThinkingEffortSafe(value) {
-    return VALID_EFFORTS.has(value) ? value : 'max';
+    return VALID_EFFORTS.has(value) ? value : 'off';
 }
 
 // NOTE (v0.7.27): the Vizards-style picker dropdown + request-kind routing
@@ -69,9 +69,9 @@ check('saved low → low', resolveEffort({}, 'low') === 'low');
 check('saved max → max', resolveEffort(undefined, 'max') === 'max');
 check('saved high → high (options ignored)', resolveEffort({ modelConfiguration: { reasoningEffort: 'none' } }, 'high') === 'high');
 check('saved high → high (configuration ignored)', resolveEffort({ configuration: { reasoningEffort: 'none' } }, 'high') === 'high');
-// Invalid saved value must not leak to the API
-check('invalid saved value → max (guarded)', resolveEffort({}, 'xhigh') === 'max');
-check('invalid saved value → max (guarded 2)', resolveEffort({}, 'yes') === 'max');
+// Invalid saved value must not leak to the API (defaults to off, matching Nika)
+check('invalid saved value → off (guarded)', resolveEffort({}, 'xhigh') === 'off');
+check('invalid saved value → off (guarded 2)', resolveEffort({}, 'yes') === 'off');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');

@@ -222,10 +222,10 @@ export function getThinkingEffort(): ThinkingEffort {
     if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
         return value;
     }
-    // Default to max — best quality for complex agent builds (verified in the
-    // weather-app A/B: much better final product, ~5x slower). Users who want
-    // speed can set off/low/high via the setting or the model-picker dropdown.
-    return 'max';
+    // Default to off — matches upstream Nika (the creator's default), so the
+    // agent behaves identically to Nika out of the box. Users who want more
+    // reasoning can opt into low/high/max via the nikas.thinkingEffort setting.
+    return 'off';
 }
 
 /**
