@@ -35,6 +35,7 @@ function getOutputChannel(): vscode.OutputChannel {
  */
 type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
     isBYOK?: true;
+    configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
 };
 
 /**
@@ -382,6 +383,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     detail: m.detail,
                 };
 
+                // Both Flash and Pro support thinking — add the per-model
+                // Thinking Effort dropdown in Copilot Chat's model picker
+                // (matches upstream Nika).
+                modelInfo.configurationSchema = buildThinkingEffortSchema();
+
                 models.push(modelInfo);
             }
 
@@ -398,6 +404,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
             };
+            responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
             models.push(responsesModelInfo);
         } else if (!options.silent) {
             vscode.window.showWarningMessage(
@@ -582,9 +589,17 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // thinking off — they produce no user-visible value, so max reasoning on
         // them is pure latency + cost. The configured effort still applies to
         // the real agent (the executor that picks tools and does the work).
+        // Read thinking effort from the model-picker dropdown first (set by
+        // Copilot Chat's Thinking Effort dropdown, matching upstream Nika),
+        // falling back to the saved nikas.thinkingEffort setting. Invisible
+        // internal helper requests (chat titles, commit messages, settings
+        // resolver, todo tracker, categorize_prompt, ...) are ALWAYS forced to
+        // thinking off — they produce no user-visible value, so reasoning on
+        // them is pure latency + cost. The chosen effort still applies to the
+        // real agent (the executor that picks tools and does the work).
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
-        const thinkingEffort = forcedHelperOff ? 'off' : getThinkingEffort();
+        const thinkingEffort = forcedHelperOff ? 'off' : getRequestThinkingEffort(options);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
@@ -871,7 +886,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // chat-completions handler for rationale).
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
-        const thinkingEffort = forcedHelperOff ? 'off' : getThinkingEffort();
+        const thinkingEffort = forcedHelperOff ? 'off' : getRequestThinkingEffort(options);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
@@ -1537,6 +1552,54 @@ function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponses
         description: tool.description ?? '',
         parameters,
     };
+}
+
+/**
+ * Schema for the per-model "Thinking Effort" dropdown in Copilot Chat's model
+ * picker. Matches upstream Nika exactly (values `none`/`low`/`high`/`max`).
+ *
+ * The dropdown's selected value is delivered to the request via
+ * `options.modelConfiguration.reasoningEffort`, which `getRequestThinkingEffort`
+ * reads first (falling back to the saved `nikas.thinkingEffort` setting).
+ */
+function buildThinkingEffortSchema() {
+    return {
+        properties: {
+            reasoningEffort: {
+                type: 'string',
+                title: 'Thinking Effort',
+                enum: ['none', 'low', 'high', 'max'],
+                enumItemLabels: ['None', 'Low', 'High', 'Max'],
+                enumDescriptions: [
+                    'Disable thinking for faster responses',
+                    'Light reasoning — fastest thinking mode, good for simple lookups',
+                    'Recommended for most tasks — balanced reasoning',
+                    'Maximum reasoning depth for complex agent tasks',
+                ],
+                default: 'high',
+                group: 'navigation',
+            },
+        },
+    };
+}
+
+/**
+ * Read the thinking effort from the request options (set by Copilot Chat's
+ * model-picker "Thinking Effort" dropdown) or fall back to the saved
+ * `nikas.thinkingEffort` setting. Mirrors upstream Nika's
+ * `getRequestThinkingEffort`.
+ */
+function getRequestThinkingEffort(options: unknown): ThinkingEffort {
+    const extOptions = (options ?? {}) as Record<string, unknown>;
+    const modelConfig = (extOptions.modelConfiguration ?? {}) as Record<string, unknown>;
+    const cfg = (extOptions.configuration ?? {}) as Record<string, unknown>;
+    const configuredEffort = (modelConfig.reasoningEffort ?? cfg.reasoningEffort) as string | undefined;
+    if (configuredEffort === 'none') return 'off';
+    if (configuredEffort === 'low') return 'low';
+    if (configuredEffort === 'high') return 'high';
+    if (configuredEffort === 'max') return 'max';
+    // Fall back to the saved setting (for users who haven't used the dropdown yet)
+    return getThinkingEffort();
 }
 
 /**

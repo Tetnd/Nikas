@@ -36,6 +36,17 @@ function resolveEffort(requestKind, savedSetting, helperThinkingOff) {
     return (helperThinkingOff && INTERNAL_HELPER_KINDS.has(requestKind)) ? 'off' : getThinkingEffortSafe(savedSetting);
 }
 
+// v0.7.35: model-picker dropdown (restored to match upstream Nika) is read
+// first via options.modelConfiguration.reasoningEffort; falls back to the
+// saved setting. Mirrors getRequestThinkingEffort in provider.ts.
+function resolveDropdownEffort(modelConfigEffort, savedSetting) {
+    if (modelConfigEffort === 'none') return 'off';
+    if (modelConfigEffort === 'low') return 'low';
+    if (modelConfigEffort === 'high') return 'high';
+    if (modelConfigEffort === 'max') return 'max';
+    return getThinkingEffortSafe(savedSetting);
+}
+
 function buildThinkingParams(effort) {
     if (effort === 'off') {
         return { thinking: { type: 'disabled' } };
@@ -97,6 +108,18 @@ check('Nika parity: executor max → max', resolveEffort('main-agent', 'max', fa
 // Invalid saved value must not leak to the API (defaults to low)
 check('invalid saved value → low (guarded)', resolveEffort('unknown', 'xhigh', true) === 'low');
 check('invalid saved value → low (guarded 2)', resolveEffort('unknown', 'yes', true) === 'low');
+
+console.log('\n=== 1b. Model-picker dropdown effort (v0.7.35, matches Nika) ===');
+// Dropdown wins over the saved setting when it carries a value.
+check('dropdown none → off', resolveDropdownEffort('none', 'low') === 'off');
+check('dropdown low → low', resolveDropdownEffort('low', 'max') === 'low');
+check('dropdown high → high', resolveDropdownEffort('high', 'off') === 'high');
+check('dropdown max → max', resolveDropdownEffort('max', 'low') === 'max');
+// No dropdown value → falls back to the saved setting.
+check('no dropdown → saved setting low', resolveDropdownEffort(undefined, 'low') === 'low');
+check('no dropdown → saved setting max', resolveDropdownEffort(undefined, 'max') === 'max');
+// Invalid dropdown value never leaks.
+check('invalid dropdown → saved setting', resolveDropdownEffort('turbo', 'low') === 'low');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');
