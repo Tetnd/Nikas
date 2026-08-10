@@ -90,13 +90,70 @@ function loadPdfJs(): PdfJsApi | undefined {
     return pdfjsApi;
 }
 
+/** Options controlling which pages of a PDF are extracted. */
+export interface PdfExtractOptions {
+    /** 1-based inclusive page range to extract (e.g. {start: 10, end: 20}). */
+    pageRange?: { start: number; end: number };
+    /** Max pages to extract when no explicit range is given (0 = unlimited). */
+    maxPages?: number;
+}
+
 /**
- * Extract text from a PDF using pdfjs-dist. Returns '' when nothing could
- * be extracted (scanned/image-only pages, or load failure).
+ * Detect a page-range request in a user message.
+ *
+ * Understands English and Hebrew:
+ *   - "read pages 100-150" / "page 3" / "pages 5 to 12"
+ *   - "עמודים 100-150" / "עמוד 3" / "קרא עמודים 5 עד 12"
+ *
+ * Returns a 1-based inclusive range, or undefined when no explicit range
+ * is present (the caller then applies its max-pages cap).
  */
-export async function extractPdfTextWithPdfjs(data: Uint8Array): Promise<string> {
+export function detectPageRange(text: string): { start: number; end: number } | undefined {
+    if (!text) return undefined;
+
+    // English: pages 100-150 | page 3 | pages 5 to 12 | pages 10 until 20
+    const enRange = /page[s]?\s*:?\s*(\d+)(?:\s*[-–—]\s*(\d+)|\s+(?:to|until)\s+(\d+)|\s+עד\s+(\d+))?/i.exec(text);
+    // Hebrew: עמודים 100-150 | עמוד 3 | עמודים 5 עד 12 | קרא עמודים 5 עד 12
+    const heRange = /עמוד(?:ים)?\s*:?\s*(\d+)(?:\s*[-–—]\s*(\d+)|\s+עד\s+(\d+))?/.exec(text);
+
+    const m = enRange ?? heRange;
+    if (!m) return undefined;
+
+    const start = parseInt(m[1], 10);
+    if (!Number.isFinite(start) || start < 1) return undefined;
+    const endRaw = m[2] ?? m[3] ?? m[4];
+    if (endRaw) {
+        const end = parseInt(endRaw, 10);
+        if (Number.isFinite(end) && end >= start) {
+            return { start, end };
+        }
+    }
+    // Single page.
+    return { start, end: start };
+}
+
+/** Result of a page-aware extraction. */
+export interface PdfExtractResult {
+    text: string;
+    totalPages: number;
+    /** 1-based pages actually extracted (may be a subset due to range/cap). */
+    pagesIncluded: number;
+    /** True when the PDF has more pages than were extracted (range/cap applied). */
+    truncated: boolean;
+}
+
+/**
+ * Extract text from a PDF using pdfjs-dist, optionally limited to a page
+ * range or a max page count. Returns '' when nothing could be extracted
+ * (scanned/image-only pages, or load failure).
+ */
+export async function extractPdfTextWithPdfjs(
+    data: Uint8Array,
+    options?: PdfExtractOptions,
+): Promise<PdfExtractResult> {
+    const empty: PdfExtractResult = { text: '', totalPages: 0, pagesIncluded: 0, truncated: false };
     const api = loadPdfJs();
-    if (!api) return '';
+    if (!api) return empty;
 
     let doc: PdfJsDocument | undefined;
     try {
@@ -108,21 +165,41 @@ export async function extractPdfTextWithPdfjs(data: Uint8Array): Promise<string>
             verbosity: 0,                // keep logs quiet
         }).promise;
 
+        const totalPages = doc.numPages;
+
+        // Determine the page set to extract.
+        let start = 1;
+        let end = totalPages;
+        if (options?.pageRange) {
+            start = Math.max(1, options.pageRange.start);
+            end = Math.min(totalPages, options.pageRange.end);
+            if (start > end) return { ...empty, totalPages };
+        } else if (options?.maxPages && options.maxPages > 0 && totalPages > options.maxPages) {
+            end = Math.min(totalPages, options.maxPages);
+        }
+
         const chunks: string[] = [];
-        for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+        for (let pageNum = start; pageNum <= end; pageNum++) {
             const page = await doc.getPage(pageNum);
             const tc = await page.getTextContent();
             if (tc.items.length) {
                 chunks.push(tc.items.map(item => item.str).join(' '));
             }
         }
-        return chunks.join('\n').trim();
+        const text = chunks.join('\n').trim();
+        const pagesIncluded = end - start + 1;
+        return {
+            text,
+            totalPages,
+            pagesIncluded,
+            truncated: pagesIncluded < totalPages,
+        };
     } catch (err) {
         // Log the real reason — this is where the extension host has been
         // failing silently (v0.7.19/v0.7.20), producing garbage from the
         // legacy fallback.
         log.error(`[PDF] pdfjs extraction failed: ${err instanceof Error ? `${err.message}\n${err.stack?.split('\n').slice(0, 3).join('\n')}` : String(err)}`);
-        return ''; // fall back to the legacy extractor
+        return empty; // fall back to the legacy extractor
     } finally {
         try { doc?.destroy(); } catch { /* ignore */ }
     }
@@ -173,13 +250,20 @@ export function extractPdfTextLegacy(data: Uint8Array): string {
 
 /**
  * Extract text from a PDF: pdfjs-dist first (handles CID/ToUnicode/Hebrew),
- * falling back to the minimal stream-operator extractor.
+ * falling back to the minimal stream-operator extractor. Page-aware — a page
+ * range or max-page cap can be supplied for large documents.
  */
-export async function extractPdfText(data: Uint8Array): Promise<string> {
-    const fromPdfjs = await extractPdfTextWithPdfjs(data);
-    if (fromPdfjs) {
-        log.info(`[PDF] pdfjs extractor: ${fromPdfjs.length} chars`);
-        return fromPdfjs;
+export async function extractPdfText(
+    data: Uint8Array,
+    options?: PdfExtractOptions,
+): Promise<string> {
+    const fromPdfjs = await extractPdfTextWithPdfjs(data, options);
+    if (fromPdfjs.text) {
+        log.info(
+            `[PDF] pdfjs extractor: ${fromPdfjs.text.length} chars ` +
+            `(pages ${fromPdfjs.pagesIncluded}/${fromPdfjs.totalPages}${fromPdfjs.truncated ? ', truncated' : ''})`
+        );
+        return fromPdfjs.text;
     }
     const fromLegacy = extractPdfTextLegacy(data);
     log.info(`[PDF] legacy extractor: ${fromLegacy.length} chars (pdfjs returned nothing)`);
@@ -190,11 +274,35 @@ export async function extractPdfText(data: Uint8Array): Promise<string> {
  * Wrap extracted PDF text for inclusion as a DeepSeek text content part.
  * If nothing could be extracted, returns a short notice instead so the user
  * knows the attachment was seen but not machine-readable.
+ *
+ * Large PDFs are capped via `maxPages` (unless a page range is supplied);
+ * when truncated, the model is told how many pages exist and that it can ask
+ * for a specific range.
  */
-export async function pdfDataToTextContent(data: Uint8Array): Promise<string> {
-    const text = await extractPdfText(data);
-    if (text) {
-        return `[Attached PDF contents:\n${text}\n]`;
+export async function pdfDataToTextContent(
+    data: Uint8Array,
+    options?: PdfExtractOptions & { pageNotice?: boolean },
+): Promise<string> {
+    // First pass: extract with the requested options (range or cap).
+    const result = await extractPdfTextWithPdfjs(data, options);
+    if (result.text) {
+        const notice = options?.pageNotice && result.truncated
+            ? `\n\n[Note: this PDF has ${result.totalPages} pages. Only the first ${result.pagesIncluded} were extracted to fit the context window. ` +
+              `Ask for a specific range, e.g. "read pages 100-150", to see those pages.]`
+            : '';
+        log.info(
+            `[PDF] data part mime=${'application/pdf'} bytes=${data.byteLength} → ` +
+            `text (${result.text.length} chars, pages ${result.pagesIncluded}/${result.totalPages})`
+        );
+        return `[Attached PDF contents:\n${result.text}\n]${notice}`;
+    }
+
+    // pdfjs returned nothing — fall back to the legacy extractor, then the
+    // no-text notice.
+    const fromLegacy = extractPdfTextLegacy(data);
+    if (fromLegacy) {
+        log.info(`[PDF] legacy extractor: ${fromLegacy.length} chars (pdfjs returned nothing)`);
+        return `[Attached PDF contents:\n${fromLegacy}\n]`;
     }
     return '[Attached PDF: no extractable text (scanned or image-based PDF).]';
 }

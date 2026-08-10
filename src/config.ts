@@ -249,6 +249,28 @@ export function getPdfVisionFallbackMinChars(): number {
 }
 
 /**
+ * Maximum number of PDF pages extracted when the user does NOT request a
+ * specific page range. Huge PDFs (books, manuals) can be hundreds of pages
+ * and would blow past the context window (~1K tokens/page → 600 pages ≈
+ * 600K tokens ≫ 256K window). Default 60 — enough for typical documents
+ * while leaving context for the conversation. When a page range is detected
+ * in the message ("pages 100-150"), only that range is extracted regardless
+ * of this cap. Set 0 for unlimited.
+ */
+export function getPdfMaxPages(): number {
+    const v = getConfig().get<number>('pdfMaxPages');
+    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 60;
+}
+
+/**
+ * When `pdfMaxPages` truncates a PDF, whether to tell the model how many
+ * pages exist and that it can request a specific range. Default true.
+ */
+export function getPdfPageNotice(): boolean {
+    return getConfig().get<boolean>('pdfPageNotice') ?? true;
+}
+
+/**
  * Context window presets.
  *
  * DeepSeek V4 models advertise up to 1M tokens of input context, but the API

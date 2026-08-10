@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.23",
+  "version": "0.7.24",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -264,6 +264,17 @@
           "default": 1200,
           "minimum": 0,
           "description": "Local text-extraction length (chars) below which a PDF is considered sparse and triggers the Gemini vision fallback. Default 1200 — a real text PDF (contract, paper) usually yields far more; a floor plan / scanned doc yields much less."
+        },
+        "nikas.pdfMaxPages": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "Maximum PDF pages extracted when you do NOT request a specific range. Huge PDFs (books, manuals) are hundreds of pages and would blow past the context window (~1K tokens/page). Default 60. Ask for a range in your message (e.g. 'read pages 100-150' or 'עמודים 5 עד 12') to extract just those pages regardless of this cap. Set 0 for unlimited."
+        },
+        "nikas.pdfPageNotice": {
+          "type": "boolean",
+          "default": true,
+          "description": "When pdfMaxPages truncates a PDF, tell the model how many pages exist and that it can request a specific range. Default true."
         },
         "nikas.logLevel": {
           "type": "string",

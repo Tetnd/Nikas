@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { log } from '../log.js';
 import { safeStringify } from '../api/sanitize.js';
-import { isPdfMime, pdfDataToTextContent } from '../pdf/extract.js';
+import { isPdfMime, pdfDataToTextContent, detectPageRange, type PdfExtractOptions } from '../pdf/extract.js';
+import { getPdfMaxPages, getPdfPageNotice } from '../config.js';
 import { parseReplayMarkerData, normalizeDataPart, REPLAY_MARKER_MIME, type DataPartLike } from '../vision/replay.js';
 import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem } from '../api/types.js';
 
@@ -339,6 +340,31 @@ function buildToolResultMessages(
  * PDF's extracted contents (see src/pdf/extract.ts). Images become
  * `image_url` data URIs, text passes through.
  */
+/**
+ * Build PDF extraction options from a message's parts.
+ *
+ * If the user's text asks for specific pages ("read pages 100-150", Hebrew
+ * "עמודים 5 עד 12"), extract only that range. Otherwise cap at the
+ * `nikas.pdfMaxPages` setting so huge PDFs (books, manuals) don't blow the
+ * context window, and attach a page notice so the model can offer to read
+ * more.
+ */
+function buildPdfExtractOptions(parts: readonly vscode.LanguageModelInputPart[]): PdfExtractOptions & { pageNotice: boolean } {
+    // Scan text parts for a page-range request.
+    for (const part of parts) {
+        if (isTextPart(part) && part.value.trim()) {
+            const range = detectPageRange(part.value);
+            if (range) {
+                return { pageRange: range, pageNotice: false };
+            }
+        }
+    }
+    return {
+        maxPages: getPdfMaxPages(),
+        pageNotice: getPdfPageNotice(),
+    };
+}
+
 export async function buildContentParts(
     parts: readonly vscode.LanguageModelInputPart[]
 ): Promise<DeepSeekContentPart[]> {
@@ -360,7 +386,10 @@ export async function buildContentParts(
             });
         } else if (isPdfMime(data.mimeType)) {
             // DeepSeek cannot ingest the PDF binary — send its text instead.
-            const text = await pdfDataToTextContent(data.data);
+            // Large PDFs: honor a page-range request in the user's text
+            // ("read pages 100-150"), else cap at nikas.pdfMaxPages so the
+            // document never blows the context window.
+            const text = await pdfDataToTextContent(data.data, buildPdfExtractOptions(parts));
             log.info(`[PDF] data part mime=${data.mimeType} bytes=${data.data.byteLength} → text (${text.length} chars)`);
             contentParts.push({ type: 'text', text });
         } else if (data.mimeType !== REPLAY_MARKER_MIME) {

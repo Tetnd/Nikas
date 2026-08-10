@@ -22,8 +22,8 @@ import type {
 } from './types.js';
 import { VSCodeLanguageModelVisionDescriber, findVisionModelByKey, getVisionPrompt } from './sources/vscode-lm.js';
 import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/api-endpoint.js';
-import { getPdfVisionFallback, getPdfVisionFallbackMinChars } from '../config.js';
-import { extractPdfText, isPdfMime } from '../pdf/extract.js';
+import { getPdfVisionFallback, getPdfVisionFallbackMinChars, getPdfMaxPages } from '../config.js';
+import { extractPdfTextWithPdfjs, isPdfMime } from '../pdf/extract.js';
 
 /**
  * Vision preprocessing pipeline using replay markers.
@@ -341,16 +341,26 @@ export async function resolveSparsePdfVision(
         return messages;
     }
 
-    // Determine which PDFs are sparse (little extracted text).
+    // Determine which PDFs are sparse (little extracted text). Only consider
+    // small PDFs — a huge multi-page PDF (book, manual) would exceed the
+    // vision model's per-request limits, so it stays on local text extraction
+    // (which is page-capped separately in the transform).
     const minChars = getPdfVisionFallbackMinChars();
+    const maxSparsePdfPages = getPdfMaxPages() > 0 ? getPdfMaxPages() : 200;
     const sparse: { partIndex: number; pdf: DataPartLike; text: string }[] = [];
     const content = message.content as readonly vscode.LanguageModelInputPart[];
     for (const [partIndex, part] of content.entries()) {
         const norm = normalizeDataPart(part);
         if (!norm || !isPdfMime(norm.mimeType)) continue;
-        const text = await extractPdfText(norm.data);
-        if (text.length < minChars) {
-            sparse.push({ partIndex, pdf: norm, text });
+        const extracted = await extractPdfTextWithPdfjs(norm.data, { maxPages: maxSparsePdfPages + 1 });
+        if (extracted.totalPages > maxSparsePdfPages) {
+            visionLog.info(
+                `Sparse-PDF vision skipped: PDF has ${extracted.totalPages} pages (> ${maxSparsePdfPages}) — page-capped text extraction only`
+            );
+            continue;
+        }
+        if (extracted.text.length < minChars) {
+            sparse.push({ partIndex, pdf: norm, text: extracted.text });
         }
     }
     if (sparse.length === 0) {
