@@ -626,19 +626,26 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
         }
 
-        // NOTE (2026-08-09): the max-output token boost was REMOVED — the
-        // configured maxTokens is now sent as-is for every effort level.
-        // (max effort previously got a 32K floor because field logs showed it
-        // could burn a 16K budget on reasoning and return an empty response;
-        // users who hit that can raise nikas.maxTokens.)
+        // When thinking mode is enabled, ensure enough headroom for reasoning
+        // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
+        // alone, leaving nothing for visible output if max_tokens is too low.
+        // (Matches upstream Nika's boost: a 16K floor when thinking is on.)
         const effectiveMaxTokens = getMaxTokens();
         const thinkingEnabled = thinkingEffort !== 'off';
+        const minThinkingTokens = 16_384;
+        const boostedTokens = thinkingEnabled
+            ? Math.max(effectiveMaxTokens, minThinkingTokens)
+            : effectiveMaxTokens;
+        if (boostedTokens !== effectiveMaxTokens) {
+            getOutputChannel().appendLine(`[Nikas] Thinking mode enabled — boosting max_tokens from ` +
+                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`);
+        }
 
         const request: DeepSeekRequest = {
             model: modelId,
             messages: deepseekMessages,
             temperature: getTemperature(),
-            max_tokens: effectiveMaxTokens,
+            max_tokens: boostedTokens,
             stream: true,
             ...thinkingParams,
             stream_options: { include_usage: true },
@@ -688,7 +695,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `tools=${options.tools?.length ?? 0}, ` +
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
-            `max_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
+            `max_tokens=${boostedTokens.toLocaleString()}, ` +
             `temperature=${getTemperature()}, ` +
             `build=v${this.buildVersion}`
         );
@@ -750,7 +757,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
                 log.info(
                     `Empty response from DeepSeek (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
-                    `max_tokens: ${effectiveMaxTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                    `max_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
 
@@ -799,7 +806,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 `Error context: model=${modelId}, ` +
                 `thinking=${thinkingEnabled}, ` +
                 `tools=${options.tools?.length ?? 0}, ` +
-                `max_tokens=${effectiveMaxTokens}, ` +
+                `max_tokens=${boostedTokens}, ` +
                 `temperature=${getTemperature()}, ` +
                 `bodySize=${(new TextEncoder().encode(safeStringify(request)).length / 1024).toFixed(1)}KB, ` +
                 `contextWindow=${getContextWindowPreset()}`
@@ -917,10 +924,17 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
-        // NOTE (2026-08-09): the max-output token boost was REMOVED — the
-        // configured maxTokens is now sent as-is for every effort level
-        // (mirrors the chat-completions handler).
+        // When thinking mode is enabled, ensure enough headroom for reasoning
+        // tokens — same 16K floor as upstream Nika's Responses handler.
         const effectiveMaxTokens = getMaxTokens();
+        const minThinkingTokens = 16_384;
+        const boostedTokens = thinkingEnabled
+            ? Math.max(effectiveMaxTokens, minThinkingTokens)
+            : effectiveMaxTokens;
+        if (boostedTokens !== effectiveMaxTokens) {
+            getOutputChannel().appendLine(`[Nikas] Thinking mode enabled — boosting max_tokens from ` +
+                `${effectiveMaxTokens.toLocaleString()} to ${boostedTokens.toLocaleString()} to leave room for reasoning`);
+        }
 
         // Log which effort is being used (mirrors the chat-completions handler)
         const extOpts = options as unknown as Record<string, unknown>;
@@ -938,7 +952,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             model: 'deepseek-v4-flash',
             input,
             temperature: getTemperature(),
-            max_output_tokens: effectiveMaxTokens,
+            max_output_tokens: boostedTokens,
             stream: true,
             ...reasoningParams,
         };
@@ -970,7 +984,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             `tools=${options.tools?.length ?? 0}, ` +
             `bodySize=${(bodySize / 1024).toFixed(1)}KB, ` +
             `thinking=${thinkingEnabled}, ` +
-            `max_output_tokens=${effectiveMaxTokens.toLocaleString()}, ` +
+            `max_output_tokens=${boostedTokens.toLocaleString()}, ` +
             `temperature=${getTemperature()}, ` +
             `build=v${this.buildVersion}`
         );
@@ -1028,7 +1042,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (!streamResult.receivedContent && !streamResult.receivedToolCalls) {
                 log.info(
                     `Empty response from DeepSeek Responses (finish_reason: ${streamResult.finishReason ?? 'none'}, ` +
-                    `max_output_tokens: ${effectiveMaxTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
+                    `max_output_tokens: ${boostedTokens.toLocaleString()}, thinking: ${thinkingEnabled})`
                 );
             }
 
