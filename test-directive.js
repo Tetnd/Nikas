@@ -15,7 +15,6 @@ const CONCISE_PROMPT_DIRECTIVE =
     'Unless the user explicitly asks for a plan or a question, ASSUME they want you to make changes and RUN TOOLS to do it — outputting a proposed solution instead of acting is bad. ' +
     'Every turn must either call a tool or give a final result; never just describe what you would do. ' +
     'Never restate the same plan more than once — if you have already planned a step, EXECUTE it now with a tool call. ' +
-    'Do not narrate your process or announce what you are about to do. Do not include filler like "Let me", "I will", "First", or "Now". ' +
     'Prefer the edit tools (replace_string_in_file / multi_replace_string_in_file) over rewriting whole files. ' +
     'Batch independent read-only calls (searches, file reads) together. ' +
     'Do not give up unless you are sure the request cannot be fulfilled with the tools you have; gather context first, then act. ' +
@@ -26,13 +25,18 @@ const CONCISE_PROMPT_DIRECTIVE =
 function injectChatDirective(deepseekMessages, enabled) {
     if (!enabled || !deepseekMessages || deepseekMessages.length === 0) return deepseekMessages;
     const first = deepseekMessages[0];
-    if (first.role !== 'system') return deepseekMessages;
-    const base = typeof first.content === 'string'
-        ? first.content
-        : Array.isArray(first.content)
-            ? first.content.map(p => p.type === 'text' ? p.text : '').join('')
-            : '';
-    first.content = `${base}\n\n${CONCISE_PROMPT_DIRECTIVE}`;
+    if (first.role === 'system') {
+        const base = typeof first.content === 'string'
+            ? first.content
+            : Array.isArray(first.content)
+                ? first.content.map(p => p.type === 'text' ? p.text : '').join('')
+                : '';
+        first.content = `${base}\n\n${CONCISE_PROMPT_DIRECTIVE}`;
+        return deepseekMessages;
+    }
+    // No leading system message → prepend one carrying the directive (mirrors
+    // the provider fix so the directive is always applied).
+    deepseekMessages.unshift({ role: 'system', content: CONCISE_PROMPT_DIRECTIVE });
     return deepseekMessages;
 }
 
@@ -68,11 +72,12 @@ console.log('=== 2. Chat path: disabled → no injection ===');
     check('no directive when disabled', out[0].content === 'You are DeepSeek.');
 }
 
-console.log('=== 3. Chat path: no system message → no injection ===');
+console.log('=== 3. Chat path: no system message → directive prepended as new system ===');
 {
     const msgs = [{ role: 'user', content: 'hi' }];
     const out = injectChatDirective(msgs, true);
-    check('no injection when first msg is not system', out[0].content === 'hi');
+    check('prepends a system message with the directive', out.length === 2 && out[0].role === 'system' && out[0].content === CONCISE_PROMPT_DIRECTIVE);
+    check('keeps the original user message after', out[1].content === 'hi');
 }
 
 console.log('=== 4. Chat path: array-content system message handled ===');
@@ -104,8 +109,10 @@ console.log('=== 8. Directive content sanity ===');
 {
     check('mentions edit tools', CONCISE_PROMPT_DIRECTIVE.includes('replace_string_in_file'));
     check('mentions batching', CONCISE_PROMPT_DIRECTIVE.toLowerCase().includes('batch'));
-    check('anti-narration', CONCISE_PROMPT_DIRECTIVE.includes('Do not narrate'));
-    check('no filler', CONCISE_PROMPT_DIRECTIVE.includes('"Let me"'));
+    check('anti-spin: act not describe', CONCISE_PROMPT_DIRECTIVE.includes('Every turn must either call a tool or give a final result'));
+    check('anti-spin: never restate plan', CONCISE_PROMPT_DIRECTIVE.includes('Never restate the same plan more than once'));
+    check('anti-spin: repeating plan is failure', CONCISE_PROMPT_DIRECTIVE.includes('Repeating a plan in text instead of acting is a failure'));
+    check('no strict narration ban (Nika parity)', !CONCISE_PROMPT_DIRECTIVE.includes('Do not narrate'));
 }
 
 console.log(`\n===== ${pass} passed, ${fail} failed =====`);

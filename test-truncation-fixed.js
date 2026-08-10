@@ -761,13 +761,19 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
     const SUMMARY_MAX_TOKENS = 4096;
     const REUSE_GROWTH_THRESHOLD = 16;
 
-    function planCompaction(messages, reliabilityLimit) {
+    function planCompaction(messages, reliabilityLimit, availableInput) {
+        // Mirrors provider.ts: the compacted result must fit BOTH the
+        // reliability limit AND the window's available input; cap at the
+        // smaller so auto-compact fires on small windows too (not just big
+        // ones where the limit is the binding constraint).
+        if (availableInput === undefined) availableInput = Infinity;
+        const budgetCap = Math.min(reliabilityLimit, availableInput);
         const estimated = estimateMessageTokens(messages);
-        if (estimated <= reliabilityLimit) return null;
+        if (estimated <= budgetCap) return null;
         const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
         const others = messages.slice(system.length);
         const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-        let keepBudget = reliabilityLimit - estimateMessageTokens(system) - summaryOverhead;
+        let keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
         if (keepBudget < 1024) return null;
         const keep = [];
         for (let i = others.length - 1; i >= 0; i--) {
@@ -786,7 +792,7 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
         if (splitIdx <= 0) return null;
         const oldBlock = others.slice(0, splitIdx);
         if (oldBlock.length < MIN_COMPACT_BLOCK) return null;
-        return { system, others, keep, oldBlock, estimated };
+        return { system, others, keep, oldBlock, estimated, budgetCap };
     }
 
     function applyCompaction(plan, summary) {
@@ -838,6 +844,18 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
         check('newest user turn survived verbatim', out.some(x => x.role === 'user' && messageText(x).includes('Final task')), JSON.stringify(out.map(x => x.role)));
         check('compacted result under limit (+slack)', estimateMessageTokens(out) <= RELIABILITY_LIMIT + 5000, `est=${estimateMessageTokens(out).toLocaleString()}`);
     }
+
+    // Small window where available input < reliability limit: auto-compact must
+    // STILL fire (capped at the window edge) instead of bailing to truncation —
+    // this is the 256K-window-with-256K-limit case that used to slip through.
+    const smallWindow = planCompaction(m, RELIABILITY_LIMIT, 20000);
+    check('small window: compaction still fires at window edge', smallWindow !== null, smallWindow ? `budgetCap=${smallWindow.budgetCap}` : 'plan is null');
+    if (smallWindow) {
+        check('small window: capped at available input (not the limit)', smallWindow.budgetCap === 20000, `budgetCap=${smallWindow.budgetCap}`);
+        check('small window: compacted result fits the window', estimateMessageTokens(applyCompaction(smallWindow, 'MEM: compacted')) <= 20000 + 5000, `est=${estimateMessageTokens(applyCompaction(smallWindow, 'MEM: compacted')).toLocaleString()}`);
+    }
+    // Window even smaller than the summary headroom → nothing worth compacting.
+    check('tiny window: no compaction (no room for summary)', planCompaction(m, RELIABILITY_LIMIT, 1024) === null);
 
     // Under the limit → no compaction.
     const small = [

@@ -185,13 +185,19 @@ export function getHelperThinkingOff(): boolean {
  * ALWAYS commit to a tool call instead of narrating a plan. Copilot's own
  * models get this conditioning natively; DeepSeek needs it reinforced or it
  * tends to describe what it would do rather than do it. Costs ~180 tokens.
+ *
+ * Note: a strict "do not narrate / no filler" ban was intentionally REMOVED
+ * (2026-08-11) for parity with upstream Nika (alive2/nika), which injects no
+ * such ban — Copilot itself wants brief progress updates between tool calls.
+ * Anti-spin protection is retained via "act not describe", "never restate a
+ * plan", and "repeating a plan is failure" — which stop re-planning without
+ * forbidding concise progress narration.
  */
 export const CONCISE_PROMPT_DIRECTIVE =
     'You are a coding agent. Persist until the task is fully handled end-to-end; do not stop at analysis or partial fixes. ' +
     'Unless the user explicitly asks for a plan or a question, ASSUME they want you to make changes and RUN TOOLS to do it — outputting a proposed solution instead of acting is bad. ' +
     'Every turn must either call a tool or give a final result; never just describe what you would do. ' +
     'Never restate the same plan more than once — if you have already planned a step, EXECUTE it now with a tool call. ' +
-    'Do not narrate your process or announce what you are about to do. Do not include filler like "Let me", "I will", "First", or "Now". ' +
     'Prefer the edit tools (replace_string_in_file / multi_replace_string_in_file) over rewriting whole files. ' +
     'Batch independent read-only calls (searches, file reads) together. ' +
     'Do not give up unless you are sure the request cannot be fulfilled with the tools you have; gather context first, then act. ' +
@@ -341,14 +347,21 @@ export function getContextWindowTokens(): number {
  *
  * DeepSeek's coding reliability degrades past a few hundred K real tokens
  * (attention degradation / "lost in the middle" — users consistently report
- * ~220-300K; the Nikas harness field baseline measured precision loss from
- * ~300K). This is independent of the configured window: a 512K/950K preset
- * lets the conversation GROW past the limit, but compaction keeps the active
- * window under it so quality holds and early facts survive in compressed form.
+ * ~220-260K, and degrading reliably starts near the low end of that range).
+ * This is independent of the configured window: a 512K/950K preset lets the
+ * conversation GROW past the limit, but compaction keeps the active window
+ * under it so quality holds and early facts survive in compressed form. On a
+ * small window (e.g. 256K) whose available input is below this limit,
+ * compaction fires at the window edge instead — replacing blind truncation.
+ *
+ * The limit is set near the START of the degradation zone (256K) rather than
+ * the top (300K): compaction firing at 300K is too late — the model has
+ * already been degrading (and may have started looping) for tens of K tokens
+ * before it triggers.
  *
  * 0 = disabled (pure truncation, exactly like pre-compaction Nikas).
  */
-export const DEFAULT_CONTEXT_RELIABILITY_LIMIT = 300_000;
+export const DEFAULT_CONTEXT_RELIABILITY_LIMIT = 256_000;
 
 export function getContextReliabilityLimit(): number {
     const value = getConfig().get<number>('contextReliabilityLimit');

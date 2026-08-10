@@ -479,12 +479,18 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
  * oldest) then causes hallucination about forgotten facts.
  *
  * So when the conversation exceeds the reliability limit
- * (`nikas.contextReliabilityLimit`, default 300K real tokens), the OLDEST
+ * (`nikas.contextReliabilityLimit`, default 256K real tokens), the OLDEST
  * messages are COMPACTED into a session-memory summary instead of being sent
  * raw. The model keeps the newest turns verbatim (the active task) plus a
  * compressed record of everything earlier: the active window stays under the
  * cliff, early facts survive in summarized form, and a session can span far
- * more than 300K of work.
+ * more than 256K of work.
+ *
+ * Compaction fires at whichever comes first: the reliability limit on big
+ * windows (keeps the active window under the attention cliff) OR the
+ * configured window's available input on small windows (so auto-compact works
+ * even on a 256K preset, replacing blind truncation instead of bailing to
+ * it).
  *
  * Deterministic per request: the provider is stateless (VS Code re-sends the
  * original history every turn), so the same input yields the same compacted
@@ -504,16 +510,28 @@ async function maybeCompactContext(
     const reliabilityLimit = getContextReliabilityLimit();
     if (reliabilityLimit <= 0) return messages;
 
+    // The compacted result must fit BOTH the reliability limit (keep the active
+    // window under DeepSeek's attention cliff on big windows) AND the configured
+    // context window (otherwise truncation would immediately undo it). Cap the
+    // budget at the SMALLER of the two so auto-compact works on ANY window size
+    // — including a 256K window where available input (~244K) sits below the
+    // 256K reliability limit — instead of falling through to blind truncation.
+    const availableInput = Math.max(
+        1024,
+        getContextWindowTokens() - getMaxTokens() - 1024
+    );
+    const budgetCap = Math.min(reliabilityLimit, availableInput);
+
     const estimated = estimateMessageTokens(messages);
-    if (estimated <= reliabilityLimit) return messages;
+    if (estimated <= budgetCap) return messages;
 
     const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
     const others = messages.slice(system.length);
 
-    // Keep the NEWEST content up to the reliability budget; the rest becomes
-    // the old block to compact. Reserve headroom for the summary message.
+    // Keep the NEWEST content up to the compacted budget; the rest becomes the
+    // old block to summarize. Reserve headroom for the summary message.
     const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-    let keepBudget = reliabilityLimit - estimateMessageTokens(system) - summaryOverhead;
+    let keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
     if (keepBudget < 1024) return messages;
 
     const keep: DeepSeekMessage[] = [];
@@ -588,13 +606,10 @@ async function maybeCompactContext(
     const compacted = repairTruncatedSequence(system, [...head, ...keep]);
     const finalSeq = ensureUserMessage(compacted, others);
 
-    // If the compacted result still can't fit the window (e.g. reliability
-    // limit near the window plus a large summary), let truncation handle it —
-    // compacting in a way truncation would immediately undo is pointless.
-    const availableInput = Math.max(
-        1024,
-        getContextWindowTokens() - getMaxTokens() - 1024
-    );
+    // Safety net: if the compacted result still can't fit the window (e.g. a
+    // large summary or a snapped boundary pushed it over), let truncation
+    // handle it — but this is now rare since the keep budget is capped at
+    // availableInput above.
     if (estimateMessageTokens(finalSeq) > availableInput) {
         log.verbose(`Compaction skipped — compacted result still exceeds the context window`);
         return messages;
@@ -935,10 +950,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
 
-        // Optionally inject the "no process narration" directive into the first
-        // system message (chat-completions path). See the Responses handler for
-        // the rationale — this stops the model narrating its process as visible
-        // reply text in agent mode WITHOUT reducing the tool set.
+        // Optionally inject the agent directive (chat-completions path). See the
+        // Responses handler for the rationale — this reinforces persistent,
+        // action-first agent behavior in agent mode WITHOUT reducing the tool set.
         if (getConcisePrompt() && deepseekMessages.length > 0) {
             const first = deepseekMessages[0];
             if (first.role === 'system') {
@@ -948,6 +962,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                         ? first.content.map(p => p.type === 'text' ? p.text : '').join('')
                         : '';
                 first.content = `${base}\n\n${CONCISE_PROMPT_DIRECTIVE}`;
+            } else {
+                // No leading system message — prepend one carrying the directive
+                // so the agent behavior is enforced even without a system turn
+                // (mirrors the Responses path, which always sets instructions).
+                deepseekMessages.unshift({ role: 'system', content: CONCISE_PROMPT_DIRECTIVE });
             }
         }
 
