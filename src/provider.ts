@@ -555,7 +555,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (token.isCancellationRequested) return;
 
         // Convert resolved VS Code messages to DeepSeek format
-        let deepseekMessages = vscodeMessagesToDeepSeek(resolvedMessages);
+        let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
 
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
@@ -888,7 +888,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (token.isCancellationRequested) return;
 
         // Convert + truncate to DeepSeek message form, then to Responses input
-        let deepseekMessages = vscodeMessagesToDeepSeek(resolvedMessages);
+        let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
         const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
 

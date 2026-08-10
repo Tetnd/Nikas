@@ -26,7 +26,7 @@ export interface PatchReplacement {
 }
 
 export interface PatchDefinition {
-    /** Stable id (P1..P9) — matches the recipe's numbering. */
+    /** Stable id (P1..P10) — matches the recipe's numbering. */
     id: string;
     description: string;
     /** If ANY of these strings is present, the patch is considered applied. */
@@ -353,6 +353,44 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
                 'search.exclude',
             ],
             core: false,
+        },
+
+        // ── PATCH 10 — Forward PDFs through kAn (LM request part converter) ─
+        //
+        // `kAn` converts raw chat messages into the LM request parts sent to
+        // extension-contributed providers (Nikas). It handles Text, Image,
+        // CacheBreakpoint and Opaque parts — but had NO Document case, so the
+        // `Lu.Document` produced by `_b` (P4/P7) was SILENTLY DROPPED before
+        // the provider ever saw it. This is the drop point behind "chip shows
+        // but the model never receives the PDF" (images worked because the
+        // Image branch exists; P5 only patched the OpenAI-mode converter).
+        {
+            id: 'P10',
+            description: 'Forward Document (PDF) parts through kAn so they reach LM providers as data parts',
+            appliedMarkers: [
+                `a.type===UL.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData`,
+            ],
+            replacements: [
+                {
+                    find: `else if(a.type===UL.Raw.ChatCompletionContentPartKind.CacheBreakpoint)e.emitCacheBreakpoints&&o.push(new FA.LanguageModelDataPart(new TextEncoder().encode("ephemeral"),is.CacheControl));else if(a.type===UL.Raw.ChatCompletionContentPartKind.Opaque){let s=NEe(a);`,
+                    replace: `else if(a.type===UL.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData,db=typeof dd.data=="string"?Buffer.from(dd.data,"base64"):Buffer.from(dd.data);o.push(new FA.LanguageModelDataPart(new Uint8Array(db),dd.mediaType||"application/pdf"))}else if(a.type===UL.Raw.ChatCompletionContentPartKind.CacheBreakpoint)e.emitCacheBreakpoints&&o.push(new FA.LanguageModelDataPart(new TextEncoder().encode("ephemeral"),is.CacheControl));else if(a.type===UL.Raw.ChatCompletionContentPartKind.Opaque){let s=NEe(a);`,
+                },
+            ],
+            regexFallbacks: [
+                {
+                    // Version-drift fallback: insert the Document branch right
+                    // before the CacheBreakpoint branch in kAn, preserving the
+                    // matched (possibly renamed) symbol names.
+                    pattern: /else if\(a\.type===([\w$]+)\.Raw\.ChatCompletionContentPartKind\.CacheBreakpoint\)e\.emitCacheBreakpoints&&o\.push\(new ([\w$]+)\.LanguageModelDataPart\(new TextEncoder\(\)\.encode\("ephemeral"\),[\w$]+\.CacheControl\)\);else if\(a\.type===([\w$]+)\.Raw\.ChatCompletionContentPartKind\.Opaque\)\{let s=([\w$]+)\(a\);/,
+                    replacement: (m: string) => `else if(a.type===UL.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData,db=typeof dd.data=="string"?Buffer.from(dd.data,"base64"):Buffer.from(dd.data);o.push(new FA.LanguageModelDataPart(new Uint8Array(db),dd.mediaType||"application/pdf"))}${m}`,
+                },
+            ],
+            diagnosticProbes: [
+                `ChatCompletionContentPartKind.CacheBreakpoint)e.emitCacheBreakpoints`,
+                `o.push(new FA.LanguageModelDataPart(new Uint8Array(db),dd.mediaType`,
+                `is.CacheControl));else if(a.type===UL.Raw.ChatCompletionContentPartKind.Opaque){let s=NEe(a)`,
+            ],
+            core: true,
         },
     ];
 }

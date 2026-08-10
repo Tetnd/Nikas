@@ -64,6 +64,8 @@ function check(name, cond) {
     else { fail++; console.log('  FAIL', name); }
 }
 
+async function main() {
+
 // 1. isPdfMime
 console.log('\n[isPdfMime]');
 check('application/pdf → true', isPdfMime('application/pdf') === true);
@@ -78,26 +80,26 @@ check('undefined → false', isPdfMime(undefined) === false);
 console.log('\n[extractPdfText]');
 const ops = 'BT /F1 24 Tf 72 720 Td (Hello PDF World!) Tj 0 -28 Td (Second line: 42) Tj ET';
 const pdfBytes = buildPdf(ops);
-const extracted = extractPdfText(new Uint8Array(pdfBytes));
+const extracted = await extractPdfText(new Uint8Array(pdfBytes));
 check('extracts Tj text', extracted.includes('Hello PDF World!'));
 check('extracts second line', extracted.includes('Second line: 42'));
 check('is a non-empty string', typeof extracted === 'string' && extracted.length > 0);
 
 // 3. TJ array operator (kerning interleaved)
 const opsTj = 'BT /F1 12 Tf 72 720 Td [(Array) 10 (Text) -5 (Here)] TJ ET';
-const extractedTj = extractPdfText(new Uint8Array(buildPdf(opsTj)));
+const extractedTj = await extractPdfText(new Uint8Array(buildPdf(opsTj)));
 check('extracts TJ array text', extractedTj.includes('ArrayTextHere'));
 
 // 4. pdfDataToTextContent wrapper
 console.log('\n[pdfDataToTextContent]');
-const wrapped = pdfDataToTextContent(new Uint8Array(pdfBytes));
+const wrapped = await pdfDataToTextContent(new Uint8Array(pdfBytes));
 check('contains marker', wrapped.includes('[Attached PDF contents:'));
 check('contains extracted text', wrapped.includes('Hello PDF World!'));
 check('closes marker', wrapped.trim().endsWith(']'));
 
 // 5. Scanned PDF (no text operators) → fallback notice
 const scannedPdf = buildPdf('q 0.9 0.9 0.9 rg 0 0 612 792 re f Q'); // just draws a gray box
-const scannedText = pdfDataToTextContent(new Uint8Array(scannedPdf));
+const scannedText = await pdfDataToTextContent(new Uint8Array(scannedPdf));
 check('scanned fallback notice', scannedText.includes('no extractable text'));
 
 // 6. buildContentParts end-to-end (real messages.ts logic)
@@ -108,7 +110,7 @@ const parts = [
     { data: new Uint8Array(Buffer.from('fake-png-bytes')), mimeType: 'image/png' }, // image
     { data: new Uint8Array(Buffer.from('notpdf')), mimeType: 'text/plain' },        // ignored non-image non-pdf
 ];
-const contentParts = buildContentParts(parts);
+const contentParts = await buildContentParts(parts);
 
 check('returns parts for text+pdf+image', contentParts.length === 3);
 const pdfPart = contentParts.find(p => p.type === 'text' && p.text.includes('Attached PDF contents'));
@@ -121,7 +123,7 @@ check('text/plain data ignored', !contentParts.some(p => p.text && p.text.includ
 
 // 7. buildContentParts with a scanned PDF attachment → notice text part
 console.log('\n[buildContentParts scanned fallback]');
-const scannedParts = buildContentParts([
+const scannedParts = await buildContentParts([
     { value: 'what is in this?' },
     { data: new Uint8Array(scannedPdf), mimeType: 'application/pdf' },
 ]);
@@ -140,7 +142,7 @@ const altParts = [
     { documentData: { data: new Uint8Array(pdfBytes), mediaType: 'application/pdf' } },
     { documentData: { data: Buffer.from(pdfBytes).toString('base64'), mediaType: 'application/pdf' } },
 ];
-const altContent = buildContentParts(altParts);
+const altContent = await buildContentParts(altParts);
 const altPdfParts = altContent.filter(p => p.type === 'text' && p.text.includes('Attached PDF contents'));
 check('all 4 shape variants converted to PDF text', altPdfParts.length === 4);
 check('shape-variant text embedded', altPdfParts.every(p => p.text.includes('Hello PDF World!')));
@@ -148,3 +150,6 @@ check('shape-variant text embedded', altPdfParts.every(p => p.text.includes('Hel
 // ── Summary ────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
+}
+
+main().catch(err => { console.error('FATAL', err); process.exit(1); });

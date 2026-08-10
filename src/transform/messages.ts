@@ -15,10 +15,11 @@ import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem }
  *   - LanguageModelToolResultPart → tool results (in user messages)
  */
 
-export function vscodeMessagesToDeepSeek(
+export async function vscodeMessagesToDeepSeek(
     messages: readonly vscode.LanguageModelChatRequestMessage[]
-): DeepSeekMessage[] {
-    return messages.flatMap(msg => vscodeMessageToDeepSeek(msg));
+): Promise<DeepSeekMessage[]> {
+    const results = await Promise.all(messages.map(msg => vscodeMessageToDeepSeek(msg)));
+    return results.flat();
 }
 
 /**
@@ -28,9 +29,9 @@ export function vscodeMessagesToDeepSeek(
  * a User message may contain multiple LanguageModelToolResultParts,
  * each of which must become a separate role: "tool" message.
  */
-function vscodeMessageToDeepSeek(
+async function vscodeMessageToDeepSeek(
     msg: vscode.LanguageModelChatRequestMessage
-): DeepSeekMessage[] {
+): Promise<DeepSeekMessage[]> {
     // If content is a string, it's a simple message
     if (typeof msg.content === 'string') {
         const role = mapRole(msg.role);
@@ -55,7 +56,7 @@ function vscodeMessageToDeepSeek(
 
     // Regular user/assistant message with text and/or images
     const role = mapRole(msg.role);
-    const contentParts = buildContentParts(parts);
+    const contentParts = await buildContentParts(parts);
 
     if (contentParts.length === 0) {
         return [{ role, content: '', name: msg.name }];
@@ -338,9 +339,9 @@ function buildToolResultMessages(
  * PDF's extracted contents (see src/pdf/extract.ts). Images become
  * `image_url` data URIs, text passes through.
  */
-export function buildContentParts(
+export async function buildContentParts(
     parts: readonly vscode.LanguageModelInputPart[]
-): DeepSeekContentPart[] {
+): Promise<DeepSeekContentPart[]> {
     const contentParts: DeepSeekContentPart[] = [];
 
     for (const part of parts) {
@@ -359,7 +360,7 @@ export function buildContentParts(
             });
         } else if (isPdfMime(data.mimeType)) {
             // DeepSeek cannot ingest the PDF binary — send its text instead.
-            const text = pdfDataToTextContent(data.data);
+            const text = await pdfDataToTextContent(data.data);
             log.info(`[PDF] data part mime=${data.mimeType} bytes=${data.data.byteLength} → text (${text.length} chars)`);
             contentParts.push({ type: 'text', text });
         } else if (data.mimeType !== REPLAY_MARKER_MIME) {

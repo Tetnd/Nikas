@@ -1,6 +1,15 @@
 .vscode/**
 src/**
 node_modules/**
+!node_modules/pdfjs-dist/**
+node_modules/pdfjs-dist/**/*
+!node_modules/pdfjs-dist/package.json
+!node_modules/pdfjs-dist/legacy/**
+node_modules/pdfjs-dist/legacy/**/*
+!node_modules/pdfjs-dist/legacy/build/**
+node_modules/pdfjs-dist/legacy/build/**/*
+!node_modules/pdfjs-dist/legacy/build/pdf.mjs
+!node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs
 .gitignore
 tsconfig.json
 **/*.ts
