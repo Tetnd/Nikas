@@ -5,3 +5,4 @@ out/
 CachedProfilesData/
 logs/
 machineid
+.tmp/
