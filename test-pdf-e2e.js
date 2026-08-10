@@ -15,19 +15,19 @@
 const zlib = require('zlib');
 
 // ── Load the real compiled modules ─────────────────────────────────────
-const { isPdfMime, extractPdfText, pdfDataToTextContent } = require('./out/pdf/extract.js');
-
-// messages.js imports `vscode` at the top, but buildContentParts() only uses
-// structural checks (no instanceof), so we stub the vscode module object and
-// intercept the require so the real logic can run in plain Node.
+// extract.js and messages.js import `vscode` transitively (via log.js), but
+// the logic under test only uses structural checks (no instanceof), so we
+// stub the vscode module object and intercept the require so the real code
+// can run in plain Node. The stub MUST be installed before any require.
 const Module = require('module');
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
     if (request === 'vscode') {
-        return { /* stub — buildContentParts never touches it */ };
+        return { /* stub — the tested code never touches it */ };
     }
     return originalLoad.apply(this, arguments);
 };
+const { isPdfMime, extractPdfText, pdfDataToTextContent } = require('./out/pdf/extract.js');
 const { buildContentParts } = require('./out/transform/messages.js');
 
 // ── Minimal PDF builder ────────────────────────────────────────────────

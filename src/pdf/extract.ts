@@ -1,4 +1,5 @@
 import * as zlib from 'zlib';
+import { log } from '../log.js';
 
 /**
  * PDF text extraction for DeepSeek content parts.
@@ -10,16 +11,19 @@ import * as zlib from 'zlib';
  * send it as a regular text part.
  *
  * Strategy (defense in depth):
- *   1. `extractPdfTextWithPdfjs` — primary extractor using pdfjs-dist (the
- *      same engine VS Code/Copilot use). Handles CID-keyed fonts, ToUnicode
- *      CMaps, Hebrew/RTL, ligatures, etc. — everything the minimal extractor
- *      cannot.
+ *   1. `extractPdfTextWithPdfjs` — primary extractor using pdfjs-dist v3
+ *      (CJS/UMD build loaded via `require()`). Handles CID-keyed fonts,
+ *      ToUnicode CMaps, Hebrew/RTL, ligatures, etc. — everything the
+ *      minimal extractor cannot.
  *   2. `extractPdfTextLegacy` — dependency-light fallback that handles the
  *      common case of simple text-based PDFs (FlateDecode streams + Tj/TJ
  *      operators). Used if pdfjs-dist fails to load/parse or returns nothing.
  *
- * Neither path depends on `vscode`, so both can be unit-tested in plain Node
- * (see test-pdf-e2e.js).
+ * WHY v3 UMD and not v4 ESM: the v4 package is ESM-only and must be loaded
+ * with dynamic `import()`. In the extension host that import silently
+ * failed (2026-08-10, v0.7.19), so every PDF fell back to the legacy
+ * extractor and Hebrew/CID PDFs came out as symbol garbage. The v3 UMD
+ * build loads synchronously with `require()` in any extension host.
  */
 
 /** True for `application/pdf` (and lenient wildcard `*` + `/pdf`). */
@@ -47,25 +51,25 @@ interface PdfJsApi {
     }): { promise: Promise<PdfJsDocument> };
 }
 
-let pdfjsApiPromise: Promise<PdfJsApi | undefined> | undefined;
+let pdfjsApi: PdfJsApi | undefined;
+let pdfjsLoadFailed = false;
 
 /**
- * Lazily load pdfjs-dist (ESM) via dynamic import so the module stays
- * loadable even in plain-Node test contexts. Returns undefined if the
- * dependency is missing or fails to load.
+ * Load pdfjs-dist v3 (CJS/UMD) synchronously via `require()`.
+ * Returns undefined if the dependency is missing or fails to load — the
+ * failure is logged ONCE so silent fallbacks to the (garbling) legacy
+ * extractor are diagnosable.
  */
-function loadPdfJs(): Promise<PdfJsApi | undefined> {
-    if (!pdfjsApiPromise) {
-        pdfjsApiPromise = (async () => {
-            try {
-                const mod = await import('pdfjs-dist/legacy/build/pdf.mjs');
-                return (mod as unknown as { default?: PdfJsApi }).default ?? (mod as unknown as PdfJsApi);
-            } catch {
-                return undefined; // fall back to the legacy extractor
-            }
-        })();
+function loadPdfJs(): PdfJsApi | undefined {
+    if (pdfjsApi === undefined && !pdfjsLoadFailed) {
+        try {
+            pdfjsApi = require('pdfjs-dist/legacy/build/pdf.js') as PdfJsApi;
+        } catch (err) {
+            pdfjsLoadFailed = true;
+            log.error(`[PDF] pdfjs-dist failed to load (falling back to minimal extractor): ${err instanceof Error ? err.message : String(err)}`);
+        }
     }
-    return pdfjsApiPromise;
+    return pdfjsApi;
 }
 
 /**
@@ -73,7 +77,7 @@ function loadPdfJs(): Promise<PdfJsApi | undefined> {
  * be extracted (scanned/image-only pages, or load failure).
  */
 export async function extractPdfTextWithPdfjs(data: Uint8Array): Promise<string> {
-    const api = await loadPdfJs();
+    const api = loadPdfJs();
     if (!api) return '';
 
     let doc: PdfJsDocument | undefined;
