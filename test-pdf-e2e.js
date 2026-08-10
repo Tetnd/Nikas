@@ -128,6 +128,23 @@ const scannedParts = buildContentParts([
 const noticePart = scannedParts.find(p => p.type === 'text' && p.text.includes('no extractable text'));
 check('scanned PDF → notice text part', !!noticePart);
 
+// 8. buildContentParts with alternate attachment shapes (patched-bundle
+// parts cross the extension-host realm — data may be a base64 string,
+// mime may be `mediaType`, or the part may be an unconverted Document
+// wrapped in `documentData`). All must normalize to PDF text.
+console.log('\n[buildContentParts shape variants]');
+const altParts = [
+    { value: 'read this' },
+    { data: new Uint8Array(pdfBytes), mediaType: 'application/pdf' },
+    { data: Buffer.from(pdfBytes).toString('base64'), mediaType: 'application/pdf' },
+    { documentData: { data: new Uint8Array(pdfBytes), mediaType: 'application/pdf' } },
+    { documentData: { data: Buffer.from(pdfBytes).toString('base64'), mediaType: 'application/pdf' } },
+];
+const altContent = buildContentParts(altParts);
+const altPdfParts = altContent.filter(p => p.type === 'text' && p.text.includes('Attached PDF contents'));
+check('all 4 shape variants converted to PDF text', altPdfParts.length === 4);
+check('shape-variant text embedded', altPdfParts.every(p => p.text.includes('Hello PDF World!')));
+
 // ── Summary ────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

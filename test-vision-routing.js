@@ -147,21 +147,44 @@ check('application/pdf is a PDF data part', isPdfDataPart('application/pdf') ===
 check('image/png is NOT a PDF data part', isPdfDataPart('image/png') === false);
 check('empty mime is NOT a PDF data part', isPdfDataPart('') === false);
 
-// Structural (duck-typed) part check — patched-bundle parts cross an
-// extension-host realm, so instanceof fails; the pipeline must accept plain
-// {data, mimeType} objects (mirrors src/vision/replay.ts isDataPartLike).
-function isDataPartLike(part) {
-    return typeof part === 'object' && part !== null
-        && part.data instanceof Uint8Array
-        && typeof part.mimeType === 'string';
+// Structural (duck-typed) part normalization — patched-bundle parts cross an
+// extension-host realm, so instanceof fails; the pipeline must accept ALL
+// observed shapes (mirrors src/vision/replay.ts normalizeDataPart):
+//   {data: Uint8Array, mimeType} | {data: Uint8Array, mediaType} |
+//   {data: base64-string, mediaType} | {documentData: {data, mediaType}}
+function normalizeDataPart(part) {
+    if (typeof part !== 'object' || part === null) return undefined;
+    let data = part.data;
+    let mime = part.mimeType ?? part.mediaType;
+    if (part.documentData && typeof part.documentData === 'object') {
+        data = part.documentData.data;
+        mime = part.documentData.mimeType ?? part.documentData.mediaType;
+    }
+    if (typeof mime !== 'string' || mime.length === 0) return undefined;
+    if (data instanceof Uint8Array) return { data, mimeType: mime };
+    if (data instanceof ArrayBuffer) return { data: new Uint8Array(data), mimeType: mime };
+    if (typeof data === 'string') {
+        try { return { data: new Uint8Array(Buffer.from(data, 'base64')), mimeType: mime }; }
+        catch { return undefined; }
+    }
+    return undefined;
 }
-function isVisionDataPart(part) {
-    return isDataPartLike(part) && (part.mimeType.startsWith('image/') || isPdfDataPart(part.mimeType));
+function isPdfPart(part) {
+    const n = normalizeDataPart(part);
+    return n !== undefined && isPdfDataPart(n.mimeType);
 }
-check('plain {data,mimeType} PDF object is a vision part', isVisionDataPart({ data: new Uint8Array([1]), mimeType: 'application/pdf' }) === true);
-check('plain PNG object is a vision part', isVisionDataPart({ data: new Uint8Array([1]), mimeType: 'image/png' }) === true);
-check('object without mime is NOT a vision part', isVisionDataPart({ data: new Uint8Array([1]) }) === false);
-check('null is NOT a vision part', isVisionDataPart(null) === false);
+function isImagePart(part) {
+    const n = normalizeDataPart(part);
+    return n !== undefined && n.mimeType.toLowerCase().startsWith('image/');
+}
+check('plain {data,mimeType} PDF object is a PDF part', isPdfPart({ data: new Uint8Array([1]), mimeType: 'application/pdf' }) === true);
+check('plain PNG object is an image part', isImagePart({ data: new Uint8Array([1]), mimeType: 'image/png' }) === true);
+check('{data, mediaType} PDF object is a PDF part', isPdfPart({ data: new Uint8Array([1]), mediaType: 'application/pdf' }) === true);
+check('{data: base64-string, mediaType} PDF object is a PDF part', isPdfPart({ data: Buffer.from('abc').toString('base64'), mediaType: 'application/pdf' }) === true);
+check('{documentData:{data,mediaType}} PDF object is a PDF part', isPdfPart({ documentData: { data: new Uint8Array([1]), mediaType: 'application/pdf' } }) === true);
+check('object without mime is NOT a data part', normalizeDataPart({ data: new Uint8Array([1]) }) === undefined);
+check('null is NOT a data part', normalizeDataPart(null) === undefined);
+check('non-object is NOT a data part', normalizeDataPart('pdf') === undefined);
 
 console.log(`\n===== ${pass} passed, ${fail} failed =====`);
 process.exit(fail ? 1 : 0);

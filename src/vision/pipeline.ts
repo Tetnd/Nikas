@@ -10,6 +10,8 @@ import {
     createImageDescriptionText,
     getImageParts,
     getNonImageParts,
+    normalizeDataPart,
+    type DataPartLike,
 } from './replay.js';
 import type {
     VisionDescriber,
@@ -68,7 +70,7 @@ function clearSessionCacheIfNewTurn(messages: readonly vscode.LanguageModelChatR
     cachedMessageCount = messages.length;
 }
 
-function getCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[]): string | undefined {
+function getCachedVisionByImage(imageParts: DataPartLike[]): string | undefined {
     if (imageParts.length === 0) return undefined;
     const key = hashImageBytes(imageParts[0].data);
     const cached = sessionImageCache.get(key);
@@ -78,20 +80,20 @@ function getCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[]): str
 }
 
 /** Returns true if the image was previously cached as failed. */
-function isFailedImage(imageParts: vscode.LanguageModelDataPart[]): boolean {
+function isFailedImage(imageParts: DataPartLike[]): boolean {
     if (imageParts.length === 0) return false;
     const key = hashImageBytes(imageParts[0].data);
     return sessionImageCache.get(key) === '';
 }
 
-function setCachedVisionByImage(imageParts: vscode.LanguageModelDataPart[], text: string): void {
+function setCachedVisionByImage(imageParts: DataPartLike[], text: string): void {
     if (imageParts.length === 0) return;
     const key = hashImageBytes(imageParts[0].data);
     sessionImageCache.set(key, text);
 }
 
 /** Mark an image as failed so it's silently skipped on subsequent turns. */
-function markFailedImage(imageParts: vscode.LanguageModelDataPart[]): void {
+function markFailedImage(imageParts: DataPartLike[]): void {
     if (imageParts.length === 0) return;
     const key = hashImageBytes(imageParts[0].data);
     sessionImageCache.set(key, ''); // empty string = failed sentinel
@@ -438,21 +440,32 @@ function logDataPartSummary(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
 ): void {
     const byMime = new Map<string, number>();
+    const unknownShapes: string[] = [];
     let total = 0;
     for (const message of messages) {
         const content = message.content as readonly vscode.LanguageModelInputPart[] | undefined;
         if (!content) continue;
         for (const part of content) {
-            const p = part as { data?: unknown; mimeType?: unknown } | null;
-            if (!p || typeof p !== 'object' || p === null) continue;
-            if (!(p.data instanceof Uint8Array) || typeof p.mimeType !== 'string') continue;
-            byMime.set(p.mimeType, (byMime.get(p.mimeType) ?? 0) + 1);
-            total += 1;
+            const norm = normalizeDataPart(part);
+            if (norm) {
+                byMime.set(norm.mimeType, (byMime.get(norm.mimeType) ?? 0) + 1);
+                total += 1;
+            } else if (typeof part === 'object' && part !== null) {
+                // Not a recognized binary part — log its shape once so new
+                // attachment forms are visible instead of silently dropped.
+                const keys = Object.keys(part as object).sort().join(',');
+                const ctor = (part as object).constructor?.name ?? '?';
+                const sig = `${ctor}{${keys}}`;
+                if (!unknownShapes.includes(sig)) unknownShapes.push(sig);
+            }
         }
     }
     if (total > 0) {
         const summary = [...byMime.entries()].map(([m, n]) => `${m} x${n}`).join(', ');
         visionLog.info(`Request data parts (${total}): ${summary}`);
+    }
+    if (unknownShapes.length > 0) {
+        visionLog.info(`Request part shapes not recognized as data: ${unknownShapes.join(' | ')}`);
     }
 }
 
@@ -491,7 +504,7 @@ function createResolvedMessage(
     } as unknown as vscode.LanguageModelChatRequestMessage;
 }
 
-function toVisionImagePart(part: vscode.LanguageModelDataPart): import('./types.js').VisionImagePart {
+function toVisionImagePart(part: DataPartLike): import('./types.js').VisionImagePart {
     return {
         mimeType: part.mimeType,
         data: part.data,

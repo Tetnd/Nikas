@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { log } from '../log.js';
 import { safeStringify } from '../api/sanitize.js';
 import { isPdfMime, pdfDataToTextContent } from '../pdf/extract.js';
-import { parseReplayMarkerData, REPLAY_MARKER_MIME } from '../vision/replay.js';
+import { parseReplayMarkerData, normalizeDataPart, REPLAY_MARKER_MIME, type DataPartLike } from '../vision/replay.js';
 import type { DeepSeekMessage, DeepSeekContentPart, DeepSeekResponsesInputItem } from '../api/types.js';
 
 /**
@@ -346,23 +346,27 @@ export function buildContentParts(
     for (const part of parts) {
         if (isTextPart(part)) {
             contentParts.push({ type: 'text', text: part.value });
-        } else if (isDataPart(part)) {
-            if (isImageMime(part.mimeType)) {
-                const dataUri = uint8ArrayToDataUri(part.data, part.mimeType);
-                contentParts.push({
-                    type: 'image_url',
-                    image_url: { url: dataUri },
-                });
-            } else if (isPdfMime(part.mimeType)) {
-                // DeepSeek cannot ingest the PDF binary — send its text instead.
-                const text = pdfDataToTextContent(part.data);
-                log.info(`[PDF] data part mime=${part.mimeType} bytes=${part.data.byteLength} → text (${text.length} chars)`);
-                contentParts.push({ type: 'text', text });
-            } else {
-                // Diagnosability: a data part we don't recognize is silently
-                // dropped — log it so attachment losses are visible.
-                log.info(`[PDF] UNKNOWN data part dropped: mime=${part.mimeType} bytes=${part.data.byteLength}`);
-            }
+            continue;
+        }
+        const data = normalizeDataPart(part);
+        if (!data) continue; // not a binary part (tool calls, markers handled elsewhere)
+
+        if (isImageMime(data.mimeType)) {
+            const dataUri = uint8ArrayToDataUri(data.data, data.mimeType);
+            contentParts.push({
+                type: 'image_url',
+                image_url: { url: dataUri },
+            });
+        } else if (isPdfMime(data.mimeType)) {
+            // DeepSeek cannot ingest the PDF binary — send its text instead.
+            const text = pdfDataToTextContent(data.data);
+            log.info(`[PDF] data part mime=${data.mimeType} bytes=${data.data.byteLength} → text (${text.length} chars)`);
+            contentParts.push({ type: 'text', text });
+        } else if (data.mimeType !== REPLAY_MARKER_MIME) {
+            // Diagnosability: a data part we don't recognize is silently
+            // dropped — log it so attachment losses are visible (markers are
+            // expected and handled by extractReasoningFromParts).
+            log.info(`[PDF] UNKNOWN data part dropped: mime=${data.mimeType} bytes=${data.data.byteLength}`);
         }
     }
 
@@ -385,10 +389,9 @@ function isTextPart(part: unknown): part is { value: string } {
     return typeof part === 'object' && part !== null && typeof (part as { value?: unknown }).value === 'string';
 }
 
-function isDataPart(part: unknown): part is { data: Uint8Array; mimeType: string } {
-    return typeof part === 'object' && part !== null
-        && (part as { data?: unknown }).data instanceof Uint8Array
-        && typeof (part as { mimeType?: unknown }).mimeType === 'string';
+/** @deprecated Use normalizeDataPart from vision/replay.js — handles all shapes. */
+function isDataPart(part: unknown): part is DataPartLike {
+    return normalizeDataPart(part) !== undefined;
 }
 
 function isImageMime(mimeType: string): boolean {

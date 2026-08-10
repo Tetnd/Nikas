@@ -221,14 +221,14 @@ export function hasImageParts(
 }
 
 /**
- * Extract image data parts from a message.
+ * Extract image data parts from a message (any shape, normalized).
  */
 export function getImageParts(
     message: vscode.LanguageModelChatRequestMessage,
-): vscode.LanguageModelDataPart[] {
-    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
-        isImageDataPart,
-    );
+): DataPartLike[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[])
+        .map(normalizeDataPart)
+        .filter((p): p is DataPartLike => p !== undefined && p.mimeType.toLowerCase().startsWith('image/'));
 }
 
 /**
@@ -240,10 +240,10 @@ export function getImageParts(
  */
 export function getPdfParts(
     message: vscode.LanguageModelChatRequestMessage,
-): vscode.LanguageModelDataPart[] {
-    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
-        isPdfDataPart,
-    );
+): DataPartLike[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[])
+        .map(normalizeDataPart)
+        .filter((p): p is DataPartLike => p !== undefined && isPdfMime(p.mimeType));
 }
 
 /**
@@ -251,14 +251,14 @@ export function getPdfParts(
  */
 export function getVisionParts(
     message: vscode.LanguageModelChatRequestMessage,
-): vscode.LanguageModelDataPart[] {
-    return (message.content as readonly vscode.LanguageModelInputPart[]).filter(
-        isVisionDataPart,
-    );
+): DataPartLike[] {
+    return (message.content as readonly vscode.LanguageModelInputPart[])
+        .map(normalizeDataPart)
+        .filter((p): p is DataPartLike => isImageDataPart(p) || isPdfDataPart(p));
 }
 
 /**
- * Extract non-image parts from a message.
+ * Extract non-image parts from a message (original shapes preserved).
  */
 export function getNonImageParts(
     message: vscode.LanguageModelChatRequestMessage,
@@ -269,7 +269,7 @@ export function getNonImageParts(
 }
 
 /**
- * Extract parts that are neither images nor PDFs.
+ * Extract parts that are neither images nor PDFs (original shapes preserved).
  */
 export function getNonVisionParts(
     message: vscode.LanguageModelChatRequestMessage,
@@ -302,14 +302,71 @@ export function getMessageText(
  * arrives as a plain `{ data: Uint8Array, mimeType: string }` object
  * (observed 2026-08-09 — text extraction worked, vision skipped the PDF).
  */
-function isDataPartLike(part: unknown): part is { data: Uint8Array; mimeType: string } {
-    return typeof part === 'object' && part !== null
-        && (part as { data?: unknown }).data instanceof Uint8Array
-        && typeof (part as { mimeType?: unknown }).mimeType === 'string';
+/**
+ * Structural data-part check — deliberately NO `instanceof` (matches
+ * src/transform/messages.ts isDataPart). PDF/image parts created by the
+ * patched Copilot bundle cross an extension-host realm, so
+ * `part instanceof vscode.LanguageModelDataPart` is unreliable: the part
+ * arrives as a plain object (observed 2026-08-09 — text extraction worked,
+ * vision skipped the PDF).
+ */
+
+/** A data part normalized to the canonical `{ data, mimeType }` shape. */
+export interface DataPartLike {
+    data: Uint8Array;
+    mimeType: string;
 }
 
-export function isImageDataPart(part: unknown): part is vscode.LanguageModelDataPart {
-    return isDataPartLike(part) && part.mimeType.startsWith('image/');
+/**
+ * Normalize ANY data-part shape into `{ data: Uint8Array, mimeType }`.
+ *
+ * Parts arrive in several shapes depending on the path that produced them
+ * (all observed with the patched Copilot bundle):
+ *   - `{ data: Uint8Array, mimeType }`                    — LanguageModelDataPart-ish
+ *   - `{ data: base64-string, mimeType }`                 — serialized data part
+ *   - `{ data: Uint8Array|string, mediaType }`            — Lu.Document agent path (P7)
+ *   - `{ documentData: { data, mediaType } }`             — unconverted Document part (P5 source)
+ * Returns undefined for anything that is not a binary data part.
+ */
+export function normalizeDataPart(part: unknown): DataPartLike | undefined {
+    if (typeof part !== 'object' || part === null) return undefined;
+    const p = part as {
+        data?: unknown;
+        mimeType?: unknown;
+        mediaType?: unknown;
+        documentData?: unknown;
+    };
+    let data: unknown = p.data;
+    let mime: unknown = p.mimeType ?? p.mediaType;
+    if (p.documentData && typeof p.documentData === 'object') {
+        const dd = p.documentData as { data?: unknown; mediaType?: unknown; mimeType?: unknown };
+        data = dd.data;
+        mime = dd.mimeType ?? dd.mediaType;
+    }
+    if (typeof mime !== 'string' || mime.length === 0) return undefined;
+    if (data instanceof Uint8Array) {
+        return { data, mimeType: mime };
+    }
+    if (data instanceof ArrayBuffer) {
+        return { data: new Uint8Array(data), mimeType: mime };
+    }
+    if (typeof data === 'string') {
+        try {
+            return { data: new Uint8Array(Buffer.from(data, 'base64')), mimeType: mime };
+        } catch {
+            return undefined;
+        }
+    }
+    return undefined;
+}
+
+function isDataPartLike(part: unknown): part is DataPartLike {
+    return normalizeDataPart(part) !== undefined;
+}
+
+export function isImageDataPart(part: unknown): part is DataPartLike {
+    const norm = normalizeDataPart(part);
+    return norm !== undefined && norm.mimeType.toLowerCase().startsWith('image/');
 }
 
 /**
@@ -317,12 +374,13 @@ export function isImageDataPart(part: unknown): part is vscode.LanguageModelData
  * supports documents (Gemini direct API), otherwise handled by the local
  * text-extraction fallback in vscodeMessagesToDeepSeek.
  */
-export function isPdfDataPart(part: unknown): part is vscode.LanguageModelDataPart {
-    return isDataPartLike(part) && isPdfMime(part.mimeType);
+export function isPdfDataPart(part: unknown): part is DataPartLike {
+    const norm = normalizeDataPart(part);
+    return norm !== undefined && isPdfMime(norm.mimeType);
 }
 
 /** Any data part the vision pipeline may handle: images or PDFs. */
-export function isVisionDataPart(part: unknown): part is vscode.LanguageModelDataPart {
+export function isVisionDataPart(part: unknown): part is DataPartLike {
     return isImageDataPart(part) || isPdfDataPart(part);
 }
 
