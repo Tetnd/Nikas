@@ -1,0 +1,7 @@
+# Normalize line endings: files are stored in the repo as LF and checked
+# out with the platform default. Prevents whole-file CRLF/LF churn in diffs.
+* text=auto eol=lf
+
+# Compiled output and vendored artifacts are not normalized (binary-ish).
+*.vsix binary
+*.png binary
