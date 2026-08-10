@@ -204,10 +204,10 @@ export function getThinkingEffort(): ThinkingEffort {
     if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
         return value;
     }
-    // Default to 'off' to match upstream Nika's default. Off is the fastest
-    // and produces Nika-identical behavior. Users who want deeper reasoning
-    // can opt into low/high/max via the setting or the model-picker dropdown.
-    return 'off';
+    // Default to max — best quality for complex agent builds (verified in the
+    // weather-app A/B: much better final product, ~5x slower). Users who want
+    // speed can set off/low/high via the setting or the model-picker dropdown.
+    return 'max';
 }
 
 /**
@@ -287,9 +287,9 @@ export const CONTEXT_WINDOW_PRESETS: { id: ContextWindowPreset; label: string; t
     { id: '32K', label: '32K', tokens: 32_768, description: 'Minimal — most cost-efficient, fastest responses', recommended: false },
     { id: '64K', label: '64K', tokens: 65_536, description: 'Small — good for simple Q&A', recommended: false },
     { id: '128K', label: '128K', tokens: 131_072, description: 'Balanced — good for most use cases', recommended: false },
-    { id: '256K', label: '256K', tokens: 262_144, description: 'Large — for complex document analysis', recommended: false },
+    { id: '256K', label: '256K', tokens: 262_144, description: 'Default — large, for complex document analysis and long agent sessions', recommended: true },
     { id: '512K', label: '512K', tokens: 524_288, description: 'Extra large — for very long conversations', recommended: false },
-    { id: '950K', label: '950K', tokens: 950_000, description: 'Default — maximum (safe): keeps headroom below the API\'s 1,048,576-token hard ceiling even with thinking mode (recommended for complex agent tasks)', recommended: true },
+    { id: '950K', label: '950K', tokens: 950_000, description: 'Maximum (safe): keeps headroom below the API\'s 1,048,576-token hard ceiling even with thinking mode (for extremely long sessions)', recommended: false },
 ];
 
 export function getContextWindowPreset(): ContextWindowPreset {
@@ -298,13 +298,13 @@ export function getContextWindowPreset(): ContextWindowPreset {
     // working but stay under the API's 1,048,576-token hard ceiling (1M
     // estimated ≈ 1.4M real tokens → the API rejects those with HTTP 400).
     if (value === '1M') return '950K';
-    return (value as ContextWindowPreset) ?? '950K';
+    return (value as ContextWindowPreset) ?? '256K';
 }
 
 export function getContextWindowTokens(): number {
     const preset = getContextWindowPreset();
     const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
-    return found?.tokens ?? 950_000;
+    return found?.tokens ?? 262_144;
 }
 
 // --- Log Level ---
