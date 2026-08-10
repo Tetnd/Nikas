@@ -20,7 +20,7 @@
 const VALID_EFFORTS = new Set(['off', 'low', 'high', 'max']);
 
 function getThinkingEffortSafe(value) {
-    return VALID_EFFORTS.has(value) ? value : 'off';
+    return VALID_EFFORTS.has(value) ? value : 'low';
 }
 
 // v0.7.31/0.7.32 lean routing, gated behind nikas.helperThinkingOff:
@@ -94,9 +94,9 @@ check('Nika parity: settings-resolver helper at off → off', resolveEffort('set
 check('Nika parity: todo-tracker helper at high → high', resolveEffort('todo-tracker', 'high', false) === 'high');
 check('Nika parity: executor max → max', resolveEffort('main-agent', 'max', false) === 'max');
 
-// Invalid saved value must not leak to the API (defaults to off, matching Nika)
-check('invalid saved value → off (guarded)', resolveEffort('unknown', 'xhigh', true) === 'off');
-check('invalid saved value → off (guarded 2)', resolveEffort('unknown', 'yes', true) === 'off');
+// Invalid saved value must not leak to the API (defaults to low)
+check('invalid saved value → low (guarded)', resolveEffort('unknown', 'xhigh', true) === 'low');
+check('invalid saved value → low (guarded 2)', resolveEffort('unknown', 'yes', true) === 'low');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');

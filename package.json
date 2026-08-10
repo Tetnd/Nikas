@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.33",
+  "version": "0.7.34",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -177,7 +177,7 @@
         },
         "nikas.thinkingEffort": {
           "type": "string",
-          "default": "off",
+          "default": "low",
           "enum": [
             "off",
             "low",
@@ -185,12 +185,12 @@
             "max"
           ],
           "enumDescriptions": [
-            "Off (default) — fastest, lowest cost. Best for simple Q&A and quick tasks. Matches upstream Nika.",
-            "Low — light reasoning, faster than High/Max",
+            "Off — fastest, lowest cost, but too little reasoning for reliable tool calling. Invisible helpers always run at off regardless.",
+            "Low (default) — the documented floor for tool-calling/agentic coding: light reasoning, fast, good tool reliability.",
             "High — balanced reasoning",
             "Max — best quality for complex agent builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
           ],
-          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to off to match upstream Nika (the creator's default). Set to low/high/max for more reasoning on complex tasks. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
+          "description": "Thinking/reasoning effort for the executor agent. Defaults to low — the recommended floor for tool-calling/agentic work (OpenAI reasoning guide: 'none' is for no-tool latency tasks, 'low' is for tool-use/planning/execution-oriented coding). Set to off for max speed / exact upstream Nika behavior, or high/max for more reasoning on complex tasks. Invisible internal helper requests (chat titles, commit messages, etc.) are always forced to off via nikas.helperThinkingOff. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
         },
         "nikas.helperThinkingOff": {
           "type": "boolean",

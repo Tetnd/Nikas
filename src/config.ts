@@ -237,10 +237,13 @@ export function getThinkingEffort(): ThinkingEffort {
     if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
         return value;
     }
-    // Default to off — matches upstream Nika (the creator's default), so the
-    // agent behaves identically to Nika out of the box. Users who want more
-    // reasoning can opt into low/high/max via the nikas.thinkingEffort setting.
-    return 'off';
+    // Default to low — the documented floor for tool-calling / agentic work
+    // (OpenAI reasoning guide: 'none' is for no-tool latency tasks like voice /
+    // retrieval / classification; 'low' is for tool-use, planning, and
+    // execution-oriented coding). 'off' stays available for max speed / exact
+    // upstream Nika behavior, and invisible helpers are ALWAYS forced off via
+    // nikas.helperThinkingOff regardless of this setting.
+    return 'low';
 }
 
 /**
