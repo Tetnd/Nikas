@@ -10,6 +10,7 @@ import {
     createImageDescriptionText,
     getImageParts,
     getNonImageParts,
+    getPdfParts,
     normalizeDataPart,
     type DataPartLike,
 } from './replay.js';
@@ -21,6 +22,8 @@ import type {
 } from './types.js';
 import { VSCodeLanguageModelVisionDescriber, findVisionModelByKey, getVisionPrompt } from './sources/vscode-lm.js';
 import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/api-endpoint.js';
+import { getPdfVisionFallback, getPdfVisionFallbackMinChars } from '../config.js';
+import { extractPdfText, isPdfMime } from '../pdf/extract.js';
 
 /**
  * Vision preprocessing pipeline using replay markers.
@@ -292,6 +295,140 @@ export async function resolveImageMessages(
             ? createVisionProxyMissingNotice()
             : visionFailureNotice,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Sparse-PDF vision enrichment
+// ---------------------------------------------------------------------------
+
+/**
+ * Enrich sparse / image-based PDFs with a vision-model description.
+ *
+ * Local text extraction is the primary path — it's fast, free, and works for
+ * text PDFs (contracts, papers). But floor plans, drawings, and scanned PDFs
+ * yield little or no text (a 2MB floor plan can extract < 1.5K chars), so the
+ * model misses the actual visual content.
+ *
+ * When a PDF's extracted text is below `nikas.pdfVisionFallbackMinChars`, and
+ * a DIRECT-API describer (Gemini — reads `application/pdf` natively) is
+ * available, we describe the PDF via vision and REPLACE the data part with a
+ * text part carrying both the extracted text and the vision description.
+ *
+ * Only direct-API describers qualify: Copilot LM (vscode-lm) models do NOT
+ * accept PDF documents, so with those the PDF stays as-is and reaches the
+ * local text-extraction fallback unchanged.
+ *
+ * Falls back gracefully — if no qualifying describer, vision fails, or the
+ * PDF already has rich text, the messages are returned unchanged.
+ */
+export async function resolveSparsePdfVision(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    token: vscode.CancellationToken,
+    getDescriber: () => Promise<VisionDescriber | undefined>,
+): Promise<readonly vscode.LanguageModelChatRequestMessage[]> {
+    if (!getPdfVisionFallback()) {
+        return messages;
+    }
+
+    // Find the current (latest) user message that contains PDFs.
+    const currentPdfIndex = findCurrentPdfMessageIndex(messages);
+    if (currentPdfIndex === undefined) {
+        return messages;
+    }
+    const message = messages[currentPdfIndex];
+    const pdfParts = getPdfParts(message);
+    if (pdfParts.length === 0) {
+        return messages;
+    }
+
+    // Determine which PDFs are sparse (little extracted text).
+    const minChars = getPdfVisionFallbackMinChars();
+    const sparse: { partIndex: number; pdf: DataPartLike; text: string }[] = [];
+    const content = message.content as readonly vscode.LanguageModelInputPart[];
+    for (const [partIndex, part] of content.entries()) {
+        const norm = normalizeDataPart(part);
+        if (!norm || !isPdfMime(norm.mimeType)) continue;
+        const text = await extractPdfText(norm.data);
+        if (text.length < minChars) {
+            sparse.push({ partIndex, pdf: norm, text });
+        }
+    }
+    if (sparse.length === 0) {
+        return messages; // all PDFs already have rich text
+    }
+
+    // Only direct-API (Gemini) describers can read PDF documents natively.
+    const describer = await getDescriber();
+    if (!describer || describer.source === 'vscode-lm') {
+        visionLog.info(
+            `Sparse PDF(s) present (${sparse.length}) but no direct-API (Gemini) describer — keeping local text extraction`
+        );
+        return messages;
+    }
+
+    // Describe the sparse PDFs via the vision model.
+    const newContent = [...content];
+    let describedCount = 0;
+    for (const { partIndex, pdf, text } of sparse) {
+        if (token.isCancellationRequested) break;
+        try {
+            const description = await describer.describe({
+                prompt: getVisionPrompt(),
+                images: [{ mimeType: pdf.mimeType, data: pdf.data }],
+                token,
+            });
+            if (description.length === 0) {
+                visionLog.info(`Sparse PDF vision returned empty — keeping local text`);
+                continue;
+            }
+            const enriched = text
+                ? `[Attached PDF contents (text + vision):\n${text}\n\n---\nVisual description:\n${description}\n]`
+                : `[Attached PDF (vision description):\n${description}\n]`;
+            newContent[partIndex] = new vscode.LanguageModelTextPart(enriched);
+            describedCount += 1;
+        } catch (err) {
+            visionLog.error('Sparse PDF vision describe failed', err);
+        }
+    }
+
+    if (describedCount === 0) {
+        return messages; // all describes failed — keep local extraction
+    }
+
+    const result = [...messages] as vscode.LanguageModelChatRequestMessage[];
+    result[currentPdfIndex] = {
+        role: message.role,
+        content: newContent,
+        name: message.name,
+    } as unknown as vscode.LanguageModelChatRequestMessage;
+
+    visionLog.info(
+        `Sparse PDF vision enrichment: described ${describedCount}/${sparse.length} sparse PDF(s) via ${describer.id}`
+    );
+    return result;
+}
+
+/**
+ * Find the LAST user message in the conversation that contains PDF parts.
+ * Mirrors findCurrentImageMessageIndex — if the most recent non-user message
+ * is an assistant message, there's no "current" PDF to enrich.
+ */
+function findCurrentPdfMessageIndex(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+): number | undefined {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
+            return undefined;
+        }
+        if (message.role !== vscode.LanguageModelChatMessageRole.User) {
+            continue;
+        }
+        if (getPdfParts(message).length > 0) {
+            return index;
+        }
+    }
+    return undefined;
 }
 
 // ---------------------------------------------------------------------------

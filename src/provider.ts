@@ -4,7 +4,7 @@ import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel,
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
-import { resolveImageMessages, resolveVisionDescriber } from './vision/pipeline.js';
+import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } from './vision/pipeline.js';
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, shouldForceThinkingNone } from './routing.js';
@@ -524,8 +524,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         };
         const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
-        const resolvedMessages = visionResolution.messages;
+        let resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
+
+        // Sparse-PDF vision enrichment: image-based / scanned / drawing-heavy
+        // PDFs yield little extracted text, so describe them via Gemini (which
+        // reads application/pdf natively) and append the visual description.
+        resolvedMessages = await resolveSparsePdfVision(resolvedMessages, token, getDescriber);
 
         // Log vision stats for diagnostics
         if (visionResolution.stats.inputImageParts > 0) {
@@ -858,8 +863,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         };
         const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
-        const resolvedMessages = visionResolution.messages;
+        let resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
+
+        // Sparse-PDF vision enrichment (see chat handler for rationale)
+        resolvedMessages = await resolveSparsePdfVision(resolvedMessages, token, getDescriber);
 
         // Log vision stats for diagnostics (mirrors the chat-completions handler)
         if (visionResolution.stats.inputImageParts > 0) {

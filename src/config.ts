@@ -223,6 +223,32 @@ export function getForceThinkingNone(): boolean {
 }
 
 /**
+ * Whether sparse/image-based PDFs should be enriched with a vision-model
+ * description (Gemini direct API reads `application/pdf` natively).
+ *
+ * Text extraction is the primary path — it's fast and free. But floor plans,
+ * drawings, and scanned PDFs yield little or no text, so the model misses the
+ * visual content. When local extraction is below `pdfVisionFallbackMinChars`,
+ * Nikas describes the PDF via the configured vision describer and appends that
+ * description to the extracted text. Falls back to plain text when no
+ * direct-API (Gemini) describer is available. Default ON.
+ */
+export function getPdfVisionFallback(): boolean {
+    return getConfig().get<boolean>('pdfVisionFallback') ?? true;
+}
+
+/**
+ * Local text-extraction length (chars) below which a PDF is considered
+ * sparse / image-based and triggers the Gemini vision fallback.
+ * Default 1200 — a real text PDF (contract, paper) usually yields far more;
+ * a floor plan / scanned doc yields much less.
+ */
+export function getPdfVisionFallbackMinChars(): number {
+    const v = getConfig().get<number>('pdfVisionFallbackMinChars');
+    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 1200;
+}
+
+/**
  * Context window presets.
  *
  * DeepSeek V4 models advertise up to 1M tokens of input context, but the API
