@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getForceThinkingNone } from './config.js';
 
 /**
  * Request-kind classifier.
@@ -7,11 +8,17 @@ import * as vscode from 'vscode';
  * chat titles, git commit messages, branch names, rename suggestions, the
  * settings resolver, the prompt categorizer, background todo tracking, etc.
  * These produce no user-visible value, so running them at `max` thinking
- * effort is pure latency + cost — especially with `nikas.thinkingEffort`
- * defaulting to `max`.
+ * effort is pure latency + cost.
  *
  * Ported from upstream Vizards/deepseek-v4-for-copilot (provider/routing/
  * classifier.ts, v0.6.1 #137).
+ *
+ * NOTE (v0.7.22): the forced-thinking-off for internal helpers is now OFF by
+ * default, gated behind `nikas.routing.forceThinkingNone`. Upstream Nika has
+ * no routing at all and runs every request at the user's configured effort —
+ * forcing helpers to `off` made Nikas feel "too strict" and behave
+ * differently from Nika. Enable the setting to get the latency/cost savings
+ * back for invisible helper requests.
  */
 export type RequestKind =
     | 'todo-tracker'
@@ -55,9 +62,15 @@ const REQUEST_KINDS_WITH_FORCED_NONE_THINKING = new Set<RequestKind>([
     'rename-suggestions',
 ]);
 
-/** Whether this request kind must run with thinking forced OFF. */
+/**
+ * Whether this request kind must run with thinking forced OFF.
+ *
+ * Gated behind `nikas.routing.forceThinkingNone` (default OFF, matching
+ * upstream Nika). When disabled, even internal helper requests run at the
+ * user's configured thinking effort — Nika-identical behavior.
+ */
 export function shouldForceThinkingNone(requestKind: RequestKind): boolean {
-    return REQUEST_KINDS_WITH_FORCED_NONE_THINKING.has(requestKind);
+    return getForceThinkingNone() && REQUEST_KINDS_WITH_FORCED_NONE_THINKING.has(requestKind);
 }
 
 /**

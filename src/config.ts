@@ -130,10 +130,15 @@ export function getTemperature(): number {
  * instead of quietly calling tools and answering. This reads as "the agent is
  * spamming thinking as replies". The directive below tells it to stop doing
  * that — go straight to tool calls / concise answers — WITHOUT reducing the
- * tool set. Defaults to on; disable if you prefer the narration.
+ * tool set.
+ *
+ * Defaults to OFF to match upstream Nika (which has no such directive) — the
+ * directive makes DeepSeek behave as a strict agentic coder, which many users
+ * find "too strict" / different from Nika. Opt in via `nikas.concisePrompt`
+ * if you prefer the terse agent behavior.
  */
 export function getConcisePrompt(): boolean {
-    return getConfig().get<boolean>('concisePrompt') ?? true;
+    return getConfig().get<boolean>('concisePrompt') ?? false;
 }
 
 /**
@@ -199,10 +204,22 @@ export function getThinkingEffort(): ThinkingEffort {
     if (value === 'off' || value === 'low' || value === 'high' || value === 'max') {
         return value;
     }
-    // Default to max — the weather-app A/B (2026-08-09) showed max produces
-    // the best final product (verified in the field); off is fastest but
-    // produces weaker complex builds.
-    return 'max';
+    // Default to 'off' to match upstream Nika's default. Off is the fastest
+    // and produces Nika-identical behavior. Users who want deeper reasoning
+    // can opt into low/high/max via the setting or the model-picker dropdown.
+    return 'off';
+}
+
+/**
+ * Whether internal Copilot helper requests (chat titles, commit messages,
+ * settings resolver, todo tracker, etc.) should have thinking FORCED OFF.
+ *
+ * Upstream Nika has no such routing — requests run at the user's configured
+ * effort. Defaults to OFF to match Nika; enable `nikas.routing.forceThinkingNone`
+ * if you want the latency/cost savings for invisible helper requests.
+ */
+export function getForceThinkingNone(): boolean {
+    return getConfig().get<boolean>('routing.forceThinkingNone') ?? false;
 }
 
 /**

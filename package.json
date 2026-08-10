@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.21",
+  "version": "0.7.22",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -177,7 +177,7 @@
         },
         "nikas.thinkingEffort": {
           "type": "string",
-          "default": "max",
+          "default": "off",
           "enum": [
             "off",
             "low",
@@ -185,17 +185,22 @@
             "max"
           ],
           "enumDescriptions": [
-            "Off — fastest, lowest cost. Best for simple Q&A and quick tasks",
+            "Off (default) — fastest, lowest cost. Best for simple Q&A and quick tasks; matches upstream Nika behavior",
             "Low — light reasoning, faster than High/Max",
             "High — balanced reasoning",
-            "Max (default) — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
+            "Max — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)"
           ],
-          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to max — the weather-app A/B (2026-08-09) showed max produces the best final product for complex builds (at ~5x the time/cost of off). Switch to off for speed on simple tasks. On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
+          "description": "Thinking/reasoning effort level. Applies to models that support thinking (DeepSeek V4 Flash and Pro). Defaults to off to match upstream Nika. Set to low/high/max for deeper reasoning on complex builds (at more time/cost). On Flash 'low' gives genuinely lighter reasoning; on Pro 'low' is treated as 'high'."
         },
         "nikas.concisePrompt": {
           "type": "boolean",
-          "default": true,
-          "description": "Inject an agent directive into the system prompt that mirrors Copilot's native coding_agent_instructions: persist end-to-end, take action instead of proposing solutions, prefer edit tools, batch tool calls, and always call a tool instead of narrating a plan. Fixes the \"agent spams thinking as replies\" / \"spins\" behavior in agent mode WITHOUT reducing the tool set. Disable to keep the narration."
+          "default": false,
+          "description": "Inject an agent directive into the system prompt that mirrors Copilot's native coding_agent_instructions: persist end-to-end, take action instead of proposing solutions, prefer edit tools, batch tool calls, and always call a tool instead of narrating a plan. Defaults to OFF to match upstream Nika (which has no such directive) — many find the directive too strict. Enable it if you prefer the terse, no-narration agent behavior."
+        },
+        "nikas.routing.forceThinkingNone": {
+          "type": "boolean",
+          "default": false,
+          "description": "Force thinking OFF for internal Copilot helper requests (chat titles, commit messages, settings resolver, todo tracker, etc.). Defaults to false to match upstream Nika, which runs every request at your configured thinking effort. Enable for latency/cost savings on invisible helper requests."
         },
         "nikas.visionModel": {
           "type": "string",

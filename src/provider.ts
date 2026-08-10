@@ -602,9 +602,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Read thinking effort from Copilot Chat's model picker dropdown first,
         // fall back to the saved nikas.thinkingEffort setting. Internal helper
-        // requests (chat titles, commit messages, settings resolver, ...) get
-        // thinking FORCED OFF — they are invisible to the user, so max-effort
-        // reasoning there is pure latency + cost (upstream #137).
+        // requests (chat titles, commit messages, settings resolver, ...) only
+        // get thinking FORCED OFF when nikas.routing.forceThinkingNone is
+        // enabled (default off, matching upstream Nika — see routing.ts).
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const forcedThinkingOff = shouldForceThinkingNone(requestKind);
         const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
@@ -900,7 +900,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
 
         // Thinking effort from the picker dropdown / nikas.thinkingEffort setting.
-        // Internal helper requests get thinking FORCED OFF (upstream #137).
+        // Internal helper requests only get thinking FORCED OFF when
+        // nikas.routing.forceThinkingNone is enabled (default off, matching
+        // upstream Nika — see routing.ts).
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const forcedThinkingOff = shouldForceThinkingNone(requestKind);
         const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
