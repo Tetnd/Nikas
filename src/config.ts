@@ -211,18 +211,6 @@ export function getThinkingEffort(): ThinkingEffort {
 }
 
 /**
- * Whether internal Copilot helper requests (chat titles, commit messages,
- * settings resolver, todo tracker, etc.) should have thinking FORCED OFF.
- *
- * Upstream Nika has no such routing — requests run at the user's configured
- * effort. Defaults to OFF to match Nika; enable `nikas.routing.forceThinkingNone`
- * if you want the latency/cost savings for invisible helper requests.
- */
-export function getForceThinkingNone(): boolean {
-    return getConfig().get<boolean>('routing.forceThinkingNone') ?? false;
-}
-
-/**
  * Whether sparse/image-based PDFs should be enriched with a vision-model
  * description (Gemini direct API reads `application/pdf` natively).
  *
@@ -343,18 +331,6 @@ export function getLogMaxSizeMB(): number {
 export function getLogMaxFiles(): number {
     const v = getConfig().get<number>('logMaxFiles');
     return typeof v === 'number' && v >= 0 ? Math.floor(v) : 5;
-}
-
-// --- Experimental ---
-
-/**
- * Whether to pre-activate VS Code/Copilot virtual `activate_*` tools so the
- * `tools` array stays stable across turns (improves DeepSeek context-cache hit
- * rate). Experimental — default off. Setting: `nikas.experimental.stabilizeToolList`.
- * Ported from upstream Vizards/deepseek-v4-for-copilot (#77).
- */
-export function getStabilizeToolListEnabled(): boolean {
-    return getConfig().get<boolean>('experimental.stabilizeToolList', false);
 }
 
 // --- Copilot Chat PDF patcher ---

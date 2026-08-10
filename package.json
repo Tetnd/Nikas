@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.26",
+  "version": "0.7.27",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -197,11 +197,6 @@
           "default": false,
           "description": "Inject an agent directive into the system prompt that mirrors Copilot's native coding_agent_instructions: persist end-to-end, take action instead of proposing solutions, prefer edit tools, batch tool calls, and always call a tool instead of narrating a plan. Defaults to OFF to match upstream Nika (which has no such directive) — many find the directive too strict. Enable it if you prefer the terse, no-narration agent behavior."
         },
-        "nikas.routing.forceThinkingNone": {
-          "type": "boolean",
-          "default": false,
-          "description": "Force thinking OFF for internal Copilot helper requests (chat titles, commit messages, settings resolver, todo tracker, etc.). Defaults to false to match upstream Nika, which runs every request at your configured thinking effort. Enable for latency/cost savings on invisible helper requests."
-        },
         "nikas.visionModel": {
           "type": "string",
           "default": "gemini",
@@ -346,14 +341,6 @@
           "type": "boolean",
           "default": true,
           "description": "On activation, apply the recommended Copilot agent model assignments (Explore, Plan, Inline Chat → DeepSeek V4 Flash Responses) for any agent the user hasn't configured yet. Idempotent — never overrides an existing choice. Disable to keep agent models untouched on fresh installs."
-        },
-        "nikas.experimental.stabilizeToolList": {
-          "type": "boolean",
-          "default": false,
-          "tags": [
-            "experimental"
-          ],
-          "markdownDescription": "**Experimental**: improve DeepSeek context-cache hit rate by pre-activating VS Code/Copilot virtual tools (`activate_*`) so the `tools` array stays stable across turns.\n- May improve cache hits when the enabled-tools list changes between turns.\n- Requests may include more function definitions, increasing input tokens (cache-hit input tokens are cheaper but still count toward usage).\n- DeepSeek supports at most 128 functions per `tools` request — do not enable with more than 128 enabled tools.\n\nUse [Configure Tools](command:workbench.action.chat.configureTools) to view and manage your tool list."
         }
       }
     }

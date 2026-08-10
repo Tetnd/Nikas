@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getStabilizeToolListEnabled } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } from './vision/pipeline.js';
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
-import { classifyProviderRequest, shouldForceThinkingNone } from './routing.js';
-import { processToolFlow } from './tools/flow.js';
 import { assertToolsWithinLimit } from './tools/request.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
@@ -36,7 +34,6 @@ function getOutputChannel(): vscode.OutputChannel {
  */
 type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
     isBYOK?: true;
-    configurationSchema?: ReturnType<typeof buildThinkingEffortSchema>;
 };
 
 /**
@@ -384,10 +381,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     detail: m.detail,
                 };
 
-                // Both Flash and Pro support thinking — add the per-model dropdown
-                // in Copilot Chat's model picker (matching Vizards UX).
-                modelInfo.configurationSchema = buildThinkingEffortSchema();
-
                 models.push(modelInfo);
             }
 
@@ -404,7 +397,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
             };
-            responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
             models.push(responsesModelInfo);
         } else if (!options.silent) {
             vscode.window.showWarningMessage(
@@ -497,21 +489,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Check for cancellation
         if (token.isCancellationRequested) return;
 
-        // Process the tool preflight flow: strip provider-owned preflight
-        // artifacts from the history, and (when the experimental stabilize
-        // setting is on) pre-activate VS Code/Copilot virtual tools. When
-        // preflight calls were emitted, this request is complete — the real
-        // DeepSeek request happens once the tool list is stable.
-        const toolFlow = processToolFlow({
-            stabilizeToolList: getStabilizeToolListEnabled(),
-            messages,
-            tools: options.tools,
-            progress,
-        });
-        if (toolFlow.preflightHandled) {
-            return;
-        }
-
         // Resolve images to text descriptions (replay markers / vision model)
         // This operates on raw VS Code messages BEFORE conversion to DeepSeek format.
         // Wrap in try-catch so a describer failure doesn't crash the whole request.
@@ -523,7 +500,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 return undefined;
             }
         };
-        const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
+        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
         let resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
 
@@ -547,13 +524,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (visionResolution.initialResponseNotice) {
             progress.report(new vscode.LanguageModelTextPart(
                 `\n\n${visionResolution.initialResponseNotice}\n\n`
-            ));
-        }
-
-        // Show any tool-flow notices (e.g. unstable tool list) to the user
-        if (toolFlow.initialResponseNotice) {
-            progress.report(new vscode.LanguageModelTextPart(
-                `\n\n${toolFlow.initialResponseNotice}\n\n`
             ));
         }
 
@@ -605,26 +575,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const ctxWindowTokens = getContextWindowTokens();
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
-        // Read thinking effort from Copilot Chat's model picker dropdown first,
-        // fall back to the saved nikas.thinkingEffort setting. Internal helper
-        // requests (chat titles, commit messages, settings resolver, ...) only
-        // get thinking FORCED OFF when nikas.routing.forceThinkingNone is
-        // enabled (default off, matching upstream Nika — see routing.ts).
-        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
-        const forcedThinkingOff = shouldForceThinkingNone(requestKind);
-        const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
+        // Read thinking effort from the nikas.thinkingEffort setting (single
+        // source of truth — the Vizards-style per-model picker dropdown and the
+        // request-kind routing were removed in v0.7.27 for Nika-parity).
+        const thinkingEffort = getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
-        const extOpts = options as unknown as Record<string, unknown>;
-        const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
-        getOutputChannel().appendLine(
-            `[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}` +
-            (forcedThinkingOff ? ` (internal helper: ${requestKind} — forced off)` : '')
-        );
-        if (forcedThinkingOff) {
-            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
-        }
+        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}`);
 
         // When thinking mode is enabled, ensure enough headroom for reasoning
         // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
@@ -849,17 +807,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         if (token.isCancellationRequested) return;
 
-        // Process the tool preflight flow (see chat handler for rationale).
-        const toolFlow = processToolFlow({
-            stabilizeToolList: getStabilizeToolListEnabled(),
-            messages,
-            tools: options.tools,
-            progress,
-        });
-        if (toolFlow.preflightHandled) {
-            return;
-        }
-
         // Resolve images to text descriptions (same pipeline as chat completions)
         const getDescriber = async () => {
             try {
@@ -869,7 +816,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 return undefined;
             }
         };
-        const visionResolution = await resolveImageMessages(toolFlow.messages, token, getDescriber);
+        const visionResolution = await resolveImageMessages(messages, token, getDescriber);
         let resolvedMessages = visionResolution.messages;
         const replayMarkerMetadata = visionResolution.replayMarkerMetadata;
 
@@ -893,13 +840,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             ));
         }
 
-        // Show any tool-flow notices (e.g. unstable tool list) to the user
-        if (toolFlow.initialResponseNotice) {
-            progress.report(new vscode.LanguageModelTextPart(
-                `\n\n${toolFlow.initialResponseNotice}\n\n`
-            ));
-        }
-
         if (token.isCancellationRequested) return;
 
         // Convert + truncate to DeepSeek message form, then to Responses input
@@ -914,13 +854,10 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // reducing the tool set. (Controlled by nikas.concisePrompt.)
         const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
 
-        // Thinking effort from the picker dropdown / nikas.thinkingEffort setting.
-        // Internal helper requests only get thinking FORCED OFF when
-        // nikas.routing.forceThinkingNone is enabled (default off, matching
-        // upstream Nika — see routing.ts).
-        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
-        const forcedThinkingOff = shouldForceThinkingNone(requestKind);
-        const thinkingEffort = forcedThinkingOff ? 'off' : getRequestThinkingEffort(options);
+        // Thinking effort from the nikas.thinkingEffort setting (single source
+        // of truth — picker dropdown + request-kind routing removed in v0.7.27
+        // for Nika-parity).
+        const thinkingEffort = getThinkingEffort();
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
@@ -937,15 +874,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         }
 
         // Log which effort is being used (mirrors the chat-completions handler)
-        const extOpts = options as unknown as Record<string, unknown>;
-        const hasDropdownEffort = !!(extOpts.modelConfiguration as Record<string, unknown> | undefined)?.reasoningEffort;
-        getOutputChannel().appendLine(
-            `[Nikas] Thinking effort: ${thinkingEffort}${hasDropdownEffort ? ' (from model picker dropdown)' : ''}` +
-            (forcedThinkingOff ? ` (internal helper: ${requestKind} — forced off)` : '')
-        );
-        if (forcedThinkingOff) {
-            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
-        }
+        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}`);
 
         const request: DeepSeekResponsesRequest = {
             // The Responses API only supports deepseek-v4-flash (not Pro).
@@ -1588,63 +1517,6 @@ function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponses
         description: tool.description ?? '',
         parameters,
     };
-}
-
-/**
- * Build the `configurationSchema` that makes Copilot Chat render a per-model
- * Thinking Effort dropdown (None / Low / High / Max) next to the model picker.
- *
- * This matches the Vizards approach — the dropdown appears for every model
- * that supports thinking, and the user's choice comes through as
- * `options.modelConfiguration.reasoningEffort` on each request.
- *
- * Levels match DeepSeek's Thinking Mode guide: for `deepseek-v4-flash`, `low`
- * maps to a genuinely lower reasoning effort (distinct from `high`); only Pro
- * collapses `low` → `high` server-side.
- */
-function buildThinkingEffortSchema() {
-    return {
-        properties: {
-            reasoningEffort: {
-                type: 'string',
-                title: 'Thinking Effort',
-                enum: ['none', 'low', 'high', 'max'],
-                enumItemLabels: ['None', 'Low', 'High', 'Max'],
-                enumDescriptions: [
-                    'None — fastest, lowest cost. Best for simple Q&A and quick tasks',
-                    'Low — light reasoning, faster than High/Max',
-                    'High — balanced reasoning',
-                    'Max (default) — best quality for complex builds, but slowest and most expensive (verified in weather-app A/B: much better final product, ~5x slower)',
-                ],
-                default: 'max',
-                group: 'navigation',
-            },
-        },
-    } as const;
-}
-
-/**
- * Read the thinking effort from the request options (set by Copilot Chat's
- * model picker dropdown) or fall back to the saved `nikas.thinkingEffort`
- * setting for backward compatibility.
- *
- * Maps 'none' (Copilot dropdown value) → 'off' (Nikas's internal value).
- */
-function getRequestThinkingEffort(
-    options: vscode.ProvideLanguageModelChatResponseOptions,
-): ThinkingEffort {
-    const extOptions = options as unknown as Record<string, unknown>;
-    const modelConfig = extOptions.modelConfiguration as Record<string, unknown> | undefined;
-    const cfg = extOptions.configuration as Record<string, unknown> | undefined;
-    const configuredEffort = modelConfig?.reasoningEffort ?? cfg?.reasoningEffort;
-
-    if (configuredEffort === 'none') return 'off';
-    if (configuredEffort === 'low') return 'low';
-    if (configuredEffort === 'high') return 'high';
-    if (configuredEffort === 'max') return 'max';
-
-    // Fall back to the saved setting (for users who haven't used the dropdown yet)
-    return getThinkingEffort();
 }
 
 /**

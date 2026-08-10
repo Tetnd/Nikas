@@ -1,8 +1,8 @@
 // test-thinking.js — verifies the thinking-effort wiring mirrors src/provider.ts.
 //
 // Covers the full chain:
-//   1. getRequestThinkingEffort  — dropdown (modelConfiguration/configuration
-//      reasoningEffort) resolution + fallback to nikas.thinkingEffort
+//   1. getRequestThinkingEffort  — reads nikas.thinkingEffort (the Vizards-style
+//      picker dropdown + request-kind routing were removed in v0.7.27)
 //   2. buildThinkingParams       — chat-completions wire format
 //   3. buildResponsesThinkingParams — Responses API wire format
 //   4. boostedTokens             — max_tokens sent as-is (boost removed 2026-08-09)
@@ -21,17 +21,9 @@ function getThinkingEffortSafe(value) {
     return VALID_EFFORTS.has(value) ? value : 'max';
 }
 
-function getRequestThinkingEffort(options, savedSetting) {
-    const extOptions = options ?? {};
-    const modelConfig = extOptions.modelConfiguration;
-    const cfg = extOptions.configuration;
-    const configuredEffort = modelConfig?.reasoningEffort ?? cfg?.reasoningEffort;
-
-    if (configuredEffort === 'none') return 'off';
-    if (configuredEffort === 'low') return 'low';
-    if (configuredEffort === 'high') return 'high';
-    if (configuredEffort === 'max') return 'max';
-
+// NOTE (v0.7.27): the Vizards-style picker dropdown + request-kind routing
+// were removed. nikas.thinkingEffort is now the single source of truth.
+function getRequestThinkingEffort(_options, savedSetting) {
     return getThinkingEffortSafe(savedSetting);
 }
 
@@ -70,18 +62,13 @@ function check(name, cond, detail) {
     else { fail++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
 }
 
-console.log('=== 1. Dropdown resolution (getRequestThinkingEffort) ===');
-// Copilot dropdown value comes through as modelConfiguration.reasoningEffort
-check('dropdown none → off', resolveEffort({ modelConfiguration: { reasoningEffort: 'none' } }, 'high') === 'off');
-check('dropdown low → low', resolveEffort({ modelConfiguration: { reasoningEffort: 'low' } }, 'off') === 'low');
-check('dropdown high → high', resolveEffort({ modelConfiguration: { reasoningEffort: 'high' } }, 'off') === 'high');
-check('dropdown max → max', resolveEffort({ modelConfiguration: { reasoningEffort: 'max' } }, 'off') === 'max');
-// Some Copilot versions pass configuration instead of modelConfiguration
-check('configuration none → off', resolveEffort({ configuration: { reasoningEffort: 'none' } }, 'high') === 'off');
-check('configuration max → max', resolveEffort({ configuration: { reasoningEffort: 'max' } }, 'off') === 'max');
-// Fallback to saved setting when no dropdown value present
-check('no dropdown → saved setting', resolveEffort({}, 'low') === 'low');
-check('no dropdown, empty options → saved setting', resolveEffort(undefined, 'max') === 'max');
+console.log('=== 1. Effort resolution (nikas.thinkingEffort — single source) ===');
+// Dropdown + request-kind routing removed (v0.7.27). Effort comes straight from
+// the saved setting; request options are ignored entirely.
+check('saved low → low', resolveEffort({}, 'low') === 'low');
+check('saved max → max', resolveEffort(undefined, 'max') === 'max');
+check('saved high → high (options ignored)', resolveEffort({ modelConfiguration: { reasoningEffort: 'none' } }, 'high') === 'high');
+check('saved high → high (configuration ignored)', resolveEffort({ configuration: { reasoningEffort: 'none' } }, 'high') === 'high');
 // Invalid saved value must not leak to the API
 check('invalid saved value → max (guarded)', resolveEffort({}, 'xhigh') === 'max');
 check('invalid saved value → max (guarded 2)', resolveEffort({}, 'yes') === 'max');
