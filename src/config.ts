@@ -11,6 +11,24 @@ export const SECRET_KEYS = {
     geminiApiKey: 'nikas.gemini.apiKey',
 } as const;
 
+/**
+ * Settings that no longer exist (removed in v0.7.27 along with the
+ * Vizards-derived behavior machinery they controlled: tool-list
+ * stabilization + request-kind routing). They are inert — nothing reads them
+ * — but leftover values can linger in a user's settings.json and confuse
+ * them. `migrateRemovedSettings` (extension.ts) deletes them on activation.
+ */
+export const REMOVED_SETTINGS: ReadonlyArray<{ key: string; reason: string }> = [
+    {
+        key: 'experimental.stabilizeToolList',
+        reason: 'tool-list stabilization removed in v0.7.27 for Nika-parity',
+    },
+    {
+        key: 'routing.forceThinkingNone',
+        reason: 'request-kind routing removed in v0.7.27 for Nika-parity',
+    },
+];
+
 export const VISION_MODELS = [
     {
         id: 'ollama-gemma4',

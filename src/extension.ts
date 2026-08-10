@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -36,6 +36,12 @@ export async function activate(context: vscode.ExtensionContext) {
     // the log — an installed update only takes effect after a window reload.
     const version: unknown = context.extension.packageJSON?.version;
     log.info(`Nikas v${String(version ?? 'unknown')} activated`);
+
+    // Clean up settings that no longer exist (v0.7.27 removed the
+    // Vizards-derived tool-list stabilization + request-kind routing).
+    // Idempotent + non-fatal — removes any leftover values a user may have
+    // from an older Nikas install so dead settings don't linger.
+    await migrateRemovedSettings();
 
     // Listen for log level changes in settings
     context.subscriptions.push(
@@ -840,6 +846,49 @@ async function prewarmVisionModules(): Promise<void> {
         visionLog.info('Prewarmed replay/pipeline modules');
     } catch {
         // Non-fatal
+    }
+}
+
+/**
+ * Remove leftover values of settings that no longer exist (see
+ * REMOVED_SETTINGS in config.ts — the Vizards-derived tool-list stabilization
+ * + request-kind routing deleted in v0.7.27).
+ *
+ * They're inert (nothing reads them) but linger in a user's settings.json
+ * after they upgrade from an older Nikas, which is confusing. This deletes
+ * them from every scope where they're actually set (global / workspace /
+ * workspace folder) so a fresh install never carries the dead config.
+ *
+ * Idempotent + non-fatal: only touches scopes that have a value, and never
+ * throws (a failed removal just logs a warning).
+ */
+async function migrateRemovedSettings(): Promise<void> {
+    const config = getConfig();
+    for (const { key, reason } of REMOVED_SETTINGS) {
+        try {
+            const info = config.inspect(key);
+            const scopes: Array<{ target: vscode.ConfigurationTarget; name: string }> = [];
+            if (info?.globalValue !== undefined) {
+                scopes.push({ target: vscode.ConfigurationTarget.Global, name: 'user' });
+            }
+            if (info?.workspaceValue !== undefined) {
+                scopes.push({ target: vscode.ConfigurationTarget.Workspace, name: 'workspace' });
+            }
+            if (info?.workspaceFolderValue !== undefined) {
+                scopes.push({ target: vscode.ConfigurationTarget.WorkspaceFolder, name: 'workspace-folder' });
+            }
+            for (const scope of scopes) {
+                await config.update(key, undefined, scope.target);
+            }
+            if (scopes.length > 0) {
+                log.info(
+                    `Migrated removed setting nikas.${key} (${reason}) — ` +
+                    `cleared from ${scopes.map(s => s.name).join(', ')}`
+                );
+            }
+        } catch (err) {
+            log.warn(`Could not migrate removed setting nikas.${key}: ${String(err)}`);
+        }
     }
 }
 
