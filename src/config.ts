@@ -246,12 +246,15 @@ export function getPdfVisionFallback(): boolean {
 /**
  * Local text-extraction length (chars) below which a PDF is considered
  * sparse / image-based and triggers the Gemini vision fallback.
- * Default 1200 — a real text PDF (contract, paper) usually yields far more;
- * a floor plan / scanned doc yields much less.
+ * Default 3000 — scanned / image-heavy PDFs (floor plans, scans, drawings)
+ * typically extract far less than this even when they contain some text
+ * (a 2MB single-page scan commonly extracts only ~1.3K chars). A real text
+ * PDF (contract, paper) yields far more, so text-rich docs skip the vision
+ * call and stay on fast/free extraction.
  */
 export function getPdfVisionFallbackMinChars(): number {
     const v = getConfig().get<number>('pdfVisionFallbackMinChars');
-    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 1200;
+    return typeof v === 'number' && v >= 0 ? Math.floor(v) : 3000;
 }
 
 /**

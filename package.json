@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.28",
+  "version": "0.7.29",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -256,9 +256,9 @@
         },
         "nikas.pdfVisionFallbackMinChars": {
           "type": "number",
-          "default": 1200,
+          "default": 3000,
           "minimum": 0,
-          "description": "Local text-extraction length (chars) below which a PDF is considered sparse and triggers the Gemini vision fallback. Default 1200 — a real text PDF (contract, paper) usually yields far more; a floor plan / scanned doc yields much less."
+          "description": "Local text-extraction length (chars) below which a PDF is considered sparse and triggers the Gemini vision fallback. Default 3000 — scanned / image-heavy PDFs (floor plans, scans, drawings) typically extract far less than this even when they contain some text; real text PDFs (contracts, papers) yield far more and stay on fast/free extraction."
         },
         "nikas.pdfMaxPages": {
           "type": "number",
