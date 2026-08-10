@@ -160,6 +160,21 @@ export function getConcisePrompt(): boolean {
 }
 
 /**
+ * Whether invisible internal Copilot helper requests (chat titles, commit
+ * messages, settings resolver, todo tracker, categorize_prompt, ...) should
+ * run with thinking FORCED OFF regardless of `nikas.thinkingEffort`.
+ *
+ * - true  (default) — helpers never burn thinking tokens; the configured
+ *   effort still applies to the real agent (the executor). This is the
+ *   "executor max, helpers none" setup.
+ * - false — Nika parity: every request (including helpers) runs at the
+ *   configured thinking effort, exactly like upstream Nika (no routing).
+ */
+export function getHelperThinkingOff(): boolean {
+    return getConfig().get<boolean>('helperThinkingOff') ?? true;
+}
+
+/**
  * The behavioral directive appended to the system prompt when
  * `nikas.concisePrompt` is enabled.
  *

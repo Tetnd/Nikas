@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getHelperThinkingOff } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -132,7 +132,9 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nikas.copilotPdfStatus', () => showPdfPatchStatus()),
         vscode.commands.registerCommand('nikas.reapplyCopilotPdfPatches', () => reapplyPdfPatches(context)),
+        vscode.commands.registerCommand('nikas.toggleHelperThinkingOff', () => toggleHelperThinkingOff()),
         vscode.commands.registerCommand('nikas.manage', () => {
+            const helperThinkingOff = getHelperThinkingOff();
             vscode.window.showQuickPick(
                 [
                     {
@@ -163,6 +165,14 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(output) Log Level',
                         description: 'Set logging verbosity (INFO is default, VERBOSE for debugging)',
+                    },
+                    {
+                        label: helperThinkingOff
+                            ? '$(symbol-method) Helper Thinking: OFF (Applied)'
+                            : '$(symbol-method) Helper Thinking: ON (Nika parity)',
+                        description: helperThinkingOff
+                            ? 'APPLIED — invisible helper requests run without thinking; your effort applies to the executor. Click to unapply (Nika parity).'
+                            : 'UNAPPLIED — helpers run at your configured effort, exactly like upstream Nika. Click to apply (helpers off).',
                     },
                     {
                         label: '$(symbol-misc) Agent Model Assignments',
@@ -226,6 +236,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(output) Log Level':
                         vscode.commands.executeCommand('nikas.chooseLogLevel');
+                        break;
+                    case '$(symbol-method) Helper Thinking: OFF (Applied)':
+                    case '$(symbol-method) Helper Thinking: ON (Nika parity)':
+                        vscode.commands.executeCommand('nikas.toggleHelperThinkingOff');
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
                         vscode.commands.executeCommand('nikas.agentModelAssignments');
@@ -846,6 +860,32 @@ async function prewarmVisionModules(): Promise<void> {
         visionLog.info('Prewarmed replay/pipeline modules');
     } catch {
         // Non-fatal
+    }
+}
+
+/**
+ * Toggle the "helper thinking off" behavior (the apply/unapply button).
+ *
+ * - Applied (true):  invisible internal Copilot helper requests run with
+ *   thinking OFF; your configured effort still applies to the executor.
+ * - Unapplied (false): Nika parity — every request (including helpers) runs
+ *   at your configured thinking effort.
+ *
+ * Writes the setting globally and confirms the new state to the user.
+ */
+async function toggleHelperThinkingOff(): Promise<void> {
+    const config = getConfig();
+    const current = getHelperThinkingOff();
+    const next = !current;
+    await config.update('helperThinkingOff', next, vscode.ConfigurationTarget.Global);
+    if (next) {
+        vscode.window.showInformationMessage(
+            'Nikas: Helper Thinking OFF — APPLIED. Invisible helper requests (chat titles, commit messages, ...) now run without thinking; your thinking effort applies to the executor.'
+        );
+    } else {
+        vscode.window.showInformationMessage(
+            'Nikas: Helper Thinking OFF — UNAPPLIED (Nika parity). Every request, including helpers, now runs at your configured thinking effort.'
+        );
     }
 }
 

@@ -23,14 +23,17 @@ function getThinkingEffortSafe(value) {
     return VALID_EFFORTS.has(value) ? value : 'off';
 }
 
-// v0.7.31 lean routing: invisible internal helpers always force thinking off;
-// everything else (the executor / real agent) uses the configured setting.
+// v0.7.31/0.7.32 lean routing, gated behind nikas.helperThinkingOff:
+// - applied (true): invisible internal helpers force thinking off; the
+//   executor (real agent) uses the configured setting.
+// - unapplied (false): Nika parity — every request (helpers included) uses
+//   the configured setting.
 const INTERNAL_HELPER_KINDS = new Set([
     'todo-tracker', 'prompt-categorizer', 'settings-resolver', 'chat-title',
     'inline-progress-message', 'git-branch-name', 'git-commit-message', 'rename-suggestions',
 ]);
-function resolveEffort(requestKind, savedSetting) {
-    return INTERNAL_HELPER_KINDS.has(requestKind) ? 'off' : getThinkingEffortSafe(savedSetting);
+function resolveEffort(requestKind, savedSetting, helperThinkingOff) {
+    return (helperThinkingOff && INTERNAL_HELPER_KINDS.has(requestKind)) ? 'off' : getThinkingEffortSafe(savedSetting);
 }
 
 function buildThinkingParams(effort) {
@@ -64,23 +67,36 @@ function check(name, cond, detail) {
 }
 
 console.log('=== 1. Effort resolution (executor vs internal helpers) ===');
-// v0.7.31 lean routing: the executor (real agent) uses the configured setting;
-// invisible internal helpers (chat titles, commit messages, categorize_prompt,
-// settings resolver, todo tracker, ...) are ALWAYS forced to thinking off.
-check('executor max → max', resolveEffort('main-agent', 'max') === 'max');
-check('executor low → low', resolveEffort('unknown', 'low') === 'low');
-check('executor high → high', resolveEffort('main-agent', 'high') === 'high');
-check('chat-title helper → off (even at max)', resolveEffort('chat-title', 'max') === 'off');
-check('commit-message helper → off (even at max)', resolveEffort('git-commit-message', 'max') === 'off');
-check('categorize_prompt helper → off (even at max)', resolveEffort('prompt-categorizer', 'max') === 'off');
-check('settings-resolver helper → off (even at max)', resolveEffort('settings-resolver', 'max') === 'off');
-check('todo-tracker helper → off (even at max)', resolveEffort('todo-tracker', 'max') === 'off');
-check('rename-suggestions helper → off (even at max)', resolveEffort('rename-suggestions', 'max') === 'off');
-check('inline-progress helper → off (even at max)', resolveEffort('inline-progress-message', 'max') === 'off');
-check('git-branch helper → off (even at max)', resolveEffort('git-branch-name', 'max') === 'off');
+// v0.7.32 lean routing gated behind nikas.helperThinkingOff. When applied
+// (true): the executor uses the configured setting; invisible internal
+// helpers (chat titles, commit messages, categorize_prompt, settings
+// resolver, todo tracker, ...) are forced to thinking off. When unapplied
+// (false): Nika parity — helpers run at the configured effort too.
+
+// --- helperThinkingOff = true (applied) ---
+check('executor max → max', resolveEffort('main-agent', 'max', true) === 'max');
+check('executor low → low', resolveEffort('unknown', 'low', true) === 'low');
+check('executor high → high', resolveEffort('main-agent', 'high', true) === 'high');
+check('chat-title helper → off (even at max)', resolveEffort('chat-title', 'max', true) === 'off');
+check('commit-message helper → off (even at max)', resolveEffort('git-commit-message', 'max', true) === 'off');
+check('categorize_prompt helper → off (even at max)', resolveEffort('prompt-categorizer', 'max', true) === 'off');
+check('settings-resolver helper → off (even at max)', resolveEffort('settings-resolver', 'max', true) === 'off');
+check('todo-tracker helper → off (even at max)', resolveEffort('todo-tracker', 'max', true) === 'off');
+check('rename-suggestions helper → off (even at max)', resolveEffort('rename-suggestions', 'max', true) === 'off');
+check('inline-progress helper → off (even at max)', resolveEffort('inline-progress-message', 'max', true) === 'off');
+check('git-branch helper → off (even at max)', resolveEffort('git-branch-name', 'max', true) === 'off');
+
+// --- helperThinkingOff = false (unapplied, Nika parity) ---
+check('Nika parity: chat-title helper at max → max', resolveEffort('chat-title', 'max', false) === 'max');
+check('Nika parity: commit-message helper at max → max', resolveEffort('git-commit-message', 'max', false) === 'max');
+check('Nika parity: categorize_prompt helper at low → low', resolveEffort('prompt-categorizer', 'low', false) === 'low');
+check('Nika parity: settings-resolver helper at off → off', resolveEffort('settings-resolver', 'off', false) === 'off');
+check('Nika parity: todo-tracker helper at high → high', resolveEffort('todo-tracker', 'high', false) === 'high');
+check('Nika parity: executor max → max', resolveEffort('main-agent', 'max', false) === 'max');
+
 // Invalid saved value must not leak to the API (defaults to off, matching Nika)
-check('invalid saved value → off (guarded)', resolveEffort('unknown', 'xhigh') === 'off');
-check('invalid saved value → off (guarded 2)', resolveEffort('unknown', 'yes') === 'off');
+check('invalid saved value → off (guarded)', resolveEffort('unknown', 'xhigh', true) === 'off');
+check('invalid saved value → off (guarded 2)', resolveEffort('unknown', 'yes', true) === 'off');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');

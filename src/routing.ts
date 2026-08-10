@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getHelperThinkingOff } from './config.js';
 
 /**
  * Request-kind classifier (lean re-add, v0.7.31).
@@ -12,11 +13,12 @@ import * as vscode from 'vscode';
  * History:
  * - v0.7.27 removed the full Vizards routing (gated behind a setting, default
  *   OFF, for Nika-parity) along with the tool machinery.
- * - v0.7.31 re-adds a LEAN version, DEFAULT-ON: the user's configured
+ * - v0.7.31 re-added a LEAN version, default-on, gated behind
+ *   `nikas.helperThinkingOff` (v0.7.32). When ON: the user's configured
  *   thinking effort still applies to the real (executor) agent — the model
  *   that picks tools and does the actual work — but invisible helper
- *   requests are always forced to thinking `off`. This is the "executor max,
- *   helpers none" setup the user wants.
+ *   requests are always forced to thinking `off`. When OFF: Nika parity —
+ *   every request runs at the configured effort (no routing).
  */
 export type RequestKind =
     | 'todo-tracker'
@@ -60,12 +62,14 @@ const INTERNAL_HELPER_KINDS = new Set<RequestKind>([
 
 /**
  * Whether this request kind is an invisible internal helper that should run
- * with thinking FORCED OFF (always on in v0.7.31 — no setting gate). The
- * configured thinking effort still applies to everything else (the real
- * agent / executor).
+ * with thinking FORCED OFF — gated behind `nikas.helperThinkingOff`.
+ *
+ * - enabled (default): helpers always run at thinking off; the configured
+ *   effort still applies to everything else (the real agent / executor).
+ * - disabled: Nika parity — helpers run at the configured effort, no routing.
  */
 export function shouldForceHelperThinkingOff(requestKind: RequestKind): boolean {
-    return INTERNAL_HELPER_KINDS.has(requestKind);
+    return getHelperThinkingOff() && INTERNAL_HELPER_KINDS.has(requestKind);
 }
 
 /**
