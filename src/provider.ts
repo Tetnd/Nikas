@@ -7,6 +7,7 @@ import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } from './vision/pipeline.js';
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
+import { classifyProviderRequest, shouldForceHelperThinkingOff } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
@@ -575,14 +576,25 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const ctxWindowTokens = getContextWindowTokens();
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
-        // Read thinking effort from the nikas.thinkingEffort setting (single
-        // source of truth — the Vizards-style per-model picker dropdown and the
-        // request-kind routing were removed in v0.7.27 for Nika-parity).
-        const thinkingEffort = getThinkingEffort();
+        // Read thinking effort from the nikas.thinkingEffort setting. Invisible
+        // internal helper requests (chat titles, commit messages, settings
+        // resolver, todo tracker, categorize_prompt, ...) are ALWAYS forced to
+        // thinking off — they produce no user-visible value, so max reasoning on
+        // them is pure latency + cost. The configured effort still applies to
+        // the real agent (the executor that picks tools and does the work).
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
+        const thinkingEffort = forcedHelperOff ? 'off' : getThinkingEffort();
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
-        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}`);
+        getOutputChannel().appendLine(
+            `[Nikas] Thinking effort: ${thinkingEffort}` +
+            (forcedHelperOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+        );
+        if (forcedHelperOff) {
+            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
+        }
 
         // When thinking mode is enabled, ensure enough headroom for reasoning
         // tokens. DeepSeek's thinking can consume 4K-16K+ tokens on reasoning
@@ -854,10 +866,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // reducing the tool set. (Controlled by nikas.concisePrompt.)
         const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
 
-        // Thinking effort from the nikas.thinkingEffort setting (single source
-        // of truth — picker dropdown + request-kind routing removed in v0.7.27
-        // for Nika-parity).
-        const thinkingEffort = getThinkingEffort();
+        // Thinking effort from the nikas.thinkingEffort setting. Invisible
+        // internal helper requests are always forced to thinking off (see the
+        // chat-completions handler for rationale).
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
+        const thinkingEffort = forcedHelperOff ? 'off' : getThinkingEffort();
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
@@ -874,7 +888,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         }
 
         // Log which effort is being used (mirrors the chat-completions handler)
-        getOutputChannel().appendLine(`[Nikas] Thinking effort: ${thinkingEffort}`);
+        getOutputChannel().appendLine(
+            `[Nikas] Thinking effort: ${thinkingEffort}` +
+            (forcedHelperOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+        );
+        if (forcedHelperOff) {
+            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
+        }
 
         const request: DeepSeekResponsesRequest = {
             // The Responses API only supports deepseek-v4-flash (not Pro).

@@ -1,8 +1,10 @@
 // test-thinking.js — verifies the thinking-effort wiring mirrors src/provider.ts.
 //
 // Covers the full chain:
-//   1. getRequestThinkingEffort  — reads nikas.thinkingEffort (the Vizards-style
-//      picker dropdown + request-kind routing were removed in v0.7.27)
+//   1. resolveEffort — nikas.thinkingEffort for the executor; invisible internal
+//      helper requests (chat titles, commit messages, settings resolver, todo
+//      tracker, categorize_prompt, ...) are ALWAYS forced to thinking off
+//      (v0.7.31 lean routing, default-on).
 //   2. buildThinkingParams       — chat-completions wire format
 //   3. buildResponsesThinkingParams — Responses API wire format
 //   4. boostedTokens             — max_tokens sent as-is (boost removed 2026-08-09)
@@ -21,10 +23,14 @@ function getThinkingEffortSafe(value) {
     return VALID_EFFORTS.has(value) ? value : 'off';
 }
 
-// NOTE (v0.7.27): the Vizards-style picker dropdown + request-kind routing
-// were removed. nikas.thinkingEffort is now the single source of truth.
-function getRequestThinkingEffort(_options, savedSetting) {
-    return getThinkingEffortSafe(savedSetting);
+// v0.7.31 lean routing: invisible internal helpers always force thinking off;
+// everything else (the executor / real agent) uses the configured setting.
+const INTERNAL_HELPER_KINDS = new Set([
+    'todo-tracker', 'prompt-categorizer', 'settings-resolver', 'chat-title',
+    'inline-progress-message', 'git-branch-name', 'git-commit-message', 'rename-suggestions',
+]);
+function resolveEffort(requestKind, savedSetting) {
+    return INTERNAL_HELPER_KINDS.has(requestKind) ? 'off' : getThinkingEffortSafe(savedSetting);
 }
 
 function buildThinkingParams(effort) {
@@ -50,11 +56,6 @@ function boostedTokens(_thinkingEnabled, effectiveMaxTokens, _effort) {
     return effectiveMaxTokens;
 }
 
-// Effective effort used by the handlers (from dropdown / saved setting).
-function resolveEffort(options, savedSetting) {
-    return getRequestThinkingEffort(options, savedSetting);
-}
-
 // ── Test harness ──
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -62,16 +63,24 @@ function check(name, cond, detail) {
     else { fail++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
 }
 
-console.log('=== 1. Effort resolution (nikas.thinkingEffort — single source) ===');
-// Dropdown + request-kind routing removed (v0.7.27). Effort comes straight from
-// the saved setting; request options are ignored entirely.
-check('saved low → low', resolveEffort({}, 'low') === 'low');
-check('saved max → max', resolveEffort(undefined, 'max') === 'max');
-check('saved high → high (options ignored)', resolveEffort({ modelConfiguration: { reasoningEffort: 'none' } }, 'high') === 'high');
-check('saved high → high (configuration ignored)', resolveEffort({ configuration: { reasoningEffort: 'none' } }, 'high') === 'high');
+console.log('=== 1. Effort resolution (executor vs internal helpers) ===');
+// v0.7.31 lean routing: the executor (real agent) uses the configured setting;
+// invisible internal helpers (chat titles, commit messages, categorize_prompt,
+// settings resolver, todo tracker, ...) are ALWAYS forced to thinking off.
+check('executor max → max', resolveEffort('main-agent', 'max') === 'max');
+check('executor low → low', resolveEffort('unknown', 'low') === 'low');
+check('executor high → high', resolveEffort('main-agent', 'high') === 'high');
+check('chat-title helper → off (even at max)', resolveEffort('chat-title', 'max') === 'off');
+check('commit-message helper → off (even at max)', resolveEffort('git-commit-message', 'max') === 'off');
+check('categorize_prompt helper → off (even at max)', resolveEffort('prompt-categorizer', 'max') === 'off');
+check('settings-resolver helper → off (even at max)', resolveEffort('settings-resolver', 'max') === 'off');
+check('todo-tracker helper → off (even at max)', resolveEffort('todo-tracker', 'max') === 'off');
+check('rename-suggestions helper → off (even at max)', resolveEffort('rename-suggestions', 'max') === 'off');
+check('inline-progress helper → off (even at max)', resolveEffort('inline-progress-message', 'max') === 'off');
+check('git-branch helper → off (even at max)', resolveEffort('git-branch-name', 'max') === 'off');
 // Invalid saved value must not leak to the API (defaults to off, matching Nika)
-check('invalid saved value → off (guarded)', resolveEffort({}, 'xhigh') === 'off');
-check('invalid saved value → off (guarded 2)', resolveEffort({}, 'yes') === 'off');
+check('invalid saved value → off (guarded)', resolveEffort('unknown', 'xhigh') === 'off');
+check('invalid saved value → off (guarded 2)', resolveEffort('unknown', 'yes') === 'off');
 
 console.log('\n=== 2. Chat params (buildThinkingParams) ===');
 check('off → thinking disabled (param PRESENT — critical)', JSON.stringify(buildThinkingParams('off')) === '{"thinking":{"type":"disabled"}}');
