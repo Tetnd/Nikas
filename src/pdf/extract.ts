@@ -24,6 +24,12 @@ import { log } from '../log.js';
  * failed (2026-08-10, v0.7.19), so every PDF fell back to the legacy
  * extractor and Hebrew/CID PDFs came out as symbol garbage. The v3 UMD
  * build loads synchronously with `require()` in any extension host.
+ *
+ * Worker wiring (v0.7.21): pdfjs v3's Node fake-worker loader runs
+ * `eval("require")(GlobalWorkerOptions.workerSrc)`, which throws in the
+ * extension host when workerSrc is unset. We register the worker module on
+ * `globalThis.pdfjsWorker` instead, switching pdfjs to its in-process
+ * main-thread handler — no eval, no workerSrc, no dynamic import.
  */
 
 /** True for `application/pdf` (and lenient wildcard `*` + `/pdf`). */
@@ -64,6 +70,18 @@ function loadPdfJs(): PdfJsApi | undefined {
     if (pdfjsApi === undefined && !pdfjsLoadFailed) {
         try {
             pdfjsApi = require('pdfjs-dist/legacy/build/pdf.js') as PdfJsApi;
+            // Register the worker on the main thread (Node mode). pdfjs then
+            // uses its in-process "main thread" worker handler and never runs
+            // the fake-worker loader, which does
+            //   eval("require")(GlobalWorkerOptions.workerSrc)
+            // and throws ERR_INVALID_ARG_TYPE in the extension host when
+            // workerSrc is unset (2026-08-10, v0.7.20) — making getDocument
+            // reject and silently falling back to the garbling legacy
+            // extractor (590-char symbol soup for Hebrew PDFs).
+            try {
+                const worker = require('pdfjs-dist/legacy/build/pdf.worker.js') as { WorkerMessageHandler?: unknown };
+                (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
+            } catch { /* worker optional for text extraction */ }
         } catch (err) {
             pdfjsLoadFailed = true;
             log.error(`[PDF] pdfjs-dist failed to load (falling back to minimal extractor): ${err instanceof Error ? err.message : String(err)}`);
@@ -99,7 +117,11 @@ export async function extractPdfTextWithPdfjs(data: Uint8Array): Promise<string>
             }
         }
         return chunks.join('\n').trim();
-    } catch {
+    } catch (err) {
+        // Log the real reason — this is where the extension host has been
+        // failing silently (v0.7.19/v0.7.20), producing garbage from the
+        // legacy fallback.
+        log.error(`[PDF] pdfjs extraction failed: ${err instanceof Error ? `${err.message}\n${err.stack?.split('\n').slice(0, 3).join('\n')}` : String(err)}`);
         return ''; // fall back to the legacy extractor
     } finally {
         try { doc?.destroy(); } catch { /* ignore */ }
@@ -155,8 +177,13 @@ export function extractPdfTextLegacy(data: Uint8Array): string {
  */
 export async function extractPdfText(data: Uint8Array): Promise<string> {
     const fromPdfjs = await extractPdfTextWithPdfjs(data);
-    if (fromPdfjs) return fromPdfjs;
-    return extractPdfTextLegacy(data);
+    if (fromPdfjs) {
+        log.info(`[PDF] pdfjs extractor: ${fromPdfjs.length} chars`);
+        return fromPdfjs;
+    }
+    const fromLegacy = extractPdfTextLegacy(data);
+    log.info(`[PDF] legacy extractor: ${fromLegacy.length} chars (pdfjs returned nothing)`);
+    return fromLegacy;
 }
 
 /**
