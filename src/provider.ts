@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -9,9 +9,10 @@ import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './visio
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, shouldForceHelperThinkingOff } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
+import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
-import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool } from './api/types.js';
+import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool, DeepSeekContentPart } from './api/types.js';
 import type { ReplayMarkerMetadata } from './vision/types.js';
 
 /**
@@ -67,47 +68,148 @@ function reportThinkingPart(
 }
 
 /**
- * Rough token count estimation for messages.
- * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
- *
- * CALIBRATED 2026-08-09: measured against the API's real usage.input_tokens,
- * the raw ~4 chars/token estimate consistently UNDERCOUNTS by ~40%
- * (real/est ratio ≈ 1.40, stable from ~100K to ~1M real tokens). Without the
- * multiplier, a 1M contextWindow corresponds to ~1.39M real tokens — past the
- * model's 1,048,576 hard ceiling — so the extension's own truncation would
- * fire only AFTER the API starts rejecting requests with HTTP 400.
+ * DeepSeek's hard per-request ceiling: 1,048,576 total tokens (input +
+ * output). Kept in one place so every preset and the truncation budget can
+ * stay safely below it even with estimator error or thinking-mode reasoning.
  */
-const ESTIMATE_CALIBRATION = 1.4;
+const API_TOTAL_CEILING = 1_048_576;
+/** Extra headroom reserved below the hard ceiling for estimator error. */
+const API_CEILING_SAFETY = 65_536;
+
+/**
+ * Token density constants (chars per token) tuned for DeepSeek's BPE tokenizer.
+ *
+ * A single global ratio mis-estimates agent-heavy workloads by 2-3×, which
+ * makes truncation fire at the wrong time and silently evicts early context —
+ * exactly the "the model loses it past ~300K" symptom. We therefore estimate
+ * per content shape:
+ *   - natural-language prose:      ~4.0 chars/token
+ *   - code / JSON / tool args:     ~2.5 chars/token (punctuation-heavy)
+ *   - base64 / hex / minified:     ~1.4 chars/token (low-entropy runs)
+ *
+ * A residual adaptive factor (see adaptiveCalibration) closes the remaining
+ * gap using the API's ground-truth usage on every request, so truncation
+ * timing stays honest for whatever workload the user actually runs.
+ */
+const PROSE_CHARS_PER_TOKEN = 4.0;
+const STRUCTURED_CHARS_PER_TOKEN = 2.5;
+const BASE64_CHARS_PER_TOKEN = 1.4;
+/** Segments with at least this punctuation fraction count as code/JSON. */
+const STRUCTURED_PUNCT_THRESHOLD = 0.15;
+
+/** Matches long base64 runs (data URIs, hex dumps, token blobs). */
+const BASE64_RUN_RE = /[A-Za-z0-9+/=]{32,}/g;
+/** Matches non-word, non-space chars (Unicode-aware — Hebrew/Cyrillic etc.). */
+const PUNCT_RE = /[^\p{L}\p{N}\s_]/gu;
+
+/**
+ * Estimate tokens for a text string. Splits it into base64 runs (very dense),
+ * then classifies the remaining segments as prose (~4 chars/token) or
+ * code/JSON/tool output (~2.5 chars/token) by punctuation density.
+ * Deterministic and side-effect free — the test harness mirrors this logic.
+ */
+function estimateTextTokens(text: string): number {
+    if (!text) return 0;
+    let total = 0;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    BASE64_RUN_RE.lastIndex = 0;
+    while ((m = BASE64_RUN_RE.exec(text)) !== null) {
+        if (m.index > last) {
+            total += estimateSegmentTokens(text.slice(last, m.index));
+        }
+        total += Math.ceil(m[0].length / BASE64_CHARS_PER_TOKEN);
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) {
+        total += estimateSegmentTokens(text.slice(last));
+    }
+    return total;
+}
+
+/**
+ * Estimate tokens for a non-base64 segment by classifying it as prose or
+ * structured (code/JSON/tool output). Punctuation-heavy segments are dense.
+ */
+function estimateSegmentTokens(segment: string): number {
+    if (!segment) return 0;
+    const punctCount = (segment.match(PUNCT_RE) ?? []).length;
+    const punctDensity = punctCount / segment.length;
+    const charsPerToken = punctDensity >= STRUCTURED_PUNCT_THRESHOLD
+        ? STRUCTURED_CHARS_PER_TOKEN
+        : PROSE_CHARS_PER_TOKEN;
+    return Math.ceil(segment.length / charsPerToken);
+}
+
+/**
+ * Adaptive calibration: the per-shape ratios above are close but not exact,
+ * and real density varies by workload. We learn the residual
+ * (real API tokens / estimated tokens) from every request's ground-truth
+ * usage and apply it as an exponentially-weighted factor. Seeded at 1.1 (a
+ * small safety margin — NOT the old blanket ×1.4, which overcounted prose by
+ * ~40% and caused premature truncation); converges within a few requests and
+ * is clamped to a sane range.
+ */
+let adaptiveCalibration = 1.1;
+const ADAPTIVE_ALPHA = 0.25;
+const ADAPTIVE_FLOOR = 0.8;
+const ADAPTIVE_CEIL = 4.0;
+
+/** Apply the learned calibration factor to a raw token estimate. */
+function applyCalibration(raw: number): number {
+    return Math.ceil(raw * adaptiveCalibration);
+}
+
+/**
+ * Feed one ground-truth sample (API prompt_tokens vs our estimate of the
+ * messages actually sent) into the adaptive calibration. Rejects garbage.
+ */
+function observeCalibration(realTokens: number, estimatedTokens: number): void {
+    if (!Number.isFinite(realTokens) || !Number.isFinite(estimatedTokens)) return;
+    if (realTokens <= 0 || estimatedTokens <= 0) return;
+    const ratio = realTokens / estimatedTokens;
+    if (ratio <= 0 || ratio > 12) return;
+    adaptiveCalibration = Math.min(
+        ADAPTIVE_CEIL,
+        Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * adaptiveCalibration)
+    );
+}
 
 function estimateMessageTokens(messages: DeepSeekMessage[]): number {
     let total = 0;
     for (const msg of messages) {
-        // Base overhead per message (~4 tokens for role formatting)
-        total += 4;
+        // Base overhead per message (role + name + JSON framing, ~8 tokens).
+        total += 8;
         if (typeof msg.content === 'string') {
-            total += Math.ceil(msg.content.length / 4);
+            total += estimateTextTokens(msg.content);
         } else if (Array.isArray(msg.content)) {
             for (const part of msg.content) {
                 if (part.type === 'text' && part.text) {
-                    total += Math.ceil(part.text.length / 4);
+                    total += estimateTextTokens(part.text);
+                } else if (part.type === 'image_url' && part.image_url?.url) {
+                    // Data URIs carry a base64 payload — count it at base64
+                    // density. Previously counted as ZERO, which hid the
+                    // single biggest context consumer from truncation.
+                    const url = part.image_url.url;
+                    const comma = url.indexOf(',');
+                    const payload = comma >= 0 ? url.slice(comma + 1) : url;
+                    total += estimateTextTokens(payload);
                 }
             }
         }
         if (msg.tool_calls) {
             for (const tc of msg.tool_calls) {
-                total += Math.ceil(tc.function.name.length / 4);
-                total += Math.ceil(tc.function.arguments.length / 4);
+                total += estimateTextTokens(tc.function.name);
+                total += estimateTextTokens(tc.function.arguments);
             }
         }
         // Thinking-mode CoT round-tripped on assistant messages also consumes
         // context — count it so truncation fires before the API ceiling.
         if (msg.reasoning_content) {
-            total += Math.ceil(msg.reasoning_content.length / 4);
+            total += estimateTextTokens(msg.reasoning_content);
         }
     }
-    // Calibrate the raw 4-char/token estimate to real token counts
-    // (measured real/est ≈ 1.40 on the official API).
-    return Math.ceil(total * ESTIMATE_CALIBRATION);
+    return applyCalibration(total);
 }
 
 /**
@@ -134,6 +236,20 @@ function messagePreview(msg: DeepSeekMessage, maxLen = 80): string {
     }
     const body = text.replace(/\s+/g, ' ').trim();
     return body ? `${msg.role}: ${body.slice(0, maxLen)}` : `${msg.role}: <empty>`;
+}
+
+/** Extract plain-text content from a DeepSeek message ('' when none). */
+function messageText(msg: DeepSeekMessage): string {
+    if (typeof msg.content === 'string') {
+        return msg.content;
+    }
+    if (Array.isArray(msg.content)) {
+        return msg.content
+            .filter((p): p is DeepSeekContentPart & { type: 'text'; text: string } => p.type === 'text' && !!p.text)
+            .map(p => p.text)
+            .join(' ');
+    }
+    return '';
 }
 
 /**
@@ -172,11 +288,20 @@ function logContextHealth(
 }
 
 /**
- * Log actual API token usage against the configured context window.
- * The local ~4 chars/token estimate can undercount; the API's real
- * prompt_tokens is the ground truth for how close we are to the limit.
+ * Log actual API token usage against the configured context window AND feed
+ * the adaptive calibration with a ground-truth sample (see observeCalibration).
+ * The API's real prompt_tokens is the ground truth for how close we are to
+ * the limit — the local estimate can drift on unusual content.
  */
-function logUsageVsWindow(promptTokens: number, completionTokens: number): void {
+function logUsageVsWindow(
+    promptTokens: number,
+    completionTokens: number,
+    estimatedSentTokens: number
+): void {
+    // Learn the real estimate→actual ratio for this workload so truncation
+    // timing stays honest (see observeCalibration).
+    observeCalibration(promptTokens, estimatedSentTokens);
+
     const windowTokens = getContextWindowTokens();
     const fillPct = Math.round((promptTokens / windowTokens) * 100);
     const base =
@@ -219,8 +344,16 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
     const maxOutputTokens = getMaxTokens();
     // Reserve space for output — input context = total - max_output - safety buffer.
     // Clamp to a small floor so the budget can never go negative (which would
-    // drop every message and produce an empty request → HTTP 400).
-    const availableInputTokens = Math.max(1024, maxContextTokens - maxOutputTokens - 1024);
+    // drop every message and produce an empty request → HTTP 400). Also clamp
+    // below the API's hard ceiling with extra safety for estimator error, so a
+    // slightly-underestimated request can never push past 1,048,576 and 400.
+    const availableInputTokens = Math.max(
+        1024,
+        Math.min(
+            maxContextTokens - maxOutputTokens - 1024,
+            API_TOTAL_CEILING - maxOutputTokens - API_CEILING_SAFETY
+        )
+    );
 
     const systemMessages: DeepSeekMessage[] = [];
     const otherMessages: DeepSeekMessage[] = [];
@@ -238,15 +371,25 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 
     if (estimatedTokens <= availableInputTokens) {
         // Everything fits — but the sequence may still be invalid (e.g. the
-        // conversation ends mid-tool-call during auto-compact). Repair it.
+        // conversation ends mid-tool-call during auto-compact). Repair it,
+        // then guarantee a user message survives — a fits-but-user-less loop
+        // would otherwise be sent system-only → DeepSeek HTTP 400.
         const repaired = repairTruncatedSequence(systemMessages, otherMessages);
+        const finalSeq = ensureUserMessage(repaired, otherMessages);
         logContextHealth(estimatedTokens, availableInputTokens, fillPercent);
-        return repaired;
+        return finalSeq;
     }
+
+    // Hard per-request input limit (API ceiling minus output + safety). A
+    // single message may exceed the SOFT budget (the configured window) yet
+    // still be sendable — dropping it would blind the model to its most recent
+    // work. We only drop when it cannot fit under the HARD ceiling.
+    const hardInputLimit = API_TOTAL_CEILING - maxOutputTokens - API_CEILING_SAFETY;
 
     // Need to truncate. Keep system message, then keep the most recent messages.
     const keptMessages: DeepSeekMessage[] = [];
     let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages);
+    let oversizedKept = false;
 
     for (let i = otherMessages.length - 1; i >= 0; i--) {
         const msg = otherMessages[i];
@@ -254,8 +397,45 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
         if (msgTokens <= tokenBudget) {
             keptMessages.unshift(msg);
             tokenBudget -= msgTokens;
+        } else if (keptMessages.length === 0) {
+            // The newest message alone exceeds the remaining budget. Dropping
+            // it would leave the model with an empty window (it couldn't even
+            // see the latest content), which is strictly worse than sending
+            // it — unless it is so large it can never fit under the API's
+            // hard ceiling.
+            if (msgTokens <= hardInputLimit) {
+                keptMessages.unshift(msg);
+                oversizedKept = true;
+                tokenBudget = 0;
+                // If it is a tool result, also keep its assistant tool_calls
+                // caller so `repairTruncatedSequence` doesn't orphan it (a
+                // tool result without its caller gets repaired away).
+                if (msg.role === 'tool' && msg.tool_call_id) {
+                    const caller = otherMessages[i - 1];
+                    if (
+                        caller?.role === 'assistant' &&
+                        caller.tool_calls?.some(tc => tc.id === msg.tool_call_id)
+                    ) {
+                        keptMessages.unshift(caller);
+                    }
+                }
+                // Keep the nearest preceding user turn too, so the leading
+                // non-user strip in `repairTruncatedSequence` doesn't remove
+                // the whole kept group.
+                const keptStart = otherMessages.length - keptMessages.length;
+                for (let j = keptStart - 1; j >= 0; j--) {
+                    if (otherMessages[j].role === 'user') {
+                        keptMessages.unshift(otherMessages[j]);
+                        break;
+                    }
+                }
+            } else {
+                // Message alone exceeds even the hard ceiling — drop it and
+                // everything older (they can never fit either).
+                break;
+            }
         } else {
-            // This message is too large — skip it and everything older
+            // Message doesn't fit and we already have newer content — stop.
             break;
         }
     }
@@ -266,9 +446,216 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
     // that are not in the final (truncated + repaired) sequence.
     const keptSet = new Set<DeepSeekMessage>(truncated);
     const dropped = messages.filter(m => !keptSet.has(m));
+
+    // Guarantee a user message survives (see ensureUserMessage). Without it,
+    // a pure tool-call window has no `user` turn and the Responses API would
+    // receive an empty `input` (system hoisted to instructions) → HTTP 400
+    // "Input items array must not be empty".
+    const finalSeq = ensureUserMessage(truncated, otherMessages);
+
+    if (oversizedKept) {
+        const keptTokens = estimateMessageTokens(keptMessages);
+        log.warn(
+            `Oversized single message kept beyond budget ` +
+            `(~${keptTokens.toLocaleString()} est tokens) — the window is ` +
+            `dominated by one message; earlier context was dropped. If answers ` +
+            `look confident-but-wrong, the missing context is why.`
+        );
+    }
+
     logContextHealth(estimatedTokens, availableInputTokens, fillPercent, dropped);
 
-    return truncated;
+    return finalSeq;
+}
+
+/**
+ * Compaction-aware context management.
+ *
+ * DeepSeek's coding reliability degrades past a few hundred K REAL tokens of
+ * ACTIVE context (attention degradation / "lost in the middle" — users
+ * consistently report ~220-300K, and the Nikas harness field baseline
+ * measured precision loss from ~300K). A 512K/950K window preset lets the
+ * conversation grow past that cliff, and blind truncation (dropping the
+ * oldest) then causes hallucination about forgotten facts.
+ *
+ * So when the conversation exceeds the reliability limit
+ * (`nikas.contextReliabilityLimit`, default 300K real tokens), the OLDEST
+ * messages are COMPACTED into a session-memory summary instead of being sent
+ * raw. The model keeps the newest turns verbatim (the active task) plus a
+ * compressed record of everything earlier: the active window stays under the
+ * cliff, early facts survive in summarized form, and a session can span far
+ * more than 300K of work.
+ *
+ * Deterministic per request: the provider is stateless (VS Code re-sends the
+ * original history every turn), so the same input yields the same compacted
+ * sequence. The summary itself is a model call but is cached in
+ * src/context/compact.ts and recomputed lazily as the old block grows.
+ *
+ * Returns the input unchanged when compaction does not apply: limit 0
+ * (disabled), conversation under the limit, old block too small to matter,
+ * no clean user boundary to snap to, the summarizer failed (fall back to
+ * truncation), or the compacted result would still not fit the window.
+ */
+async function maybeCompactContext(
+    messages: DeepSeekMessage[],
+    apiKey: string,
+    token?: vscode.CancellationToken
+): Promise<DeepSeekMessage[]> {
+    const reliabilityLimit = getContextReliabilityLimit();
+    if (reliabilityLimit <= 0) return messages;
+
+    const estimated = estimateMessageTokens(messages);
+    if (estimated <= reliabilityLimit) return messages;
+
+    const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
+    const others = messages.slice(system.length);
+
+    // Keep the NEWEST content up to the reliability budget; the rest becomes
+    // the old block to compact. Reserve headroom for the summary message.
+    const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
+    let keepBudget = reliabilityLimit - estimateMessageTokens(system) - summaryOverhead;
+    if (keepBudget < 1024) return messages;
+
+    const keep: DeepSeekMessage[] = [];
+    for (let i = others.length - 1; i >= 0; i--) {
+        const t = estimateMessageTokens([others[i]]);
+        if (t <= keepBudget) {
+            keep.unshift(others[i]);
+            keepBudget -= t;
+        } else {
+            break;
+        }
+    }
+
+    // Snap the boundary so keep starts at a real user turn — this avoids
+    // splitting tool-call/tool-result pairs and lets the summary merge cleanly
+    // into the first kept user message.
+    let splitIdx = others.length - keep.length;
+    if (keep.length > 0 && keep[0].role !== 'user') {
+        let snapped = false;
+        for (let j = splitIdx - 1; j >= 0; j--) {
+            if (others[j].role === 'user') {
+                keep.unshift(...others.slice(j, splitIdx));
+                splitIdx = j;
+                snapped = true;
+                break;
+            }
+        }
+        if (!snapped) return messages; // no clean user boundary — don't compact
+    }
+    if (splitIdx <= 0) return messages; // everything fits in keep — no old block
+
+    const oldBlock = others.slice(0, splitIdx);
+    if (oldBlock.length < MIN_COMPACT_BLOCK) return messages;
+
+    // Build the compacted summary (cached; falls back to no-op on failure).
+    let summary: string;
+    try {
+        const abort = new AbortController();
+        const cancel = token?.onCancellationRequested(() => abort.abort());
+        try {
+            summary = await getOrCreateSummary(apiKey, oldBlock, abort.signal);
+        } finally {
+            cancel?.dispose();
+        }
+    } catch (err) {
+        log.warn(
+            `Context compaction failed — falling back to truncation: ` +
+            `${err instanceof Error ? err.message : String(err)}`
+        );
+        return messages;
+    }
+
+    const summaryText =
+        `[Session memory — the earlier part of this conversation was compacted to keep ` +
+        `the model reliable. Treat it as background context; it is NOT a new request. ` +
+        `Rules and conventions in this block apply ONLY to the exact file/function/` +
+        `feature they are attached to in the summary — do NOT extend them to unrelated ` +
+        `code, and do NOT invent requirements that are not explicitly written here. ` +
+        `The active task is in the newest messages below.]\n\n` +
+        summary;
+
+    // Merge the summary into the first kept user message when possible (keeps
+    // the sequence valid — no consecutive user messages, leading user intact).
+    let head: DeepSeekMessage[] = [{ role: 'user', content: summaryText }];
+    if (keep.length > 0 && keep[0].role === 'user') {
+        const first = { ...keep[0] };
+        first.content = `${summaryText}\n\n---\n\n${messageText(first)}`;
+        keep[0] = first;
+        head = [];
+    }
+
+    const compacted = repairTruncatedSequence(system, [...head, ...keep]);
+    const finalSeq = ensureUserMessage(compacted, others);
+
+    // If the compacted result still can't fit the window (e.g. reliability
+    // limit near the window plus a large summary), let truncation handle it —
+    // compacting in a way truncation would immediately undo is pointless.
+    const availableInput = Math.max(
+        1024,
+        getContextWindowTokens() - getMaxTokens() - 1024
+    );
+    if (estimateMessageTokens(finalSeq) > availableInput) {
+        log.verbose(`Compaction skipped — compacted result still exceeds the context window`);
+        return messages;
+    }
+
+    getOutputChannel().appendLine(
+        `[Nikas] Context compacted at ~${estimated.toLocaleString()} est tokens ` +
+        `(reliability limit ${reliabilityLimit.toLocaleString()}): ${oldBlock.length} oldest ` +
+        `message(s) summarized into session memory; ${finalSeq.length} message(s) sent`
+    );
+    log.info(
+        `Context compacted: ~${estimated.toLocaleString()} → ~${estimateMessageTokens(finalSeq).toLocaleString()} ` +
+        `est tokens (${oldBlock.length} messages summarized, limit ${reliabilityLimit.toLocaleString()})`
+    );
+
+    return finalSeq;
+}
+
+/**
+ * Guarantee a repaired sequence always contains a usable user message.
+ *
+ * After truncation + repair the window can end up system-only: a pure
+ * tool-call loop (no `user` turn in the kept window) makes the leading
+ * non-user strip in `repairTruncatedSequence` remove everything. DeepSeek
+ * rejects such requests — the Responses API hoists the system message to
+ * top-level `instructions` and 400s with "Input items array must not be
+ * empty"; chat completions reject non-user-first / user-less sequences.
+ *
+ * Re-injects the most recent real user turn from the pre-truncation
+ * conversation (so the model still knows what was asked), or a minimal
+ * placeholder when none exists. Fills an existing empty-content user message
+ * in place when the window kept one.
+ */
+function ensureUserMessage(
+    seq: DeepSeekMessage[],
+    originalOthers: DeepSeekMessage[]
+): DeepSeekMessage[] {
+    if (seq.some(m => m.role === 'user' && messageText(m).trim() !== '')) {
+        return seq;
+    }
+
+    const newestUser = [...originalOthers]
+        .reverse()
+        .find(m => m.role === 'user' && messageText(m).trim() !== '');
+    const injected: DeepSeekMessage = newestUser ?? { role: 'user', content: 'Continue.' };
+
+    const userIdx = seq.findIndex(m => m.role === 'user');
+    if (userIdx >= 0) {
+        // Window kept an empty-content user message — fill it in place so the
+        // sequence order stays valid.
+        const copy = [...seq];
+        copy[userIdx] = { ...injected };
+        return copy;
+    }
+
+    // No user message at all — insert right after the leading system messages.
+    const firstNonSystem = seq.findIndex(m => m.role !== 'system');
+    const copy = [...seq];
+    if (firstNonSystem === -1) copy.push(injected);
+    else copy.splice(firstNonSystem, 0, injected);
+    return copy;
 }
 
 /**
@@ -540,6 +927,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Convert resolved VS Code messages to DeepSeek format
         let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
 
+        // Compact the oldest messages into session memory when the conversation
+        // crosses the reliability limit (see maybeCompactContext), THEN truncate
+        // to the configured window as a safety net.
+        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token);
+
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
 
@@ -560,6 +952,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         }
 
         if (token.isCancellationRequested) return;
+
+        // Ground-truth estimate of what we're about to send — fed back into
+        // the adaptive calibration on completion so truncation timing stays
+        // honest for this workload.
+        const estimatedSentTokens = estimateMessageTokens(deepseekMessages);
 
         // Build the API request
         const config = getConfig();
@@ -725,7 +1122,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             )
                         );
                         // Monitor actual usage vs the configured window
-                        logUsageVsWindow(usage.promptTokens, usage.completionTokens);
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens);
                     }
 
                     // Inject replay marker if we described images this turn
@@ -871,8 +1268,16 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Convert + truncate to DeepSeek message form, then to Responses input
         let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
+        // Compact the oldest messages into session memory when the conversation
+        // crosses the reliability limit (see maybeCompactContext), THEN truncate
+        // to the configured window as a safety net.
+        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token);
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
         const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
+
+        // Ground-truth estimate of what we're about to send — fed back into
+        // the adaptive calibration on completion (see chat handler rationale).
+        const estimatedSentTokens = estimateMessageTokens(deepseekMessages);
 
         // Optionally inject the "no process narration" directive into the system
         // prompt. In agent mode Flash tends to narrate its process as visible
@@ -995,7 +1400,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             )
                         );
                         // Monitor actual usage vs the configured window
-                        logUsageVsWindow(usage.promptTokens, usage.completionTokens);
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens);
                     }
                     if (replayMarkerMetadata.visionText) {
                         progress.report(createReplayMarkerPart(replayMarkerMetadata));
@@ -1363,11 +1768,10 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
     }
 
     /**
-     * Rough token count estimation.
-     * DeepSeek uses a BPE tokenizer; we approximate at ~4 chars/token.
-     *
-     * Calibrated ×1.4 to match real API token counts (see
-     * ESTIMATE_CALIBRATION) so the Copilot UI meter stays accurate.
+     * Rough token count estimation for the Copilot UI meter.
+     * Uses the same content-aware estimator as the truncation path
+     * (estimateTextTokens + adaptive calibration) so the meter agrees with
+     * when truncation actually fires.
      */
     async provideTokenCount(
         _model: vscode.LanguageModelChatInformation,
@@ -1375,7 +1779,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         _token: vscode.CancellationToken
     ): Promise<number> {
         if (typeof text === 'string') {
-            return Math.ceil((text.length / 4) * ESTIMATE_CALIBRATION);
+            return applyCalibration(estimateTextTokens(text));
         }
 
         const content = typeof text.content === 'string'
@@ -1388,7 +1792,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 })
                 .join('');
 
-        return Math.ceil((content.length / 4) * ESTIMATE_CALIBRATION);
+        return applyCalibration(estimateTextTokens(content));
     }
 }
 
@@ -1409,7 +1813,6 @@ function validateMessageSequence(messages: DeepSeekMessage[]): string[] {
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
         const prev = i > 0 ? messages[i - 1] : null;
-        const next = i < messages.length - 1 ? messages[i + 1] : null;
 
         // Check 1: System message must be first if present
         if (msg.role === 'system' && i !== 0) {
@@ -1426,20 +1829,31 @@ function validateMessageSequence(messages: DeepSeekMessage[]): string[] {
             issues.push(`Message [${i}]: two consecutive assistant messages without tool calls`);
         }
 
-        // Check 4: Tool message without a preceding assistant message with tool_calls
+        // Check 4: Tool message without a matching assistant tool_calls message.
+        // Scans BACK through the whole window for a caller with the same
+        // call_id (not just the immediately preceding message) — an assistant
+        // turn with N tool_calls legitimately produces N consecutive tool
+        // results, and only the first has the assistant directly before it.
         if (msg.role === 'tool') {
-            if (!prev || prev.role !== 'assistant' || !prev.tool_calls) {
-                issues.push(`Message [${i}]: tool result without preceding assistant tool_calls message`);
-            }
-            // Check that tool_call_id exists
             if (!msg.tool_call_id) {
                 issues.push(`Message [${i}]: tool result missing tool_call_id`);
+            } else {
+                const hasCaller = messages.slice(0, i).some(m =>
+                    m.role === 'assistant' &&
+                    m.tool_calls?.some(tc => tc.id === msg.tool_call_id)
+                );
+                if (!hasCaller) {
+                    issues.push(`Message [${i}]: tool result without preceding assistant tool_calls message (call_id: ${msg.tool_call_id})`);
+                }
             }
         }
 
-        // Check 5: Assistant with tool_calls should have content: null (or empty)
-        if (msg.tool_calls && msg.tool_calls.length > 0 && msg.content !== null) {
-            issues.push(`Message [${i}]: assistant tool_calls message should have content: null, got content type: ${typeof msg.content}`);
+        // Check 5: Assistant with tool_calls — content may be null OR a short
+        // narration string (Copilot emits both and DeepSeek accepts both; a
+        // strict "must be null" check flagged every real agent request). Only
+        // a structured content ARRAY alongside tool_calls is genuinely unusual.
+        if (msg.tool_calls && msg.tool_calls.length > 0 && Array.isArray(msg.content) && msg.content.length > 0) {
+            issues.push(`Message [${i}]: assistant tool_calls message has structured content parts (${msg.content.length})`);
         }
 
         // Check 6: Check for empty content in user/assistant messages

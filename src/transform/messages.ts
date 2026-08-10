@@ -317,6 +317,16 @@ export function deepseekMessagesToResponsesInput(
         }
     }
 
+    // Defense in depth: never produce an empty `input`. A system-only sequence
+    // hoists the system message to the top-level `instructions`, leaving
+    // `input` empty — the Responses API rejects that with HTTP 400
+    // "Input items array must not be empty". The truncation path already
+    // guarantees a user message, but this keeps the function's contract that
+    // the returned input is always a valid, non-empty request.
+    if (input.length === 0) {
+        input.push({ type: 'message', role: 'user', content: 'Continue.' });
+    }
+
     return { input, instructions };
 }
 

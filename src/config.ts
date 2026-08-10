@@ -304,8 +304,8 @@ export function getPdfPageNotice(): boolean {
  * enforces a HARD ceiling of 1,048,576 total tokens per request (input +
  * output). The max preset is therefore 950K, which keeps headroom below that
  * ceiling even with thinking mode burning reasoning tokens, and after the
- * token estimator was calibrated to real token counts (~1.4× the old ~4
- * chars/token estimate — see ESTIMATE_CALIBRATION in provider.ts).
+ * token estimator was made content-aware (per-shape char/token ratios +
+ * adaptive calibration from real API usage — see provider.ts).
  * These presets let users cap the context to control costs and response speed.
  */
 export type ContextWindowPreset = '32K' | '64K' | '128K' | '256K' | '512K' | '950K';
@@ -332,6 +332,28 @@ export function getContextWindowTokens(): number {
     const preset = getContextWindowPreset();
     const found = CONTEXT_WINDOW_PRESETS.find(p => p.id === preset);
     return found?.tokens ?? 262_144;
+}
+
+/**
+ * Reliability limit — the maximum ACTIVE context (real tokens) before the
+ * oldest messages are compacted into a session-memory summary instead of
+ * being sent raw.
+ *
+ * DeepSeek's coding reliability degrades past a few hundred K real tokens
+ * (attention degradation / "lost in the middle" — users consistently report
+ * ~220-300K; the Nikas harness field baseline measured precision loss from
+ * ~300K). This is independent of the configured window: a 512K/950K preset
+ * lets the conversation GROW past the limit, but compaction keeps the active
+ * window under it so quality holds and early facts survive in compressed form.
+ *
+ * 0 = disabled (pure truncation, exactly like pre-compaction Nikas).
+ */
+export const DEFAULT_CONTEXT_RELIABILITY_LIMIT = 300_000;
+
+export function getContextReliabilityLimit(): number {
+    const value = getConfig().get<number>('contextReliabilityLimit');
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+    return DEFAULT_CONTEXT_RELIABILITY_LIMIT;
 }
 
 // --- Log Level ---

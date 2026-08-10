@@ -240,6 +240,12 @@
           ],
           "description": "Maximum input context window. Limits how many tokens of conversation history are sent to DeepSeek. Defaults to 256K. Smaller windows are faster and cheaper; larger windows capture more context. Applies to all models. Note: the API enforces a hard 1,048,576-token total per request, so the largest safe preset is 950K."
         },
+        "nikas.contextReliabilityLimit": {
+          "type": "number",
+          "default": 300000,
+          "minimum": 0,
+          "description": "Reliability ceiling (real tokens) for the ACTIVE context. DeepSeek's coding quality degrades past ~220-300K real tokens (attention degradation / 'lost in the middle'), even on huge windows — so when the conversation crosses this limit the oldest messages are COMPACTED into a session-memory summary instead of being sent raw. The model keeps the newest turns verbatim (the active task) plus a compressed record of everything earlier: sessions can span far more work, reliably. Set 0 to disable compaction (pure truncation, exactly like pre-compaction Nikas). Requires a contextWindow larger than this value to take effect (e.g. 512K or 950K)."
+        },
         "nikas.visionModelKey": {
           "type": "string",
           "default": "",

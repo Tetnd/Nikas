@@ -1,32 +1,91 @@
 // Tests the FIXED truncation logic (matches src/provider.ts after the fix).
 // Ensures the resulting sequence is always valid for DeepSeek.
-// NOTE: estimator is calibrated ×1.4 (mirrors ESTIMATE_CALIBRATION in provider.ts).
-const ESTIMATE_CALIBRATION = 1.4;
+// NOTE: estimator is content-aware (per-shape char/token ratios) + adaptively
+// calibrated from real API usage — mirrors src/provider.ts.
+const PROSE_CHARS_PER_TOKEN = 4.0;
+const STRUCTURED_CHARS_PER_TOKEN = 2.5;
+const BASE64_CHARS_PER_TOKEN = 1.4;
+const STRUCTURED_PUNCT_THRESHOLD = 0.15;
+const BASE64_RUN_RE = /[A-Za-z0-9+/=]{32,}/g;
+const PUNCT_RE = /[^\p{L}\p{N}\s_]/gu;
+
+let adaptiveCalibration = 1.1;
+const ADAPTIVE_ALPHA = 0.25;
+const ADAPTIVE_FLOOR = 0.8;
+const ADAPTIVE_CEIL = 4.0;
+
+function estimateSegmentTokens(segment) {
+    if (!segment) return 0;
+    const punctCount = (segment.match(PUNCT_RE) || []).length;
+    const punctDensity = punctCount / segment.length;
+    const charsPerToken = punctDensity >= STRUCTURED_PUNCT_THRESHOLD ? STRUCTURED_CHARS_PER_TOKEN : PROSE_CHARS_PER_TOKEN;
+    return Math.ceil(segment.length / charsPerToken);
+}
+
+function estimateTextTokens(text) {
+    if (!text) return 0;
+    let total = 0;
+    let last = 0;
+    let m;
+    BASE64_RUN_RE.lastIndex = 0;
+    while ((m = BASE64_RUN_RE.exec(text)) !== null) {
+        if (m.index > last) total += estimateSegmentTokens(text.slice(last, m.index));
+        total += Math.ceil(m[0].length / BASE64_CHARS_PER_TOKEN);
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) total += estimateSegmentTokens(text.slice(last));
+    return total;
+}
+
+function applyCalibration(raw) { return Math.ceil(raw * adaptiveCalibration); }
+
+function observeCalibration(realTokens, estimatedTokens) {
+    if (!Number.isFinite(realTokens) || !Number.isFinite(estimatedTokens)) return;
+    if (realTokens <= 0 || estimatedTokens <= 0) return;
+    const ratio = realTokens / estimatedTokens;
+    if (ratio <= 0 || ratio > 12) return;
+    adaptiveCalibration = Math.min(ADAPTIVE_CEIL, Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * adaptiveCalibration));
+}
 
 function estimateMessageTokens(messages) {
     let total = 0;
     for (const msg of messages) {
-        total += 4;
+        total += 8;
         if (typeof msg.content === 'string') {
-            total += Math.ceil(msg.content.length / 4);
+            total += estimateTextTokens(msg.content);
         } else if (Array.isArray(msg.content)) {
             for (const part of msg.content) {
-                if (part.type === 'text' && part.text) total += Math.ceil(part.text.length / 4);
+                if (part.type === 'text' && part.text) total += estimateTextTokens(part.text);
+                else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+                    const url = part.image_url.url;
+                    const comma = url.indexOf(',');
+                    const payload = comma >= 0 ? url.slice(comma + 1) : url;
+                    total += estimateTextTokens(payload);
+                }
             }
         }
         if (msg.tool_calls) {
             for (const tc of msg.tool_calls) {
-                total += Math.ceil(tc.function.name.length / 4);
-                total += Math.ceil(tc.function.arguments.length / 4);
+                total += estimateTextTokens(tc.function.name);
+                total += estimateTextTokens(tc.function.arguments);
             }
         }
+        if (msg.reasoning_content) total += estimateTextTokens(msg.reasoning_content);
     }
-    return Math.ceil(total * ESTIMATE_CALIBRATION);
+    return applyCalibration(total);
 }
 
 // ── FIXED logic (copy of src/provider.ts after repair) ──
 function truncateMessagesToContextWindow(messages, maxContextTokens, maxOutputTokens) {
-    const availableInputTokens = Math.max(1024, maxContextTokens - maxOutputTokens - 1024);
+    const API_TOTAL_CEILING = 1048576;
+    const API_CEILING_SAFETY = 65536;
+    const availableInputTokens = Math.max(
+        1024,
+        Math.min(
+            maxContextTokens - maxOutputTokens - 1024,
+            API_TOTAL_CEILING - maxOutputTokens - API_CEILING_SAFETY
+        )
+    );
 
     const systemMessages = [];
     const otherMessages = [];
@@ -37,12 +96,15 @@ function truncateMessagesToContextWindow(messages, maxContextTokens, maxOutputTo
 
     const estimatedTokens = estimateMessageTokens(messages);
     if (estimatedTokens <= availableInputTokens) {
-        // Everything fits — still repair (conversation may end mid-tool-call).
-        return repairTruncatedSequence(systemMessages, otherMessages);
+        // Everything fits — still repair (conversation may end mid-tool-call),
+        // then guarantee a user message survives.
+        return ensureUserMessage(repairTruncatedSequence(systemMessages, otherMessages), otherMessages);
     }
 
     const keptMessages = [];
+    const hardInputLimit = API_TOTAL_CEILING - maxOutputTokens - API_CEILING_SAFETY;
     let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages);
+    let oversizedKept = false;
 
     for (let i = otherMessages.length - 1; i >= 0; i--) {
         const msg = otherMessages[i];
@@ -50,12 +112,36 @@ function truncateMessagesToContextWindow(messages, maxContextTokens, maxOutputTo
         if (msgTokens <= tokenBudget) {
             keptMessages.unshift(msg);
             tokenBudget -= msgTokens;
+        } else if (keptMessages.length === 0) {
+            // Oversized newest message — keep it (empty window is worse) unless
+            // it exceeds the API's hard ceiling. Plus its tool_calls caller and
+            // the nearest preceding user turn (else repair strips it all).
+            if (msgTokens <= hardInputLimit) {
+                keptMessages.unshift(msg);
+                oversizedKept = true;
+                tokenBudget = 0;
+                if (msg.role === 'tool' && msg.tool_call_id) {
+                    const caller = otherMessages[i - 1];
+                    if (caller && caller.role === 'assistant' && caller.tool_calls && caller.tool_calls.some(tc => tc.id === msg.tool_call_id)) {
+                        keptMessages.unshift(caller);
+                    }
+                }
+                const keptStart = otherMessages.length - keptMessages.length;
+                for (let j = keptStart - 1; j >= 0; j--) {
+                    if (otherMessages[j].role === 'user') {
+                        keptMessages.unshift(otherMessages[j]);
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
         } else {
             break;
         }
     }
 
-    return repairTruncatedSequence(systemMessages, keptMessages);
+    return ensureUserMessage(repairTruncatedSequence(systemMessages, keptMessages), otherMessages);
 }
 
 function repairTruncatedSequence(systemMessages, kept) {
@@ -81,6 +167,40 @@ function repairTruncatedSequence(systemMessages, kept) {
     return [...systemMessages, ...result];
 }
 
+function messageText(msg) {
+    if (typeof msg.content === 'string') return msg.content;
+    if (Array.isArray(msg.content)) {
+        return msg.content
+            .filter(p => p.type === 'text' && p.text)
+            .map(p => p.text)
+            .join(' ');
+    }
+    return '';
+}
+
+// ── FIX (2026-08-10 empty-input 400): never send a user-less window ──
+// Mirrors ensureUserMessage in src/provider.ts. A pure tool-call window
+// (or one whose user turns were all truncated) has no user message; the
+// Responses path hoists system → instructions leaving input empty → HTTP 400
+// "Input items array must not be empty". Re-inject the newest real user turn
+// (or a placeholder) so the request is always valid.
+function ensureUserMessage(seq, originalOthers) {
+    if (seq.some(m => m.role === 'user' && messageText(m).trim() !== '')) return seq;
+    const newestUser = [...originalOthers].reverse().find(m => m.role === 'user' && messageText(m).trim() !== '');
+    const injected = newestUser ?? { role: 'user', content: 'Continue.' };
+    const userIdx = seq.findIndex(m => m.role === 'user');
+    if (userIdx >= 0) {
+        const copy = [...seq];
+        copy[userIdx] = { ...injected };
+        return copy;
+    }
+    const firstNonSystem = seq.findIndex(m => m.role !== 'system');
+    const copy = [...seq];
+    if (firstNonSystem === -1) copy.push(injected);
+    else copy.splice(firstNonSystem, 0, injected);
+    return copy;
+}
+
 // ── Validation: DeepSeek constraints ──
 function findDeepSeekIssues(messages) {
     const issues = [];
@@ -89,13 +209,28 @@ function findDeepSeekIssues(messages) {
     if (first.role !== 'system' && first.role !== 'user') {
         issues.push(`First message role is "${first.role}" — must be system/user`);
     }
+    // Empty-input 400 regression guard (2026-08-10): no user message with
+    // non-empty content → Responses API would receive inputItems=0 → HTTP 400.
+    if (!messages.some(m => m.role === 'user' && messageText(m).trim() !== '')) {
+        issues.push('NO user message with non-empty content (empty-input 400 risk)');
+    }
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
         const prev = i > 0 ? messages[i - 1] : null;
         const next = i < messages.length - 1 ? messages[i + 1] : null;
         if (msg.role === 'tool') {
-            if (!prev || prev.role !== 'assistant' || !prev.tool_calls) {
-                issues.push(`[${i}] tool result without preceding assistant tool_calls (${msg.tool_call_id})`);
+            // Scan BACK through the window for a caller with the same call_id
+            // (an assistant turn with N tool_calls → N consecutive tool
+            // results; only the first has the assistant directly before it).
+            if (!msg.tool_call_id) {
+                issues.push(`[${i}] tool result missing tool_call_id`);
+            } else {
+                const hasCaller = messages.slice(0, i).some(m =>
+                    m.role === 'assistant' && m.tool_calls && m.tool_calls.some(tc => tc.id === msg.tool_call_id)
+                );
+                if (!hasCaller) {
+                    issues.push(`[${i}] tool result without preceding assistant tool_calls (${msg.tool_call_id})`);
+                }
             }
         }
         if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0 && (!next || next.role !== 'tool')) {
@@ -233,7 +368,81 @@ function testScenario(name, messages, maxContext, maxOutput) {
 
 console.log(`\n===== ${scenarios} targeted + 200 fuzz → ${safe} safe, ${failures} failing =====`);
 
-// ── 7. Coalescing consecutive user messages (messages.ts fix) ──
+// ── 7. Empty-input 400 regression (2026-08-10) ──
+// A pure tool-call agent loop at ~105% fill truncated to a system-only
+// window; the Responses path hoisted system → instructions, leaving input
+// empty → HTTP 400 "Input items array must not be empty". ensureUserMessage
+// must re-inject the newest real user turn (or a placeholder) so the request
+// is always valid — and the retry loop can never repeat the same 400.
+console.log('\n=== 7. Empty-input 400 regression (pure tool loop @ ~105% fill) ===');
+{
+    // Build the reported shape: system + empty initial user + pure tool loop,
+    // grown past the 256K preset's available input budget.
+    const m = [];
+    m.push({ role: 'system', content: 'You are Nikas, an agentic coding assistant. '.repeat(80) });
+    m.push({ role: 'user', content: '' }); // empty initial user (agent mode)
+    let r = 0;
+    while (estimateMessageTokens(m) < 257000) {
+        const id = `call_${String(r).padStart(2, '0')}`;
+        m.push({ role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: r % 2 ? 'read_file' : 'read_page', arguments: JSON.stringify({ path: '/x'.repeat(200) }) } }] });
+        m.push({ role: 'tool', tool_call_id: id, content: (r % 2 ? 'Page ' : 'La ') + 'x'.repeat(6000) });
+        r++;
+    }
+    const available = 262144 - 16384 - 1024;
+    const fillPct = Math.round(estimateMessageTokens(m) / available * 100);
+    console.log(`  conversation: ${m.length} msgs, ~${estimateMessageTokens(m).toLocaleString()} tok (~${fillPct}% of ${available.toLocaleString()})`);
+
+    const out = truncateMessagesToContextWindow(m, 262144, 16384);
+    const issues = findDeepSeekIssues(out);
+    if (issues.length > 0) {
+        failures++; console.log(`❌ scenario 7: ${issues.length} issue(s)`);
+        for (const i of issues) console.log(`    ${i}`);
+        console.log('    roles:', out.map(x => x.role).join(','));
+    } else {
+        safe++; console.log(`✅ scenario 7: OK (${out.length} msgs, roles: ${out.map(x => x.role).join(',')})`);
+    }
+
+    // Directly check the exact reported symptom: Responses input must be non-empty.
+    const input = [];
+    let instructions;
+    for (const msg of out) {
+        if (msg.role === 'system') { if (!instructions) instructions = messageText(msg); continue; }
+        if (msg.role === 'user') { input.push({ type: 'message', role: 'user', content: messageText(msg) }); continue; }
+        if (msg.role === 'assistant') {
+            if (msg.reasoning_content) input.push({ type: 'reasoning_text', text: msg.reasoning_content });
+            const t = messageText(msg);
+            if (t) input.push({ type: 'message', role: 'assistant', content: t });
+            if (msg.tool_calls) for (const tc of msg.tool_calls) input.push({ type: 'function_call', call_id: tc.id, name: tc.function.name, arguments: tc.function.arguments });
+            continue;
+        }
+        if (msg.role === 'tool') input.push({ type: 'function_call_output', call_id: msg.tool_call_id, output: messageText(msg) });
+    }
+    if (input.length === 0) {
+        failures++; console.log(`❌ scenario 7: Responses input still EMPTY (inputItems=0 → HTTP 400)`);
+    } else {
+        safe++; console.log(`✅ scenario 7: Responses input has ${input.length} item(s) — no empty-input 400`);
+    }
+}
+{
+    // Conversation FITS the window but is user-less (empty initial user + tool loop):
+    // the non-truncating path must also repair it (fill the empty user in place).
+    const m = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: '' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'c1', content: 'res' },
+    ];
+    const out = truncateMessagesToContextWindow(m, 100000, 1024);
+    const issues = findDeepSeekIssues(out);
+    if (issues.length > 0) {
+        failures++; console.log(`❌ fits-user-less: ${issues.join('; ')}`);
+        console.log('    roles:', out.map(x => x.role).join(','));
+    } else {
+        safe++; console.log(`✅ fits-user-less: OK (${out.length} msgs, roles: ${out.map(x => x.role).join(',')})`);
+    }
+}
+
+// ── 8. Coalescing consecutive user messages (messages.ts fix) ──
 // DeepSeek merges consecutive user messages server-side, but a clean
 // alternating sequence is better. Copilot's agent loop produces adjacent
 // user messages (e.g. tool-result messages emit role:"user" text right
@@ -365,5 +574,340 @@ function ccheck(name, cond, detail) {
 console.log(`  → ${cPass} coalescing checks passed, ${cFail} failed`);
 failures += cFail;
 
-console.log(`\n===== ${scenarios} targeted + 200 fuzz + coalescing → ${safe} safe, ${failures} failing =====`);
+// ── 9. Content-aware estimator ──
+// The old single "chars/4 × 1.4" estimate overcounted prose (~2.86 chars/token
+// vs real ~4) and undercounted code/JSON/base64 — so truncation fired at the
+// wrong time and silently evicted early context ("the model loses it"). The
+// new estimator is per-shape (prose / structured / base64) + adaptively
+// calibrated from real API usage.
+console.log('\n=== 9. Content-aware estimator ===');
+{
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+
+    // base64 runs counted at ~1.4 chars/token (NOT zero — was invisible before)
+    const b64 = 'A'.repeat(4096);
+    const t1 = estimateTextTokens('data:image/png;base64,' + b64);
+    check('base64 payload counted (not zero)', t1 > 1000, `got ${t1}`);
+    check('base64 density ~1.4 chars/token', t1 >= 2900 && t1 <= 3100, `got ${t1}`);
+
+    // prose at ~4 chars/token
+    const prose = 'word '.repeat(800); // 4000 chars
+    const tp = estimateTextTokens(prose);
+    check('prose ~4 chars/token', tp >= 900 && tp <= 1100, `got ${tp}`);
+
+    // JSON (with long value runs) is denser than equal-length prose
+    const json = JSON.stringify({ a: 'x'.repeat(2000), b: 'y'.repeat(2000) });
+    const tj = estimateTextTokens(json);
+    const proseEq = estimateTextTokens('word '.repeat(804));
+    check('JSON denser than prose (more tokens per char)', tj > proseEq + 500, `json=${tj} prose=${proseEq}`);
+
+    // image_url payload counted in the message estimator
+    const imgMsg = [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } }] }];
+    const withImg = estimateMessageTokens(imgMsg);
+    const without = estimateMessageTokens([{ role: 'user', content: '' }]);
+    check('image_url payload counted in message estimate', withImg > without + 1000, `with=${withImg} without=${without}`);
+
+    // Hebrew prose classified as prose (Unicode-aware punctuation detection)
+    const hebrew = 'שלום עולם זהו מבחן פשוט לבדיקה '.repeat(100);
+    const th = estimateTextTokens(hebrew);
+    check('Hebrew prose ~4 chars/token (not misclassified as code)', th >= 600 && th <= 950, `got ${th}`);
+
+    // code/JSON punctuation-dense → structured density
+    const code = 'function foo() { return bar.baz(42); } '.repeat(20); // 780 chars
+    const tc = estimateTextTokens(code);
+    const proseSameLen = estimateTextTokens('word '.repeat(156));
+    check('code denser than equal-length prose', tc > proseSameLen, `code=${tc} prose=${proseSameLen}`);
+}
+
+// ── 10. Validator no longer false-positives ──
+// Two checks flagged every real agent request before: (a) the 2nd+ tool
+// result after a multi-call assistant turn, (b) assistant tool_calls with a
+// narration content string. Real orphans must still be caught.
+console.log('\n=== 10. Validator false-positive fixes ===');
+{
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+
+    // assistant with 2 tool_calls → 2 consecutive tool results
+    const seq = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'read two files' },
+        { role: 'assistant', content: null, tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+            { id: 'c2', type: 'function', function: { name: 'read_page', arguments: '{}' } },
+        ] },
+        { role: 'tool', tool_call_id: 'c1', content: 'file one' },
+        { role: 'tool', tool_call_id: 'c2', content: 'page two' },
+        { role: 'assistant', content: 'done' },
+    ];
+    const issues = findDeepSeekIssues(seq);
+    check('consecutive tool results not flagged (caller 2 slots back)', issues.length === 0, JSON.stringify(issues));
+
+    // assistant tool_calls WITH narration content string (Copilot behavior)
+    const seq2 = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'do it' },
+        { role: 'assistant', content: 'Let me look this up.', tool_calls: [
+            { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+        ] },
+        { role: 'tool', tool_call_id: 'c1', content: 'res' },
+    ];
+    const issues2 = findDeepSeekIssues(seq2);
+    check('content string + tool_calls not flagged', issues2.length === 0, JSON.stringify(issues2));
+
+    // a REAL orphaned tool result (caller absent) is still flagged
+    const seq3 = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hi' },
+        { role: 'tool', tool_call_id: 'ghost', content: 'orphan' },
+    ];
+    const issues3 = findDeepSeekIssues(seq3);
+    check('real orphaned tool result still flagged', issues3.length > 0, JSON.stringify(issues3));
+}
+
+// ── 11. Oversized newest message kept (not an empty window) ──
+// A single huge tool result (read_file/read_page dump) used to evict the whole
+// conversation: keep-newest hit the oversized message, broke, and the model saw
+// nothing. Now the oversized message (plus its caller + nearest user) is kept
+// as long as it fits under the API hard ceiling.
+console.log('\n=== 11. Oversized newest message kept ===');
+{
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+    const m = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'read the big file' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'big', type: 'function', function: { name: 'readFile', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'big', content: 'x'.repeat(200000) }, // ~143K est tokens — over the 13K window
+    ];
+    const out = truncateMessagesToContextWindow(m, 16384, 2048);
+    const issues = findDeepSeekIssues(out);
+    const hasResult = out.some(x => x.role === 'tool' && x.tool_call_id === 'big');
+    check('oversized newest tool result kept (not empty window)', hasResult, JSON.stringify(out.map(x => x.role)));
+    check('oversized kept sequence valid', issues.length === 0, JSON.stringify(issues));
+    check('nearest user preserved before the tool group', out.some(x => x.role === 'user' && messageText(x).includes('read the big file')), JSON.stringify(out.map(x => x.role)));
+
+    // a message over the HARD ceiling is still dropped
+    const m2 = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'read the giant file' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'g', type: 'function', function: { name: 'readFile', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'g', content: 'x'.repeat(3000000) }, // ~2.1M est tokens — over the ~981K hard limit
+    ];
+    const out2 = truncateMessagesToContextWindow(m2, 16384, 2048);
+    const issues2 = findDeepSeekIssues(out2);
+    const hasGiant = out2.some(x => x.role === 'tool' && x.tool_call_id === 'g');
+    check('over-hard-ceiling message dropped', !hasGiant, JSON.stringify(out2.map(x => x.role)));
+    check('dropped-giant sequence still valid', issues2.length === 0, JSON.stringify(issues2));
+}
+
+// ── 12. Adaptive calibration from real API usage ──
+console.log('\n=== 12. Adaptive calibration ===');
+{
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+    adaptiveCalibration = 1.0;
+    observeCalibration(1000, 500); // real/est = 2.0
+    check('calibration moves toward observed ratio', adaptiveCalibration > 1.0, `got ${adaptiveCalibration}`);
+    check('calibration bounded', adaptiveCalibration >= ADAPTIVE_FLOOR && adaptiveCalibration <= ADAPTIVE_CEIL, `got ${adaptiveCalibration}`);
+    for (let k = 0; k < 50; k++) observeCalibration(3000, 1000); // ratio 3.0
+    check('calibration converges toward 3.0', adaptiveCalibration >= 2.95 && adaptiveCalibration <= 3.05, `got ${adaptiveCalibration}`);
+    check('applyCalibration reflects factor', applyCalibration(1000) === 3000, `got ${applyCalibration(1000)}`);
+    // garbage samples rejected
+    adaptiveCalibration = 1.1;
+    observeCalibration(0, 0);
+    observeCalibration(-5, 10);
+    observeCalibration(100, -1);
+    observeCalibration(NaN, 100);
+    check('garbage samples rejected', adaptiveCalibration === 1.1, `got ${adaptiveCalibration}`);
+}
+
+// ── 13. API ceiling clamp ──
+console.log('\n=== 13. API ceiling clamp ===');
+{
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+    const avail = Math.max(1024, Math.min(5000000 - 16384 - 1024, 1048576 - 16384 - 65536));
+    check('absurd window clamps to ~981K (not 5M)', avail === 1048576 - 16384 - 65536, `avail=${avail}`);
+    const m = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hello ' + 'x'.repeat(5000) },
+        { role: 'assistant', content: 'hi' },
+    ];
+    const out = truncateMessagesToContextWindow(m, 5000000, 16384);
+    const issues = findDeepSeekIssues(out);
+    check('clamped request still valid', issues.length === 0, JSON.stringify(issues));
+}
+
+// ── 14. Compaction plan (reliability limit) ──
+// Mirrors the pure parts of maybeCompactContext in src/provider.ts: keep the
+// newest content up to the reliability budget, compact the old block into a
+// session-memory summary, snap the boundary to a user turn, and keep the
+// resulting sequence valid. (The model call + cache live in compact.ts.)
+console.log('\n=== 14. Compaction plan (reliability limit) ===');
+{
+    const MIN_COMPACT_BLOCK = 8;
+    const SUMMARY_MAX_TOKENS = 4096;
+    const REUSE_GROWTH_THRESHOLD = 16;
+
+    function planCompaction(messages, reliabilityLimit) {
+        const estimated = estimateMessageTokens(messages);
+        if (estimated <= reliabilityLimit) return null;
+        const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
+        const others = messages.slice(system.length);
+        const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
+        let keepBudget = reliabilityLimit - estimateMessageTokens(system) - summaryOverhead;
+        if (keepBudget < 1024) return null;
+        const keep = [];
+        for (let i = others.length - 1; i >= 0; i--) {
+            const t = estimateMessageTokens([others[i]]);
+            if (t <= keepBudget) { keep.unshift(others[i]); keepBudget -= t; }
+            else break;
+        }
+        let splitIdx = others.length - keep.length;
+        if (keep.length > 0 && keep[0].role !== 'user') {
+            let snapped = false;
+            for (let j = splitIdx - 1; j >= 0; j--) {
+                if (others[j].role === 'user') { keep.unshift(...others.slice(j, splitIdx)); splitIdx = j; snapped = true; break; }
+            }
+            if (!snapped) return null;
+        }
+        if (splitIdx <= 0) return null;
+        const oldBlock = others.slice(0, splitIdx);
+        if (oldBlock.length < MIN_COMPACT_BLOCK) return null;
+        return { system, others, keep, oldBlock, estimated };
+    }
+
+    function applyCompaction(plan, summary) {
+        const summaryText = `[Session memory — the earlier part of this conversation was compacted to keep the model reliable. Treat it as background context; it is NOT a new request. Rules and conventions in this block apply ONLY to the exact file/function/feature they are attached to in the summary — do NOT extend them to unrelated code, and do NOT invent requirements that are not explicitly written here. The active task is in the newest messages below.]\n\n${summary}`;
+        const keep = plan.keep.map(m => ({ ...m }));
+        let head = [{ role: 'user', content: summaryText }];
+        if (keep.length > 0 && keep[0].role === 'user') {
+            const first = { ...keep[0] };
+            first.content = `${summaryText}\n\n---\n\n${messageText(first)}`;
+            keep[0] = first;
+            head = [];
+        }
+        return ensureUserMessage(repairTruncatedSequence(plan.system, [...head, ...keep]), plan.others);
+    }
+
+    const check = (name, cond, detail) => {
+        if (cond) { safe++; console.log(`  PASS ${name}`); }
+        else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
+    };
+
+    // Long agent session past the reliability limit (use a small limit so the
+    // test stays fast; the logic is limit-agnostic).
+    const m = [];
+    m.push({ role: 'system', content: 'You are Nikas. '.repeat(40) });
+    for (let r = 0; r < 40; r++) {
+        m.push({ role: 'user', content: `Q${r}: implement feature ${r} ` + 'x'.repeat(400) });
+        m.push({ role: 'assistant', content: null, tool_calls: [{ id: `c${r}`, type: 'function', function: { name: 'edit', arguments: '{}' } }] });
+        m.push({ role: 'tool', tool_call_id: `c${r}`, content: 'result ' + 'y'.repeat(2000) });
+        m.push({ role: 'assistant', content: 'Done ' + 'z'.repeat(300) });
+    }
+    m.push({ role: 'user', content: 'Final task ' + 'q'.repeat(200) });
+    const RELIABILITY_LIMIT = 40000;
+    const est = estimateMessageTokens(m);
+    check('long conversation over reliability limit', est > RELIABILITY_LIMIT, `est=${est.toLocaleString()} limit=${RELIABILITY_LIMIT}`);
+
+    const plan = planCompaction(m, RELIABILITY_LIMIT);
+    check('compaction plan produced', plan !== null, plan ? '' : 'plan is null');
+    if (plan) {
+        check('old block non-trivial (>= MIN_COMPACT_BLOCK)', plan.oldBlock.length >= MIN_COMPACT_BLOCK, `oldBlock=${plan.oldBlock.length}`);
+        check('keep starts at a user turn (boundary snapped)', plan.keep.length === 0 || plan.keep[0].role === 'user', `keep[0]=${plan.keep[0]?.role}`);
+        check('system preserved', plan.system.length === 1 && plan.system[0].role === 'system');
+        check('oldBlock + keep == others (nothing lost in the split)', plan.oldBlock.length + plan.keep.length === plan.others.length, `${plan.oldBlock.length}+${plan.keep.length} vs ${plan.others.length}`);
+
+        const out = applyCompaction(plan, 'MEMORY: features 0..30 done; convention: use edit tool; error E1 seen.');
+        const issues = findDeepSeekIssues(out);
+        check('compacted sequence valid', issues.length === 0, JSON.stringify(issues));
+        check('session memory present', out.some(x => messageText(x).includes('MEMORY: features')), JSON.stringify(out.map(x => x.role)));
+        check('summary wrapper has scoping guard', out.some(x => messageText(x).includes('apply ONLY to the exact file/function/feature') && messageText(x).includes('do NOT invent requirements')), 'scoping guard missing from summary wrapper');
+        check('newest user turn survived verbatim', out.some(x => x.role === 'user' && messageText(x).includes('Final task')), JSON.stringify(out.map(x => x.role)));
+        check('compacted result under limit (+slack)', estimateMessageTokens(out) <= RELIABILITY_LIMIT + 5000, `est=${estimateMessageTokens(out).toLocaleString()}`);
+    }
+
+    // Under the limit → no compaction.
+    const small = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hi ' + 'x'.repeat(500) },
+        { role: 'assistant', content: 'yo' },
+    ];
+    check('under limit → no compaction', planCompaction(small, RELIABILITY_LIMIT) === null);
+
+    // Limit 0 → disabled (budget goes negative → no plan).
+    check('limit 0 → disabled', planCompaction(m, 0) === null);
+
+    // Old block too small to matter → no compaction.
+    const tiny = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'a ' + 'x'.repeat(6000) },
+        { role: 'assistant', content: 'b' },
+        { role: 'user', content: 'c ' + 'x'.repeat(6000) },
+        { role: 'assistant', content: 'd' },
+    ];
+    const tPlan = planCompaction(tiny, 4000);
+    check('tiny old block → no compaction', tPlan === null || tPlan.oldBlock.length < MIN_COMPACT_BLOCK, tPlan ? `oldBlock=${tPlan.oldBlock.length}` : '');
+
+    // Cache reuse rule (compact.ts): same anchor (oldest message identity) +
+    // small growth → reuse the cached summary instead of another model call.
+    const canReuse = (sameAnchor, cachedLen, blockLen) =>
+        sameAnchor && blockLen >= cachedLen && blockLen - cachedLen < REUSE_GROWTH_THRESHOLD;
+    check('reuse rule: same anchor + small growth reuses', canReuse(true, 100, 105));
+    check('reuse rule: big growth recomputes', !canReuse(true, 100, 140));
+    check('reuse rule: different anchor recomputes', !canReuse(false, 100, 105));
+
+    // ── 15. Summarizer prompt scoping (compact.ts SUMMARIZE_SYSTEM_PROMPT) ──
+    // Mirrors the "Scoping (CRITICAL)" section added after the benchmark found
+    // the executor over-applies vague universal rules from a contract (e.g.
+    // inventing input.now on an endpoint that doesn't take it). Guards against
+    // regressing the prompt to a generic "compress it" instruction.
+    const SUMMARIZE_SYSTEM_PROMPT_MIRROR =
+        'You are a session-memory summarizer for a long-running coding conversation.\n' +
+        'Your job: compress the EARLIER part of a conversation into a compact memory block\n' +
+        'that preserves everything the assistant might still need, so the conversation can\n' +
+        'continue past the model\'s reliable context limit without losing facts.\n' +
+        '\n' +
+        'Preserve, verbatim where possible:\n' +
+        '- concrete identifiers: file paths, function/class/variable names, tool names\n' +
+        '- error messages and stack-trace fragments\n' +
+        '- project conventions and decisions the user stated\n' +
+        '- numbers, URLs, model/version names\n' +
+        '- the current task, any unfinished work, and open questions\n' +
+        '\n' +
+        'Scoping (CRITICAL — the executor model over-applies vague rules):\n' +
+        '- Keep EVERY rule/convention attached to the component it applies to\n' +
+        '  (file, function, or feature). Never generalize a specific decision into\n' +
+        '  a universal rule.\n' +
+        '- Preserve negations and exceptions verbatim (e.g. "endpoint X takes ONLY\n' +
+        '  { id } — no timestamp field", "do NOT use input.now here"). A rule that\n' +
+        '  applied to one place must NOT be written as if it applies everywhere.\n' +
+        '- Keep exact signatures and API names (e.g. db.selectAll(table, where,\n' +
+        '  opts)); do not paraphrase them into a generic "use the db object".\n' +
+        '- If a convention applied to one component only, say so explicitly.\n' +
+        '\n' +
+        'Rules:\n' +
+        '- Do not add commentary, opinions, or new information.\n' +
+        '- Keep short code snippets only if they encode a decision or convention.\n' +
+        '- Be compact: prefer terse bullet lines over prose.\n' +
+        '- Output ONLY the memory block. No preamble, no closing note.';
+    check('summarizer prompt has scoping section', SUMMARIZE_SYSTEM_PROMPT_MIRROR.includes('Scoping (CRITICAL') && SUMMARIZE_SYSTEM_PROMPT_MIRROR.includes('Never generalize a specific decision'));
+    check('summarizer prompt keeps negations verbatim', SUMMARIZE_SYSTEM_PROMPT_MIRROR.includes('do NOT use input.now here'));
+    check('summarizer prompt keeps exact API names', SUMMARIZE_SYSTEM_PROMPT_MIRROR.includes('db.selectAll(table, where,'));
+    check('summarizer prompt still compact-only output', SUMMARIZE_SYSTEM_PROMPT_MIRROR.includes('Output ONLY the memory block'));
+}
+
+console.log(`\n===== ${scenarios} targeted + 200 fuzz + coalescing + 9..14 → ${safe} safe, ${failures} failing =====`);
 process.exit(failures ? 1 : 0);
