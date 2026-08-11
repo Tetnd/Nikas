@@ -144,16 +144,17 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.checkForUpdates', () => checkForUpdates(context)),
         vscode.commands.registerCommand('nikas.copilotPdfStatus', () => showPdfPatchStatus()),
         vscode.commands.registerCommand('nikas.reapplyCopilotPdfPatches', () => reapplyPdfPatches(context)),
+        // NOTE: we deliberately do NOT override Copilot's own
+        // `github.copilot.chat.compact` command anymore (removed in v0.7.71).
+        // Hijacking Copilot-owned command IDs is what made Nikas look
+        // "incompatible with Copilot" when installed alongside upstream Nika:
+        // the compact button ran our handler instead of Copilot's. Clean
+        // coexistence = own commands only. The silent path is still available
+        // two ways: (a) the explicit `nikas.compactConversation` command below
+        // (auto-submits /compact), and (b) the provider-side interception
+        // (isCopilotCompactRequest / handleCopilotCompactRequest) which
+        // silently summarizes ANY /compact request that reaches the model.
         vscode.commands.registerCommand('nikas.compactConversation', () => runSilentCompact()),
-        // Override Copilot's "Compact Conversation" button so it triggers the
-        // compaction SILENTLY instead of only opening the chat with `/compact`
-        // typed (which made the user press Enter / type it manually). The
-        // stock Copilot handler (`github.copilot.chat.compact`) just does
-        // `workbench.action.chat.open {query:"/compact", preserveInput:true}`.
-        // We keep that but auto-submit the command, so clicking the button
-        // sends `/compact` immediately; the resulting compaction request is
-        // then handled silently by the provider (see isCopilotCompactRequest).
-        vscode.commands.registerCommand('github.copilot.chat.compact', () => runSilentCompact()),
         vscode.commands.registerCommand('nikas.manage', () => {
             vscode.window.showQuickPick(
                 [
