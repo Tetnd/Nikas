@@ -190,6 +190,30 @@ export function getCopilotKnowledge(): boolean {
 }
 
 /**
+ * Whether to inject the pro-SWE "operating guide" into the system prompt
+ * (see buildCopilotOperatingGuide in src/harness/copilotKnowledge.ts). This
+ * is independent of getCopilotKnowledge() (tool-description enrichment) so
+ * the behavioral guide can be benchmarked on its own and toggled without
+ * changing the tool set Copilot passes through.
+ *
+ * - false (default) — Nika parity: no injected guide.
+ * - true — inject the operating guide. Costs ~180 tokens/request.
+ */
+export function getSweOperatingGuide(): boolean {
+    return getConfig().get<boolean>('sweOperatingGuide') ?? false;
+}
+
+/**
+ * Whether to manage a repository AGENTS.md that forces Nikas' pro-SWE
+ * operating guide onto Copilot's native agent-instruction mechanism. When
+ * true, we write/keep the guide in <workspace>/AGENTS.md (backing up any
+ * existing file); when false, we restore the original / remove ours.
+ */
+export function getAgentInstructions(): boolean {
+    return getConfig().get<boolean>('agentInstructions') ?? false;
+}
+
+/**
  * The behavioral directive appended to the system prompt when
  * `nikas.concisePrompt` is enabled.
  *

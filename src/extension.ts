@@ -14,6 +14,7 @@ import {
     createSetupStatusBarItem,
     updateSetupStatusBar,
 } from './commands/setup.js';
+import { syncAgentInstructions } from './agentInstructions.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -52,7 +53,12 @@ export async function activate(context: vscode.ExtensionContext) {
             // Restart the auto-patch scheduling when the setting toggles.
             if (e.affectsConfiguration('nikas.autoPatchCopilot')) {
                 scheduleAutoPatch(context);
-            }        })
+            }
+            // Apply / restore the managed AGENTS.md when the toggle flips.
+            if (e.affectsConfiguration('nikas.agentInstructions')) {
+                void syncAgentInstructions(vscode.workspace.workspaceFolders?.[0]);
+            }
+        })
     );
 
     // Register the single language model chat provider — all models under "Nikas"
@@ -105,6 +111,10 @@ export async function activate(context: vscode.ExtensionContext) {
     //   - on extension changes (catches Copilot Chat updates live)
     //   - periodically (catches external changes / VS Code updates)
     scheduleAutoPatch(context);
+
+    // Apply / restore the managed repository AGENTS.md per the
+    // nikas.agentInstructions toggle. Uses the first workspace folder.
+    void syncAgentInstructions(vscode.workspace.workspaceFolders?.[0]);
 
     // Apply the recommended Copilot agent model assignments for any agent the
     // user hasn't configured yet — a fresh install gets the maintainer's setup

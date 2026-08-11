@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getSweOperatingGuide } from './config.js';
 import { augmentToolDescription, buildCopilotOperatingGuide, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
@@ -1045,7 +1045,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Copilot's native tools. Both WITHOUT reducing the tool set.
         const systemSuffix =
             (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getCopilotKnowledge() ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            (getSweOperatingGuide() ? `\n\n${buildCopilotOperatingGuide()}` : '');
         if (systemSuffix && deepseekMessages.length > 0) {
             const first = deepseekMessages[0];
             if (first.role === 'system') {
@@ -1408,7 +1408,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // and nikas.copilotKnowledge respectively.)
         const conciseDirective =
             (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getCopilotKnowledge() ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            (getSweOperatingGuide() ? `\n\n${buildCopilotOperatingGuide()}` : '');
 
         // Thinking effort from the nikas.thinkingEffort setting. Invisible
         // internal helper requests are always forced to thinking off (see the
