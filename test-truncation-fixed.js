@@ -786,19 +786,22 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
     const SUMMARY_MAX_TOKENS = 4096;
     const REUSE_GROWTH_THRESHOLD = 16;
 
-    function planCompaction(messages, reliabilityLimit, availableInput) {
+    function planCompaction(messages, reliabilityLimit, availableInput, density = 1) {
         // Mirrors provider.ts: the compacted result must fit BOTH the
         // reliability limit AND the window's available input; cap at the
         // smaller so auto-compact fires on small windows too (not just big
-        // ones where the limit is the binding constraint).
+        // ones where the limit is the binding constraint). The optional
+        // `density` (observed real/estimated token ratio) mirrors the
+        // per-session density correction in provider.ts: the limit is in REAL
+        // tokens, so dense workloads must be corrected before comparing.
         if (availableInput === undefined) availableInput = Infinity;
         const budgetCap = Math.min(reliabilityLimit, availableInput);
-        const estimated = estimateMessageTokens(messages);
+        const estimated = Math.ceil(estimateMessageTokens(messages) * density);
         if (estimated <= budgetCap) return null;
         const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
         const others = messages.slice(system.length);
         const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-        const keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
+        const keepBudget = budgetCap - Math.ceil(estimateMessageTokens(system) * density) - summaryOverhead;
         if (keepBudget < 1024) return null;
         // Aggregate-based split landing on a USER-TURN boundary: walk the user
         // boundaries from the oldest, pick the smallest old block whose kept
@@ -809,7 +812,7 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
         for (let i = 0; i < others.length; i++) if (others[i].role === 'user') userBoundaries.push(i);
         let splitIdx = -1;
         for (const i of userBoundaries) {
-            if (estimateMessageTokens(others.slice(i)) <= keepBudget) { splitIdx = i; break; }
+            if (Math.ceil(estimateMessageTokens(others.slice(i)) * density) <= keepBudget) { splitIdx = i; break; }
         }
         if (splitIdx <= 0) return null;
         const oldBlock = others.slice(0, splitIdx);
@@ -879,6 +882,36 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
     }
     // Window even smaller than the summary headroom → nothing worth compacting.
     check('tiny window: no compaction (no room for summary)', planCompaction(m, RELIABILITY_LIMIT, 1024) === null);
+
+    // ── Density correction (real-token trigger) ──
+    // The reliability limit is in REAL tokens; the estimator undercounts dense
+    // workloads (~1.2x). Build a conversation whose RAW estimate is under the
+    // limit but whose real tokens (estimate × density) cross it — the field
+    // failure mode (real 263K prompt while the estimate read ~216K) — and
+    // verify compaction fires only once the density correction is applied.
+    const band = [];
+    band.push({ role: 'system', content: 'sys' });
+    for (let r = 0; r < 400; r++) {
+        band.push({ role: 'user', content: `Q${r} ` + 'x'.repeat(300) });
+        band.push({ role: 'assistant', content: 'Done ' + 'z'.repeat(200) });
+        const est = estimateMessageTokens(band);
+        if (est >= RELIABILITY_LIMIT * 0.82 && est < RELIABILITY_LIMIT) break;
+    }
+    band.push({ role: 'user', content: 'FINAL-TASK-MARKER ' + 'q'.repeat(50) });
+    const rawEst = estimateMessageTokens(band);
+    check('density: raw estimate under the limit', rawEst < RELIABILITY_LIMIT, `est=${rawEst.toLocaleString()}`);
+    check('density: raw estimate close to the limit (>=82%)', rawEst >= RELIABILITY_LIMIT * 0.82, `est=${rawEst.toLocaleString()}`);
+    check('density 1.0: under limit → no compaction', planCompaction(band, RELIABILITY_LIMIT, undefined, 1.0) === null);
+    const densePlan = planCompaction(band, RELIABILITY_LIMIT, undefined, 1.25);
+    check('density 1.25: compaction fires (real tokens crossed limit)', densePlan !== null, densePlan ? '' : 'plan is null');
+    if (densePlan) {
+        const out = applyCompaction(densePlan, 'MEM: compacted');
+        const issues = findDeepSeekIssues(out);
+        check('density 1.25: compacted sequence valid', issues.length === 0, JSON.stringify(issues));
+        check('density 1.25: session memory present', out.some(x => messageText(x).includes('MEM: compacted')), 'memory missing');
+        check('density 1.25: newest user turn survived verbatim', out.some(x => x.role === 'user' && messageText(x).includes('FINAL-TASK-MARKER')), 'latest user turn lost');
+        check('density 1.25: compacted result under limit (+slack)', estimateMessageTokens(out) <= RELIABILITY_LIMIT + 5000, `est=${estimateMessageTokens(out).toLocaleString()}`);
+    }
 
     // Under the limit → no compaction.
     const small = [

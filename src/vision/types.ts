@@ -54,6 +54,8 @@ export interface VisionResolutionResult {
     visionModelId?: string;
     visionProxySource?: VisionProxySource;
     initialResponseNotice?: string;
+    /** Per-conversation key (content-derived) for cross-referencing log lines. */
+    sessionKey?: string;
 }
 
 /** Metadata carried in replay markers for the next turn. */

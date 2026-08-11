@@ -145,6 +145,16 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.copilotPdfStatus', () => showPdfPatchStatus()),
         vscode.commands.registerCommand('nikas.reapplyCopilotPdfPatches', () => reapplyPdfPatches(context)),
         vscode.commands.registerCommand('nikas.toggleHelperThinkingOff', () => toggleHelperThinkingOff()),
+        vscode.commands.registerCommand('nikas.compactConversation', () => runSilentCompact()),
+        // Override Copilot's "Compact Conversation" button so it triggers the
+        // compaction SILENTLY instead of only opening the chat with `/compact`
+        // typed (which made the user press Enter / type it manually). The
+        // stock Copilot handler (`github.copilot.chat.compact`) just does
+        // `workbench.action.chat.open {query:"/compact", preserveInput:true}`.
+        // We keep that but auto-submit the command, so clicking the button
+        // sends `/compact` immediately; the resulting compaction request is
+        // then handled silently by the provider (see isCopilotCompactRequest).
+        vscode.commands.registerCommand('github.copilot.chat.compact', () => runSilentCompact()),
         vscode.commands.registerCommand('nikas.manage', () => {
             const helperThinkingOff = getHelperThinkingOff();
             vscode.window.showQuickPick(
@@ -219,6 +229,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'Open Google AI Studio to get a free Gemini API key',
                     },
                     {
+                        label: '$(compress) Compact Conversation (Silent)',
+                        description: 'Compact the active chat silently like the auto-compact — no need to type /compact',
+                    },
+                    {
                         label: '$(cloud-download) Check for Updates',
                         description: 'Download and install the latest version from GitHub',
                     },
@@ -281,6 +295,9 @@ export async function activate(context: vscode.ExtensionContext) {
                             vscode.Uri.parse('https://aistudio.google.com/apikey')
                         );
                         break;
+                    case '$(compress) Compact Conversation (Silent)':
+                        vscode.commands.executeCommand('nikas.compactConversation');
+                        break;
                     case '$(cloud-download) Check for Updates':
                         vscode.commands.executeCommand('nikas.checkForUpdates');
                         break;
@@ -313,6 +330,39 @@ async function showFirstRunWelcome(context: vscode.ExtensionContext): Promise<vo
         await runSetup(context);
     } else if (response === howTo) {
         await vscode.commands.executeCommand('workbench.action.chat.open');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Silent "Compact Conversation"
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger Copilot's conversation compaction WITHOUT requiring the user to type
+ * `/compact` in the chat. Copilot's stock "Compact Conversation" button only
+ * opens the chat input with `/compact` pre-typed (it never submits it), so the
+ * user had to press Enter / type it manually. We instead submit the `/compact`
+ * command right away; the resulting compaction request is then handled silently
+ * by the provider (see isCopilotCompactRequest / handleCopilotCompactRequest in
+ * provider.ts), matching "silently like the auto compact".
+ */
+async function runSilentCompact(): Promise<void> {
+    try {
+        // Open the chat with the /compact command pre-typed, then submit it
+        // immediately so the user doesn't have to press Enter.
+        await vscode.commands.executeCommand('workbench.action.chat.open', {
+            query: '/compact',
+            preserveInput: true,
+        });
+        await vscode.commands.executeCommand('workbench.action.chat.submit');
+    } catch (err) {
+        log.warn(`Silent compact failed to auto-submit: ${err instanceof Error ? err.message : String(err)}`);
+        // Fall back to the stock behavior (open chat with /compact typed) so
+        // the button still does something useful.
+        await vscode.commands.executeCommand('workbench.action.chat.open', {
+            query: '/compact',
+            preserveInput: true,
+        });
     }
 }
 

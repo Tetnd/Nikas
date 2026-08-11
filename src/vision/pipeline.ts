@@ -184,6 +184,7 @@ export async function resolveImageMessages(
             messages,
             stats,
             replayMarkerMetadata: {},
+            sessionKey,
         };
     }
 
@@ -344,6 +345,7 @@ export async function resolveImageMessages(
         initialResponseNotice: missingVisionProxy
             ? createVisionProxyMissingNotice()
             : visionFailureNotice,
+        sessionKey,
     };
 }
 

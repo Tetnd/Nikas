@@ -31,6 +31,26 @@ export interface StreamResult {
 }
 
 /**
+ * Retry policy for transient stream failures (see streamDeepSeekChat /
+ * streamDeepSeekResponses).
+ *
+ * A retry only happens when the failure occurred BEFORE any output was
+ * emitted (no text, no tool calls, no usage callback fired). Retrying after
+ * partial output would duplicate text/tool calls to the caller. Aborts
+ * (user/VS Code cancellation) are never retried.
+ */
+export interface StreamRetryOptions {
+    /**
+     * Max retries for transient network/stream failures (mid-stream socket
+     * drops like "terminated", ECONNRESET/ETIMEDOUT, 429 rate limits, 5xx).
+     * Default 0 — callers opt in (Nikas provider passes nikas.apiRetries).
+     */
+    retries?: number;
+    /** Base delay (ms) for exponential backoff. Default 500, capped at 4000. */
+    backoffBaseMs?: number;
+}
+
+/**
  * Log the full request details for debugging.
  */
 function logRequestDetails(request: DeepSeekRequest): void {
@@ -63,7 +83,113 @@ function logRequestDetails(request: DeepSeekRequest): void {
     }
 }
 
+// --- Transient-failure retry ---
+
+/** True when the error is a user/VS Code cancellation (abort) — never retried. */
+function isAbortError(err: unknown, signal: AbortSignal): boolean {
+    if (signal.aborted) return true;
+    if (err instanceof DOMException && err.name === 'AbortError') return true;
+    if (err instanceof Error && /abort/i.test(err.message)) return true;
+    return false;
+}
+
+/**
+ * Classify an error as a transient network/stream failure worth retrying:
+ * mid-stream socket drops ("terminated", "socket hang up"), connection
+ * resets/timeouts, generic network failures, and transient HTTP statuses
+ * (429 rate limit, 5xx "temporarily unavailable"). Permanent errors (400
+ * bad request, 401 key, 402 balance, ...) do NOT match.
+ */
+export function isTransientStreamError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /terminated|socket hang up|ECONNRESET|ETIMEDOUT|fetch failed|network|stream interrupted|temporarily unavailable|rate limit/i.test(msg);
+}
+
+/** Abortable sleep — resolves after `ms`, rejects with AbortError on abort. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = (): void => {
+            clearTimeout(timer);
+            reject(new DOMException('Aborted', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+/**
+ * Run `runOnce` with retry on transient failures, as long as `canRetry`
+ * still allows it (false once any output was emitted — retrying then would
+ * duplicate text/tool calls). Never retries aborts or permanent errors.
+ * Exponential backoff: base * 2^attempt, capped at 4000ms.
+ */
+async function retryStream<T>(
+    runOnce: () => Promise<T>,
+    canRetry: () => boolean,
+    signal: AbortSignal,
+    options: StreamRetryOptions | undefined,
+    label: string
+): Promise<T> {
+    const retries = options?.retries ?? 0;
+    const baseMs = options?.backoffBaseMs ?? 500;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await runOnce();
+        } catch (err) {
+            if (isAbortError(err, signal) || !canRetry() || !isTransientStreamError(err) || attempt >= retries) {
+                throw err;
+            }
+            const delay = Math.min(baseMs * 2 ** attempt, 4_000);
+            log.warn(
+                `${label} interrupted before any output — retrying (${attempt + 1}/${retries}) in ${delay}ms: ` +
+                `${err instanceof Error ? err.message : String(err)}`
+            );
+            await sleep(delay, signal);
+        }
+    }
+}
+
+/**
+ * Stream a chat request through the DeepSeek API (POST /chat/completions)
+ * with SSE parsing. Retries transient network/stream failures (e.g. a
+ * mid-stream socket drop — "terminated") as long as NO output has been
+ * emitted yet; once text/tool calls/usage were reported, a failure is never
+ * retried (it would duplicate output). Cancellations are never retried.
+ */
 export async function streamDeepSeekChat(
+    request: DeepSeekRequest,
+    apiKey: string,
+    signal: AbortSignal,
+    onText: (text: string) => void,
+    onToolCalls: (toolCalls: CompletedToolCall[]) => void,
+    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void,
+    retryOptions?: StreamRetryOptions
+): Promise<StreamResult> {
+    let emitted = false;
+    return retryStream(
+        () => streamDeepSeekChatOnce(
+            request,
+            apiKey,
+            signal,
+            (text) => { emitted = true; onText(text); },
+            (toolCalls) => { emitted = true; onToolCalls(toolCalls); },
+            (usage) => { emitted = true; onComplete(usage); },
+        ),
+        () => !emitted,
+        signal,
+        retryOptions,
+        'DeepSeek chat stream'
+    );
+}
+
+async function streamDeepSeekChatOnce(
     request: DeepSeekRequest,
     apiKey: string,
     signal: AbortSignal,
@@ -293,6 +419,39 @@ export async function streamDeepSeekChat(
 /**
  * Stream a chat request through the DeepSeek Responses API (POST /responses).
  *
+ * Same retry policy as streamDeepSeekChat: transient network/stream failures
+ * before any output are retried; failures after partial output or aborts are
+ * never retried.
+ */
+export async function streamDeepSeekResponses(
+    request: DeepSeekResponsesRequest,
+    apiKey: string,
+    signal: AbortSignal,
+    onText: (text: string) => void,
+    onToolCalls: (toolCalls: CompletedToolCall[]) => void,
+    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void,
+    retryOptions?: StreamRetryOptions
+): Promise<StreamResult> {
+    let emitted = false;
+    return retryStream(
+        () => streamDeepSeekResponsesOnce(
+            request,
+            apiKey,
+            signal,
+            (text) => { emitted = true; onText(text); },
+            (toolCalls) => { emitted = true; onToolCalls(toolCalls); },
+            (usage) => { emitted = true; onComplete(usage); },
+        ),
+        () => !emitted,
+        signal,
+        retryOptions,
+        'DeepSeek Responses stream'
+    );
+}
+
+/**
+ * Stream a chat request through the DeepSeek Responses API (POST /responses).
+ *
  * Differs from /chat/completions:
  * - Request body uses `input` items + top-level `instructions`/`reasoning`/`tools`.
  * - SSE events are semantic (`response.output_text.delta`, `response.output_item.done`, ...)
@@ -302,7 +461,7 @@ export async function streamDeepSeekChat(
  *
  * Currently only `deepseek-v4-flash` is supported by this endpoint.
  */
-export async function streamDeepSeekResponses(
+async function streamDeepSeekResponsesOnce(
     request: DeepSeekResponsesRequest,
     apiKey: string,
     signal: AbortSignal,

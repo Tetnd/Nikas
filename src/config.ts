@@ -140,6 +140,19 @@ export function getTemperature(): number {
 }
 
 /**
+ * Max retries for transient DeepSeek API/stream failures (mid-stream socket
+ * drops like "terminated", ECONNRESET/ETIMEDOUT, 429 rate limits, 5xx) that
+ * happen BEFORE any output was emitted. A failure after partial output is
+ * never retried — it would duplicate text/tool calls. 0 disables retries.
+ */
+export function getApiRetries(): number {
+    const v = getConfig().get<number>('apiRetries', 2);
+    return typeof v === 'number' && Number.isFinite(v)
+        ? Math.max(0, Math.min(5, Math.floor(v)))
+        : 2;
+}
+
+/**
  * Whether to inject a "concise / no process narration" directive into agent
  * requests.
  *

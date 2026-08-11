@@ -190,6 +190,35 @@ function applyCalibration(raw: number, sessionKey?: string): number {
 }
 
 /**
+ * Observed real/estimated token ratio per session — the ground-truth density
+ * of the conversation's content (code/JSON/base64-heavy sessions run ~1.2x
+ * real vs prose at ~1.0x).
+ *
+ * The adaptive calibration EMA above is fed by its OWN estimates, so it
+ * converges to sqrt(density) and leaves the estimate systematically LOW on
+ * dense workloads (feedback loop). This map instead stores the RAW observed
+ * ratio, letting maybeCompactContext correct its decision into real-token
+ * space — the reliability limit is specified in REAL tokens (config.ts).
+ *
+ * The MAX ratio is kept per session: history only grows, so once a density
+ * has been observed it stays representative — and after compaction the sent
+ * sequence shrinks, which would otherwise dilute the ratio and flip
+ * compaction back off (churn).
+ */
+const densityRatioBySession = new Map<string, number>();
+/** Floor/ceiling for the learned density ratio (guards against garbage). */
+const DENSITY_RATIO_MIN = 1.0;
+const DENSITY_RATIO_MAX = 4.0;
+/** Only learn density from requests with at least this many estimated tokens. */
+const DENSITY_LEARN_MIN_ESTIMATED = 20_000;
+
+/** Real/estimated token density correction for a session (1.0 when unknown). */
+function getDensityRatio(sessionKey?: string): number {
+    if (!sessionKey) return DENSITY_RATIO_MIN;
+    return densityRatioBySession.get(sessionKey) ?? DENSITY_RATIO_MIN;
+}
+
+/**
  * Feed one ground-truth sample (API prompt_tokens vs our estimate of the
  * messages actually sent) into the per-session adaptive calibration. Rejects
  * garbage. Without a session key there is nothing to scope the observation to,
@@ -213,6 +242,21 @@ function observeCalibration(
     if (calibrationBySession.size > CALIBRATION_CACHE_MAX) {
         const oldest = calibrationBySession.keys().next().value;
         if (oldest !== undefined) calibrationBySession.delete(oldest);
+    }
+
+    // Track the RAW observed real/estimated ratio (max per session) for the
+    // compaction decision — see densityRatioBySession. Only learned from
+    // sizable requests; tiny exchanges (titles, subagent spins) are noise.
+    if (estimatedTokens >= DENSITY_LEARN_MIN_ESTIMATED) {
+        const clamped = Math.min(DENSITY_RATIO_MAX, Math.max(DENSITY_RATIO_MIN, ratio));
+        const prev = densityRatioBySession.get(sessionKey) ?? 0;
+        if (clamped > prev) {
+            densityRatioBySession.set(sessionKey, clamped);
+            if (densityRatioBySession.size > CALIBRATION_CACHE_MAX) {
+                const oldest = densityRatioBySession.keys().next().value;
+                if (oldest !== undefined) densityRatioBySession.delete(oldest);
+            }
+        }
     }
 }
 
@@ -321,6 +365,56 @@ function messageText(msg: DeepSeekMessage): string {
             .join(' ');
     }
     return '';
+}
+
+// ---------------------------------------------------------------------------
+// Copilot "Compact Conversation" interception
+// ---------------------------------------------------------------------------
+//
+// Copilot Chat's "Compact Conversation" button (and the `/compact` slash
+// command) run `github.copilot.chat.compact`, which just opens the chat input
+// with `/compact` typed — the user still has to send it, and then Copilot
+// ships the ENTIRE conversation to the model with a verbose "summarize
+// everything" system prompt (the C5n prompt below). That is slow, costs a
+// full-context model call, and differs from Nikas's own silent auto-compact
+// (which summarizes the OLDEST messages into a cached session-memory block).
+//
+// Fix (v0.7.64):
+//   1. The "Compact Conversation" button is overridden (see extension.ts) so
+//      it auto-submits `/compact` instead of requiring manual typing.
+//   2. When the resulting compaction request reaches this provider, it is
+//      detected here and handled SILENTLY with the SAME session-memory
+//      summarizer that auto-compact uses (`getOrCreateSummary`): fast,
+//      cached, thinking-off — matching "silently like auto compact" instead
+//      of a verbose full-conversation DeepSeek call.
+const COPILOT_COMPACT_SYSTEM_MARKER =
+    'create a comprehensive, detailed summary of the entire conversation';
+const COPILOT_COMPACT_USER_MARKER = 'Summarize the conversation history so far';
+
+/** Plain-text value of a VS Code chat message part ('' when none). */
+function vscodePartText(part: unknown): string {
+    if (part instanceof vscode.LanguageModelTextPart) return part.value;
+    return '';
+}
+
+/**
+ * True when this request is Copilot's conversation-compaction request
+ * (the `Compact Conversation` button / `/compact` slash command). Copilot
+ * renders it with a distinctive system prompt ("Your task is to create a
+ * comprehensive, detailed summary of the entire conversation...") plus a
+ * trailing user message ("Summarize the conversation history so far...").
+ */
+export function isCopilotCompactRequest(
+    messages: readonly vscode.LanguageModelChatRequestMessage[]
+): boolean {
+    for (const msg of messages) {
+        for (const part of msg.content) {
+            const text = vscodePartText(part);
+            if (text.includes(COPILOT_COMPACT_SYSTEM_MARKER)) return true;
+            if (text.includes(COPILOT_COMPACT_USER_MARKER)) return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -595,9 +689,16 @@ async function maybeCompactContext(
     );
     const budgetCap = Math.min(reliabilityLimit, availableInput);
 
-    const estimated = estimateMessageTokens(messages, sessionKey);
+    // The reliability limit is specified in REAL tokens (config.ts), but the
+    // estimator undercounts dense workloads (code/JSON/base64 run ~1.2x real).
+    // The per-session density ratio (observed API prompt_tokens vs our
+    // estimate — see getDensityRatio) corrects the decision into real-token
+    // space; without it compaction fires ~20% late, past the reliability
+    // cliff it exists to avoid.
+    const density = getDensityRatio(sessionKey);
+    const estimated = Math.ceil(estimateMessageTokens(messages, sessionKey) * density);
     if (estimated <= budgetCap) {
-        log.verbose(`[compact] skipped: estimated ${estimated} <= budgetCap ${budgetCap}`);
+        log.verbose(`[compact] skipped: estimated ${estimated} real (density ${density.toFixed(2)}) <= budgetCap ${budgetCap}`);
         return messages;
     }
 
@@ -606,7 +707,7 @@ async function maybeCompactContext(
 
     // Reserve headroom for the summary message.
     const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-    const keepBudget = budgetCap - estimateMessageTokens(system, sessionKey) - summaryOverhead;
+    const keepBudget = budgetCap - Math.ceil(estimateMessageTokens(system, sessionKey) * density) - summaryOverhead;
     if (keepBudget < 1024) {
         log.verbose(`[compact] skipped: keepBudget ${keepBudget} < 1024 (system+overhead exceed budgetCap)`);
         return messages;
@@ -629,7 +730,7 @@ async function maybeCompactContext(
     }
     let splitIdx = -1;
     for (const i of userBoundaries) {
-        if (estimateMessageTokens(others.slice(i), sessionKey) <= keepBudget) {
+        if (Math.ceil(estimateMessageTokens(others.slice(i), sessionKey) * density) <= keepBudget) {
             splitIdx = i;
             break;
         }
@@ -695,19 +796,22 @@ async function maybeCompactContext(
     // large summary or a snapped boundary pushed it over), let truncation
     // handle it — but this is now rare since the keep budget is capped at
     // availableInput above.
-    if (estimateMessageTokens(finalSeq, sessionKey) > availableInput) {
+    if (Math.ceil(estimateMessageTokens(finalSeq, sessionKey) * density) > availableInput) {
         log.verbose(`Compaction skipped — compacted result still exceeds the context window`);
         return messages;
     }
 
+    const sessionLabel = sessionKey ?? 'none';
+    const anchorPreview = messagePreview(oldBlock[0], 60).replace(/\s+/g, ' ').trim();
     getOutputChannel().appendLine(
-        `[Nikas] Context compacted at ~${estimated.toLocaleString()} est tokens ` +
-        `(reliability limit ${reliabilityLimit.toLocaleString()}): ${oldBlock.length} oldest ` +
-        `message(s) summarized into session memory; ${finalSeq.length} message(s) sent`
+        `[Nikas] Context compacted at ~${estimated.toLocaleString()} real tokens ` +
+        `(reliability limit ${reliabilityLimit.toLocaleString()}, density ${density.toFixed(2)}): ${oldBlock.length} oldest ` +
+        `message(s) summarized into session memory; ${finalSeq.length} message(s) sent ` +
+        `[session=${sessionLabel} anchor="${anchorPreview}"]`
     );
     log.info(
-        `Context compacted: ~${estimated.toLocaleString()} → ~${estimateMessageTokens(finalSeq, sessionKey).toLocaleString()} ` +
-        `est tokens (${oldBlock.length} messages summarized, limit ${reliabilityLimit.toLocaleString()})`
+        `Context compacted: ~${estimated.toLocaleString()} → ~${Math.ceil(estimateMessageTokens(finalSeq, sessionKey) * density).toLocaleString()} ` +
+        `real tokens (${oldBlock.length} messages summarized, session=${sessionLabel}, limit ${reliabilityLimit.toLocaleString()}, density ${density.toFixed(2)})`
     );
 
     return finalSeq;
@@ -831,6 +935,63 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
     /** Expose key check so the extension can prompt on startup. */
     async getApiKey(): Promise<string | undefined> {
         return this.secrets.getDeepSeekApiKey();
+    }
+
+    /**
+     * Handle Copilot's "Compact Conversation" / `/compact` request silently.
+     *
+     * Copilot sends the entire conversation with a verbose "summarize
+     * everything" system prompt. Instead of forwarding that to DeepSeek (slow,
+     * costly, produces a big summary response), we compact the conversation
+     * using the SAME session-memory summarizer as auto-compact
+     * (`getOrCreateSummary`): fast, cached, thinking-off. The returned summary
+     * is reported as the single text part, and the request completes without a
+     * normal model call.
+     *
+     * Returns the compacted session-memory summary text.
+     */
+    private async handleCopilotCompactRequest(
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+        token: vscode.CancellationToken | undefined
+    ): Promise<string> {
+        const apiKey = await this.secrets.getDeepSeekApiKey();
+        if (!apiKey) {
+            throw new Error(
+                'DeepSeek API key not configured. Run "Nikas: Input Deepseek userToken" from the command palette (F1).'
+            );
+        }
+
+        // Drop the C5n "summarize everything" system message and the trailing
+        // "Summarize the conversation history so far" user message — only the
+        // real conversation history should be compacted.
+        const conversation = messages.filter((msg) => {
+            const text = msg.content
+                .map((part) => vscodePartText(part))
+                .join(' ');
+            return (
+                !text.includes(COPILOT_COMPACT_SYSTEM_MARKER) &&
+                !text.includes(COPILOT_COMPACT_USER_MARKER)
+            );
+        });
+
+        const deepseekMessages = await vscodeMessagesToDeepSeek(conversation);
+
+        const abort = new AbortController();
+        const cancel = token?.onCancellationRequested(() => abort.abort());
+        try {
+            const summary = await getOrCreateSummary(apiKey, deepseekMessages, abort.signal);
+            log.info(
+                `Copilot "Compact Conversation" handled silently via session-memory summarizer ` +
+                `(${deepseekMessages.length} messages → summary)`
+            );
+            getOutputChannel().appendLine(
+                `[Nikas] Compact Conversation handled silently via session-memory summarizer ` +
+                `(${deepseekMessages.length} messages → summary)`
+            );
+            return summary;
+        } finally {
+            cancel?.dispose();
+        }
     }
 
     /** Expose Gemini key check for internal use. */
@@ -962,6 +1123,20 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         progress: vscode.Progress<vscode.LanguageModelResponsePart>,
         token: vscode.CancellationToken
     ): Promise<void> {
+        // Copilot's "Compact Conversation" button / `/compact` command sends the
+        // ENTIRE conversation with a verbose "summarize everything" system
+        // prompt. Handle it SILENTLY with our own session-memory summarizer
+        // (same machinery as auto-compact: fast, cached, thinking-off) instead
+        // of shipping the whole context to DeepSeek for a full model call. This
+        // is intercepted before routing, so it applies to whichever Nikas model
+        // is selected for the chat (compaction runs through the user's model).
+        if (isCopilotCompactRequest(messages)) {
+            const summary = await this.handleCopilotCompactRequest(messages, token);
+            if (token.isCancellationRequested) return;
+            progress.report(new vscode.LanguageModelTextPart(summary));
+            return;
+        }
+
         // Route to the appropriate handler
         if (model.id.startsWith('gemini-')) {
             return this.handleGeminiChat(model.id, messages, progress, token);
@@ -1011,7 +1186,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 `Vision: ${s.inputImageParts} attachment(s) in ${s.inputImageMessages} message(s) ` +
                 `→ current=${s.currentImageMessages} generated=${s.generatedImageMessages} ` +
                 `replayed=${s.replayedImageMessages} omitted=${s.omittedImageMessages} ` +
-                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages}`
+                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages} ` +
+                `[session=${visionResolution.sessionKey ?? 'none'}]`
             );
         }
 
@@ -1393,7 +1569,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 `Vision: ${s.inputImageParts} attachment(s) in ${s.inputImageMessages} message(s) ` +
                 `→ current=${s.currentImageMessages} generated=${s.generatedImageMessages} ` +
                 `replayed=${s.replayedImageMessages} omitted=${s.omittedImageMessages} ` +
-                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages}`
+                `unavailable=${s.unavailableImageMessages} failed=${s.failedImageMessages} ` +
+                `[session=${visionResolution.sessionKey ?? 'none'}]`
             );
         }
 
