@@ -108,6 +108,23 @@ function workspaceRoot(workspaceFolder?: vscode.WorkspaceFolder): string | undef
     return workspaceFolder?.uri?.fsPath;
 }
 
+/**
+ * True when the agent-instruction toggle is on AND the guide is actively
+ * managed in the given workspace folder (i.e. we have written a managed file
+ * there). Used to avoid double-injecting the same guide via the system prompt
+ * (`nikas.sweOperatingGuide`) and the AGENTS.md file at the same time — the
+ * file mechanism is preferred when it is active.
+ */
+export function isAgentInstructionsActive(workspaceFolder?: vscode.WorkspaceFolder): boolean {
+    if (!getAgentInstructions()) return false;
+    const root = workspaceRoot(workspaceFolder);
+    if (!root) return false;
+    for (const c of instructionCandidates(root)) {
+        if (fs.existsSync(c) && isManaged(c)) return true;
+    }
+    return false;
+}
+
 /** Absolute path of the workspace `.gitignore`. */
 function gitignorePath(root: string): string {
     return path.join(root, '.gitignore');

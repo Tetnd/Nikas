@@ -23,6 +23,7 @@ const {
     applyAgentInstructions,
     restoreAgentInstructions,
     syncAgentInstructions,
+    isAgentInstructionsActive,
 } = require('./out/agentInstructions.js');
 
 // Mock getAgentInstructions through config: config reads from getConfig() which
@@ -224,8 +225,34 @@ let agentsPath = path.join(tmp, 'AGENTS.md');
         check('removes nikas block on restore', !finalGi.includes('nikas:managed'));
     }
 
+    console.log('\n=== 12. isAgentInstructionsActive (mutual-exclusion detector) ===');
+    let tmp8 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai8-'));
+    let agentsPath8 = path.join(tmp8, 'AGENTS.md');
+    {
+        // Setting off → never active.
+        setSetting(false);
+        check('inactive when setting off', isAgentInstructionsActive(folderFor(tmp8)) === false);
+
+        // Setting on but no managed file (no workspace file) → inactive.
+        setSetting(true);
+        check('inactive when enabled but no managed file', isAgentInstructionsActive(folderFor(tmp8)) === false);
+
+        // Apply → now active.
+        await applyAgentInstructions(folderFor(tmp8));
+        check('active after apply', isAgentInstructionsActive(folderFor(tmp8)) === true);
+
+        // After restore → inactive again.
+        setSetting(false);
+        await syncAgentInstructions(folderFor(tmp8));
+        check('inactive after restore', isAgentInstructionsActive(folderFor(tmp8)) === false);
+
+        // No folder → inactive.
+        setSetting(true);
+        check('inactive with no folder', isAgentInstructionsActive(undefined) === false);
+    }
+
     // Cleanup temp dirs
-    for (const d of [tmp, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+    for (const d of [tmp, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, tmp8]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
 
     console.log(`\nResult: ${safe} passed, ${failures} failed`);
     process.exit(failures === 0 ? 0 : 1);

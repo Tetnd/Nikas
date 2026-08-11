@@ -10,6 +10,7 @@ import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './visio
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, shouldForceHelperThinkingOff } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
+import { isAgentInstructionsActive } from './agentInstructions.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
@@ -1043,9 +1044,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // (chat-completions path). The directive reinforces persistent,
         // action-first agent behavior; the guide teaches DeepSeek how to use
         // Copilot's native tools. Both WITHOUT reducing the tool set.
+        //
+        // The operating guide is NOT injected here when the repo AGENTS.md
+        // manager is actively carrying the guide (`nikas.agentInstructions`),
+        // so the two channels never duplicate the same text on one request.
+        const fileGuideActive = isAgentInstructionsActive(vscode.workspace.workspaceFolders?.[0]);
         const systemSuffix =
             (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getSweOperatingGuide() ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            (getSweOperatingGuide() && !fileGuideActive ? `\n\n${buildCopilotOperatingGuide()}` : '');
         if (systemSuffix && deepseekMessages.length > 0) {
             const first = deepseekMessages[0];
             if (first.role === 'system') {
@@ -1405,10 +1411,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Optionally inject the "no process narration" directive + the Copilot
         // operating guide into the instructions. (Controlled by nikas.concisePrompt
-        // and nikas.copilotKnowledge respectively.)
+        // and nikas.copilotKnowledge respectively.) The operating guide is skipped
+        // when the repo AGENTS.md manager is actively carrying it, so the two
+        // channels never duplicate on one request.
+        const fileGuideActive = isAgentInstructionsActive(vscode.workspace.workspaceFolders?.[0]);
         const conciseDirective =
             (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getSweOperatingGuide() ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            (getSweOperatingGuide() && !fileGuideActive ? `\n\n${buildCopilotOperatingGuide()}` : '');
 
         // Thinking effort from the nikas.thinkingEffort setting. Invisible
         // internal helper requests are always forced to thinking off (see the
