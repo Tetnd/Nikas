@@ -1212,6 +1212,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 },
                 // onToolCalls
                 (toolCalls) => {
+                    // Passive observation: log which native tools DeepSeek actually
+                    // requested so we can measure whether the knowledge enrichment
+                    // steers it toward Copilot's tools. Read-only — never intercepts
+                    // or changes the tool set, so Copilot's native loop is untouched.
+                    if (toolCalls && toolCalls.length > 0) {
+                        log.info(`[tool-req] DeepSeek requested: ${toolCalls.map(tc => tc.name).join(', ')}`);
+                    }
                     for (const tc of toolCalls) {
                         progress.report(
                             new vscode.LanguageModelToolCallPart(tc.id, tc.name, tc.arguments)
@@ -1496,6 +1503,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 },
                 // onToolCalls
                 (toolCalls) => {
+                    // Passive observation: log which native tools DeepSeek actually
+                    // requested so we can measure whether the knowledge enrichment
+                    // steers it toward Copilot's tools. Read-only — never intercepts
+                    // or changes the tool set, so Copilot's native loop is untouched.
+                    if (toolCalls && toolCalls.length > 0) {
+                        log.info(`[tool-req] DeepSeek requested: ${toolCalls.map(tc => tc.name).join(', ')}`);
+                    }
                     for (const tc of toolCalls) {
                         progress.report(
                             new vscode.LanguageModelToolCallPart(tc.id, tc.name, tc.arguments)
