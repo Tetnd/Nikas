@@ -643,7 +643,7 @@ async function maybeCompactContext(
         }
     }
     if (splitIdx <= 0) {
-        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 (everything fits in keep)`);
+        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 (everything fits in keep) — estimated=${estimated}, budgetCap=${budgetCap}, system=${system.length}, others=${others.length}, keep=${keep.length}, sumOthers=${estimateMessageTokens(others, sessionKey)}`);
         return messages; // everything fits in keep — no old block
     }
 
