@@ -181,8 +181,51 @@ let agentsPath = path.join(tmp, 'AGENTS.md');
         check('removed AGENTS.md on disable', !fs.existsSync(agentsPath5));
     }
 
+    console.log('\n=== 10. gitignores managed file in the target workspace ===');
+    let tmp6 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai6-'));
+    let agentsPath6 = path.join(tmp6, 'AGENTS.md');
+    let gitignore6 = path.join(tmp6, '.gitignore');
+    {
+        setSetting(true);
+        await applyAgentInstructions(folderFor(tmp6));
+        check('.gitignore created', fs.existsSync(gitignore6));
+        const gi = fs.readFileSync(gitignore6, 'utf8');
+        check('gitignores AGENTS.md', gi.includes('AGENTS.md'));
+        check('gitignores AGENTS.md.nikas-backup', gi.includes('AGENTS.md.nikas-backup'));
+        check('has nikas marker', gi.includes('nikas:managed'));
+
+        // Idempotent: second apply doesn't duplicate entries.
+        await applyAgentInstructions(folderFor(tmp6));
+        const after = fs.readFileSync(gitignore6, 'utf8');
+        const exactLines = after.split('\n').map(l => l.trim()).filter(l => l === 'AGENTS.md');
+        check('idempotent gitignore (no duplicate entries)', exactLines.length === 1, `count=${exactLines.length}`);
+
+        setSetting(false);
+        await syncAgentInstructions(folderFor(tmp6));
+        const stripped = fs.existsSync(gitignore6) ? fs.readFileSync(gitignore6, 'utf8') : '';
+        check('strips entries on disable', !stripped.includes('nikas:managed'));
+    }
+
+    console.log('\n=== 11. gitignore preserves user entries ===');
+    let tmp7 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai7-'));
+    let gitignore7 = path.join(tmp7, '.gitignore');
+    let agentsPath7 = path.join(tmp7, 'AGENTS.md');
+    {
+        const userEntry = 'node_modules/\n';
+        fs.writeFileSync(gitignore7, userEntry, 'utf8');
+        setSetting(true);
+        await applyAgentInstructions(folderFor(tmp7));
+        check('keeps user entries on apply', fs.readFileSync(gitignore7, 'utf8').includes('node_modules/'));
+
+        setSetting(false);
+        await syncAgentInstructions(folderFor(tmp7));
+        const finalGi = fs.readFileSync(gitignore7, 'utf8');
+        check('keeps user entries on restore', finalGi.includes('node_modules/'));
+        check('removes nikas block on restore', !finalGi.includes('nikas:managed'));
+    }
+
     // Cleanup temp dirs
-    for (const d of [tmp, tmp2, tmp3, tmp4, tmp5]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+    for (const d of [tmp, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
 
     console.log(`\nResult: ${safe} passed, ${failures} failed`);
     process.exit(failures === 0 ? 0 : 1);

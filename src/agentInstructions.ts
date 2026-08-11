@@ -35,6 +35,8 @@ import { getAgentInstructions } from './config.js';
 
 const BACKUP_SUFFIX = '.nikas-backup';
 const GUIDE_HEADER = '<!-- nikas:managed - do not edit manually -->';
+const GITIGNORE_MARKER_START = '# --- nikas:managed agent-instruction files ---';
+const GITIGNORE_MARKER_END = '# --- /nikas:managed agent-instruction files ---';
 
 /** The agent-instruction files Copilot reads, in priority order. */
 function instructionCandidates(root: string): string[] {
@@ -106,6 +108,94 @@ function workspaceRoot(workspaceFolder?: vscode.WorkspaceFolder): string | undef
     return workspaceFolder?.uri?.fsPath;
 }
 
+/** Absolute path of the workspace `.gitignore`. */
+function gitignorePath(root: string): string {
+    return path.join(root, '.gitignore');
+}
+
+/**
+ * Ensure the managed instruction files are gitignored in the target
+ * workspace, so they never show up as changes in Source Control. Idempotent.
+ */
+function ensureGitignore(root: string, target: string): void {
+    try {
+        const gitignore = gitignorePath(root);
+        let content = '';
+        if (fs.existsSync(gitignore)) {
+            content = fs.readFileSync(gitignore, 'utf8');
+        }
+
+        // Drop any previously-managed block so we can rewrite it cleanly.
+        const start = content.indexOf(GITIGNORE_MARKER_START);
+        if (start !== -1) {
+            const end = content.indexOf(GITIGNORE_MARKER_END, start);
+            if (end !== -1) {
+                content =
+                    content.slice(0, start) +
+                    content.slice(end + GITIGNORE_MARKER_END.length);
+            }
+        }
+
+        // The relative path to ignore (with forward slashes for git).
+        const rel = path.relative(root, target).replace(/\\/g, '/');
+        const backupRel = rel + BACKUP_SUFFIX;
+
+        // Avoid duplicating entries that already exist outside our block.
+        const lines = new Set(content.split('\n').map(l => l.trim()));
+        const missing: string[] = [];
+        if (!lines.has(rel)) missing.push(rel);
+        if (!lines.has(backupRel)) missing.push(backupRel);
+
+        if (missing.length === 0) {
+            // Nothing new to add — but if content was empty, write the block? No.
+            return;
+        }
+
+        const block =
+            `\n${GITIGNORE_MARKER_START}\n` +
+            missing.map(m => `${m}\n`).join('') +
+            `${GITIGNORE_MARKER_END}\n`;
+
+        // Make sure we keep a trailing newline so the block lands on its own line.
+        if (content && !content.endsWith('\n')) {
+            content += '\n';
+        }
+        fs.writeFileSync(gitignore, content + block, 'utf8');
+        log.info(`[AgentInstructions] gitignored ${rel} (+ backup) in workspace`);
+    } catch (e) {
+        log.error('[AgentInstructions] failed to update .gitignore', e);
+    }
+}
+
+/**
+ * Remove the managed-instruction entries from the workspace `.gitignore` we
+ * added earlier. Idempotent; leaves unrelated user entries untouched.
+ */
+function stripGitignore(root: string): void {
+    try {
+        const gitignore = gitignorePath(root);
+        if (!fs.existsSync(gitignore)) return;
+        let content = fs.readFileSync(gitignore, 'utf8');
+        const start = content.indexOf(GITIGNORE_MARKER_START);
+        if (start === -1) return;
+        const end = content.indexOf(GITIGNORE_MARKER_END, start);
+        if (end === -1) return;
+        content = content.slice(0, start) + content.slice(end + GITIGNORE_MARKER_END.length);
+        // Clean up leading/trailing blank lines we may have introduced.
+        content = content.replace(/\n{3,}/g, '\n\n').trimEnd();
+        if (content.trim() === '') {
+            // Only our block was in there — remove the file entirely.
+            fs.unlinkSync(gitignore);
+            log.info('[AgentInstructions] removed empty .gitignore (only Nikas block)');
+        } else {
+            if (!content.endsWith('\n')) content += '\n';
+            fs.writeFileSync(gitignore, content, 'utf8');
+        }
+    } catch (e) {
+        log.error('[AgentInstructions] failed to strip .gitignore', e);
+    }
+}
+
 /**
  * Restore a single instruction file we manage (restore backup or remove ours).
  * Returns true when the file is no longer managed by Nikas afterwards.
@@ -163,19 +253,20 @@ export async function applyAgentInstructions(workspaceFolder?: vscode.WorkspaceF
             }
         }
 
-        // Already managed by us → nothing to do.
-        if (fs.existsSync(target) && isManaged(target)) return true;
-
         // An unmanaged file exists → back it up before we take over.
-        if (fs.existsSync(target)) {
+        if (fs.existsSync(target) && !isManaged(target)) {
             const backup = target + BACKUP_SUFFIX;
             if (!fs.existsSync(backup)) {
                 fs.copyFileSync(target, backup);
                 log.info(`[AgentInstructions] backed up existing ${fileName} → ${backup}`);
             }
         }
+        // Always (re)write the guide so it stays current and idempotent.
         fs.writeFileSync(target, buildAgentInstructionsContent(fileName), 'utf8');
         log.info(`[AgentInstructions] wrote managed ${fileName} → ${target}`);
+
+        // Keep the managed files out of the target workspace's source control.
+        ensureGitignore(root, target);
         return true;
     } catch (e) {
         log.error('[AgentInstructions] apply failed', e);
@@ -202,6 +293,8 @@ export async function restoreAgentInstructions(workspaceFolder?: vscode.Workspac
     if (!fs.existsSync(defaultFile) && fs.existsSync(defaultFile + BACKUP_SUFFIX)) {
         restoreManagedFile(defaultFile);
     }
+    // Drop the gitignore entries we added for these managed files.
+    stripGitignore(root);
     return ok;
 }
 
