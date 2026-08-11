@@ -4,6 +4,7 @@
 // Run: node test-agent.js
 const { parseCategoryArray, selectToolsForTask } = require('./out/harness/toolSummarizer.js');
 const { runAgentLoop } = require('./out/harness/agentLoop.js');
+const { parseGoalVerdict, buildGoalEvaluatorRequest } = require('./out/harness/goalEvaluator.js');
 const { runAgent, toVirtualGroups } = require('./out/harness/index.js');
 const { DEFAULT_TOOLSET, FILE_READ, FILE_WRITE, SEARCH, TERMINAL } = require('./out/harness/tools/index.js');
 const { guardToolHistory, estimateTextTokens } = require('./out/harness/estimate.js');
@@ -285,6 +286,79 @@ console.log('\n=== 10. Structured results, retry, verify, parallel ===');
     });
     check('tool calls executed in parallel', maxConcurrent === 3, `got ${maxConcurrent}`);
     check('parallel loop completed', r4.completed);
+}
+
+// ── 15. Goal evaluator: parsing ─────────────────────────────────────────
+console.log('\n=== 15. Goal evaluator parse ===');
+{
+    check('parses candidate_complete', parseGoalVerdict('{"decision":"candidate_complete","evidence":"file written and verified","nextStep":"","blockerKey":""}')?.decision === 'candidate_complete');
+    check('parses continue', parseGoalVerdict('{"decision":"continue","evidence":"no tests run","nextStep":"run tests","blockerKey":""}')?.nextStep === 'run tests');
+    check('parses blocked with key', parseGoalVerdict('{"decision":"blocked","evidence":"needs creds","nextStep":"get creds","blockerKey":"missing_github_access"}')?.blockerKey === 'missing_github_access');
+    check('parses fenced json', parseGoalVerdict('```json\n{"decision":"continue","evidence":"x","nextStep":"y","blockerKey":""}\n```')?.decision === 'continue');
+    check('rejects unknown decision', parseGoalVerdict('{"decision":"achieved","evidence":"x","nextStep":"y","blockerKey":""}') === undefined);
+    check('rejects empty evidence', parseGoalVerdict('{"decision":"continue","evidence":"","nextStep":"y","blockerKey":""}') === undefined);
+    check('rejects non-json', parseGoalVerdict('no verdict') === undefined);
+    const req = buildGoalEvaluatorRequest('goal', 'trace');
+    check('request uses flash model', req.model === 'deepseek-v4-flash');
+    check('request has no tools', Array.isArray(req.messages) && req.messages.length === 2);
+}
+
+// ── 16. Goal evaluator: verify 'done' in the loop ────────────────────────
+console.log('\n=== 16. Goal evaluator verifies done ===');
+{
+    let turn = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) { onToolCalls([{ id: 'c1', name: 'write_file', arguments: { path: 'o', content: 'x' } }]); return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' }; }
+        if (turn === 3) { onToolCalls([{ id: 'c3', name: 'write_file', arguments: { path: 'o', content: 'y' } }]); return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' }; }
+        onText('done'); return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    // Judge says continue on first 'done', candidate_complete on second.
+    let evalCalls = 0;
+    const result = await runAgentLoop('make file', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: DEFAULT_TOOLSET, transport: mockTransport,
+        executor: async () => '[wrote]',
+        goalEvaluator: {
+            evaluate: async (goal, transcript) => {
+                evalCalls++;
+                if (evalCalls === 1) return { decision: 'continue', evidence: 'needs more', nextStep: 'verify it', blockerKey: '' };
+                return { decision: 'candidate_complete', evidence: 'all good', nextStep: '', blockerKey: '' };
+            },
+        },
+    });
+    check('judge called twice', evalCalls === 2, `got ${evalCalls}`);
+    check('loop completed only after judge agrees', result.completed && result.goalVerdict?.decision === 'candidate_complete');
+    check('judge continue pushed extra turn', result.toolCalls >= 2, `got ${result.toolCalls}`);
+}
+
+// ── 17. Goal evaluator: judge truncation cap ─────────────────────────────
+console.log('\n=== 17. Goal evaluator cap ===');
+{
+    let turn = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        // Model does one action, then says "done"; judge keeps saying continue.
+        if (turn % 2 === 1) {
+            onToolCalls([{ id: 'c' + turn, name: 'read_file', arguments: { path: 'x' } }]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done'); return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    let evalCalls = 0;
+    const result = await runAgentLoop('loop', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ], transport: mockTransport, maxIterations: 8,
+        executor: async () => '[]',
+        goalEvaluator: {
+            evaluate: async () => {
+                evalCalls++;
+                return { decision: 'continue', evidence: 'never done', nextStep: 'more', blockerKey: '' };
+            },
+        },
+        goalEvaluatorMaxExtraIterations: 2,
+    });
+    check('judge cap truncates', result.goalEvaluatorTruncated, `completed=${result.completed}`);
+    check('judge stops loop before unbounded', result.toolCalls <= 4, `got ${result.toolCalls}`);
+    check('judge ran within cap', evalCalls >= 2 && evalCalls <= 4, `got ${evalCalls}`);
 }
 
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);

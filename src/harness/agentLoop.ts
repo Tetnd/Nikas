@@ -21,6 +21,7 @@ import type { StreamResult } from '../api/deepseek.js';
 import type { DeepSeekMessage, DeepSeekTool, DeepSeekToolCall } from '../api/types.js';
 import type { AgentTool } from './tools/index.js';
 import { guardToolHistory } from './estimate.js';
+import type { GoalEvaluator, GoalVerdict } from './goalEvaluator.js';
 
 /** Lazy transport import — avoids loading the vscode-dependent api client at module load (keeps this testable in plain Node). */
 async function loadTransport() {
@@ -102,6 +103,11 @@ export interface AgentLoopOptions {
     maxOutputChars?: number;
     /** Optional logger for the tool-call sequence (for observability). */
     onLog?: (msg: string) => void;
+    /** Independent completion judge (grok-build goal evaluator). When set, the model's
+     *  "done" claim is verified; if the judge says continue, the loop keeps going. */
+    goalEvaluator?: GoalEvaluator;
+    /** Max iterations to run after the judge says "continue" (safety backstop). Default 5. */
+    goalEvaluatorMaxExtraIterations?: number;
 }
 
 export interface AgentLoopResult {
@@ -113,10 +119,14 @@ export interface AgentLoopResult {
     toolCalls: number;
     /** Ordered names of every tool executed, in the order they ran. */
     sequence: string[];
-    /** True if stopped because the model said it was done. */
+    /** True if stopped because the model said it was done (and any goal evaluator agreed). */
     completed: boolean;
     /** True if stopped by maxIterations. */
     truncated: boolean;
+    /** True if stopped by the goal evaluator's "continue" verdict hitting the extra-iterations cap. */
+    goalEvaluatorTruncated?: boolean;
+    /** The goal-evaluator verdict when one ran. */
+    goalVerdict?: GoalVerdict;
     /** Verify-pass result, when a verify command was provided and run. */
     verify?: ToolResult;
 }
@@ -126,6 +136,31 @@ function toDeepSeekTool(tool: AgentTool): DeepSeekTool {
 }
 
 const defaultExecutor: ToolExecutor = async (tool, args, cwd) => tool.execute(args, cwd);
+
+/**
+ * Build a bounded, chronological transcript for the goal evaluator.
+ * Keeps the most recent items up to a byte budget; skips system + reasoning.
+ * Mirrors grok-build's `bounded_goal_transcript`.
+ */
+function buildGoalTranscript(messages: DeepSeekMessage[], maxChars = 8_000): string {
+    const rows: string[] = [];
+    let used = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role === 'system') continue;
+        const text = typeof m.content === 'string' ? m.content : '';
+        const trimmed = text.trim();
+        if (!trimmed) continue;
+        const capped = trimmed.slice(0, 1_000);
+        const row = `[${m.role}] ${capped}`;
+        const cost = row.length + 2;
+        if (rows.length > 0 && used + cost > maxChars) break;
+        used += cost;
+        rows.push(row);
+    }
+    rows.reverse();
+    return rows.join('\n\n');
+}
 
 /** Sleep helper for backoff. */
 function sleep(ms: number): Promise<void> {
@@ -302,6 +337,76 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
             let verify: ToolResult | undefined;
             if (options.verifyCommand) {
                 verify = await runVerify(options, executor);
+            }
+            // Independent completion judge (grok-build pattern): don't just trust
+            // the "done" claim — verify it. If the judge says continue, keep going.
+            if (options.goalEvaluator) {
+                const cap = options.goalEvaluatorMaxExtraIterations ?? 5;
+                const judgeCap = Math.min(iterations + cap, maxIterations);
+                for (; iterations < judgeCap; iterations++) {
+                    const transcript = buildGoalTranscript(messages);
+                    const verdict = await options.goalEvaluator.evaluate(task, transcript);
+                    options.onLog?.(`[goal-eval] verdict=${verdict?.decision ?? 'no-opinion'} (${verdict?.evidence ?? ''})`);
+                    if (!verdict || verdict.decision !== 'continue') {
+                        return {
+                            text: text.trim(), iterations: iterations + 1, toolCalls, sequence,
+                            completed: true, truncated: false, verify, goalVerdict: verdict,
+                        };
+                    }
+                    // Judge wants more work: feed its next-step as a user nudge.
+                    options.onLog?.(`[goal-eval] continue → next: ${verdict.nextStep}`);
+                    messages.push({ role: 'user', content: `The completion evaluator says the task is not done yet. Next step: ${verdict.nextStep}. Keep going until it is complete.` });
+                    const next = await runTurn(options, messages, toolSet);
+                    text += next.text;
+                    if (next.toolCalls.length === 0) {
+                        // Judge said continue but the model still declines to act —
+                        // re-evaluate the judge; if it still says continue, stop (don't loop).
+                        const transcript = buildGoalTranscript(messages);
+                        const re = await options.goalEvaluator.evaluate(task, transcript);
+                        options.onLog?.(`[goal-eval] re-verdict=${re?.decision ?? 'no-opinion'} (${re?.evidence ?? ''})`);
+                        return {
+                            text: text.trim(), iterations: iterations + 1, toolCalls, sequence,
+                            completed: !re || re.decision !== 'continue', truncated: false, verify,
+                            goalVerdict: re ?? verdict, goalEvaluatorTruncated: !!(re && re.decision === 'continue'),
+                        };
+                    }
+                    // Execute the follow-up tool calls (reuse the same batch logic below).
+                    const assistantMsg: DeepSeekMessage = {
+                        role: 'assistant',
+                        content: next.text || null,
+                        tool_calls: next.toolCalls.map((c): DeepSeekToolCall => ({
+                            id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+                        })),
+                    };
+                    messages.push(assistantMsg);
+                    const results: ToolResult[] = [];
+                    for (let i = 0; i < next.toolCalls.length; i += maxParallel) {
+                        const batch = next.toolCalls.slice(i, i + maxParallel);
+                        const batchResults = await Promise.all(
+                            batch.map(async (call) => {
+                                const tool = toolById.get(call.name);
+                                toolCalls++;
+                                sequence.push(call.name);
+                                options.onLog?.(`[agent] exec ${call.name}`);
+                                if (!tool) {
+                                    return { output: `[unknown tool: ${call.name}]`, ok: false, tag: 'tool-error' } as ToolResult;
+                                }
+                                return executeWithRetry(tool, call.arguments ?? {}, options.cwd, executor, options.toolRetries ?? 2, maxOutputChars);
+                            })
+                        );
+                        results.push(...batchResults);
+                    }
+                    for (let i = 0; i < next.toolCalls.length; i++) {
+                        messages.push({ role: 'tool', tool_call_id: next.toolCalls[i].id, content: formatToolResult(next.toolCalls[i].name, results[i]) });
+                    }
+                    // Loop back to the judge to re-evaluate whether the task is now complete.
+                }
+                // Hit the judge's extra-iteration cap.
+                options.onLog?.(`[goal-eval] truncated after extra-iteration cap`);
+                return {
+                    text: text.trim(), iterations, toolCalls, sequence,
+                    completed: false, truncated: true, goalEvaluatorTruncated: true, verify,
+                };
             }
             options.onLog?.(`[agent] done after ${iterations + 1} iterations, ${toolCalls} tool calls`);
             return { text: text.trim(), iterations: iterations + 1, toolCalls, sequence, completed: true, truncated: false, verify };
