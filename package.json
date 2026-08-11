@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.59",
+  "version": "0.7.60",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -255,16 +255,19 @@
         "nikas.copilotKnowledge": {
           "type": "boolean",
           "default": false,
+          "order": 30,
           "description": "Enrich what DeepSeek learns about Copilot's native tools. When enabled, DeepSeek receives richer per-tool descriptions (when to use each browser/dev-tools/terminal/file/search tool) so it uses Copilot's native toolset more effectively while staying on Copilot's native agent loop. This is independent of nikas.sweOperatingGuide (tool enrichment only, no behavioral instructions). Costs ~50 tokens/request. Default false (Nika parity: pass Copilot's raw tool descriptions through unchanged)."
         },
         "nikas.sweOperatingGuide": {
           "type": "boolean",
           "default": false,
+          "order": 31,
           "description": "Inject a concise 'operating guide' into the system prompt teaching DeepSeek pro-SWE behavior grounded in Copilot's real workflow and grok-build/codex discipline (understand → investigate → plan → implement → debug → test → iterate → reflect; action safety; tool discipline; precision; task discipline). Pure prompt injection on Copilot's native loop — it does NOT change, trim, or intercept the tool set, so it can be benchmarked independently and safely. Note: automatically SKIPPED when nikas.agentInstructions is actively managing the guide via a repo AGENTS.md/copilot-instructions.md, so the two channels never duplicate the same text on one request. Costs ~180 tokens/request. Default false (Nika parity: no injected guide)."
         },
         "nikas.agentInstructions": {
           "type": "boolean",
           "default": false,
+          "order": 32,
           "description": "Manage a repository agent-instruction file that forces Nikas' pro-SWE operating guide onto Copilot's native agent-instruction mechanism (Copilot auto-reads the nearest agent-instruction file and injects it into every request, including to a BYOK model like DeepSeek). Smart: Nikas manages whichever file you already use — .github/copilot-instructions.md or AGENTS.md (default when neither exists) — so it never duplicates your existing instructions. It never manages both at once (Copilot reads only one). When enabled, Nikas writes/keeps the guide in that file, backing up existing content; when disabled, Nikas restores the original (or removes the file it wrote), returning to Copilot's default. While this is actively managing the guide, the nikas.sweOperatingGuide system-prompt injection is automatically suppressed so the same text is never injected twice. Pure instruction file — does not patch or intercept Copilot. Restart required."
         },
         "nikas.visionModelKey": {
