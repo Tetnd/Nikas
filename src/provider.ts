@@ -1274,22 +1274,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const ctxWindowTokens = getContextWindowTokens();
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
-        // Read thinking effort from the nikas.thinkingEffort setting. Invisible
-        // internal helper requests (chat titles, commit messages, settings
-        // resolver, todo tracker, categorize_prompt, ...) are ALWAYS forced to
-        // thinking off — they produce no user-visible value, so max reasoning on
-        // them is pure latency + cost. The configured effort still applies to
-        // the real agent (the executor that picks tools and does the work).
         // Read thinking effort from the model-picker dropdown first (set by
         // Copilot Chat's Thinking Effort dropdown, matching upstream Nika),
-        // falling back to the saved nikas.thinkingEffort setting. Invisible
-        // internal helper requests (chat titles, commit messages, settings
-        // resolver, todo tracker, categorize_prompt, ...) are ALWAYS forced to
-        // thinking off — they produce no user-visible value, so reasoning on
-        // them is pure latency + cost. The chosen effort still applies to the
-        // real agent (the executor that picks tools and does the work).
-        // Per-agent overrides (nikas.agentEfforts) let Plan/Explore/Inline/
-        // helpers carry their own effort.
+        // falling back to the saved nikas.thinkingEffort setting. Per-agent
+        // overrides (nikas.agentEfforts) let Plan/Explore/Inline/helpers carry
+        // their own effort.
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const baseEffort = getRequestThinkingEffort(options);
         const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
@@ -1298,12 +1287,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Log which effort is being used
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (effortSource === 'helper-off' ? ` (internal helper: ${requestKind} — forced off)` : '') +
             (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
         );
-        if (effortSource === 'helper-off') {
-            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
-        } else if (effortSource === 'agent-effort') {
+        if (effortSource === 'agent-effort') {
             log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
         }
 
@@ -1639,12 +1625,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Log which effort is being used (mirrors the chat-completions handler)
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (effortSource === 'helper-off' ? ` (internal helper: ${requestKind} — forced off)` : '') +
             (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
         );
-        if (effortSource === 'helper-off') {
-            log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
-        } else if (effortSource === 'agent-effort') {
+        if (effortSource === 'agent-effort') {
             log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
         }
 

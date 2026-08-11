@@ -23,17 +23,15 @@ function getThinkingEffortSafe(value) {
     return VALID_EFFORTS.has(value) ? value : 'low';
 }
 
-// v0.7.31/0.7.32 lean routing, gated behind nikas.helperThinkingOff:
-// - applied (true): invisible internal helpers force thinking off; the
-//   executor (real agent) uses the configured setting.
-// - unapplied (false): Nika parity — every request (helpers included) uses
-//   the configured setting.
+// v0.7.69: helper thinking forcing removed for Nika-parity. Every request
+// (helpers included) uses the per-agent effort override (nikas.agentEfforts)
+// or the configured setting.
 const INTERNAL_HELPER_KINDS = new Set([
     'todo-tracker', 'prompt-categorizer', 'settings-resolver', 'chat-title',
     'inline-progress-message', 'git-branch-name', 'git-commit-message', 'rename-suggestions',
 ]);
-function resolveEffort(requestKind, savedSetting, helperThinkingOff) {
-    return (helperThinkingOff && INTERNAL_HELPER_KINDS.has(requestKind)) ? 'off' : getThinkingEffortSafe(savedSetting);
+function resolveEffort(requestKind, savedSetting) {
+    return getThinkingEffortSafe(savedSetting);
 }
 
 // v0.7.35: model-picker dropdown (restored to match upstream Nika) is read
@@ -68,8 +66,8 @@ function buildResponsesThinkingParams(effort) {
 // - DEFAULT_AGENT_EFFORTS: plan→max, explore→low, inline→low, helper→low
 //   (main absent → uses configured effort).
 // - requestKindToAgentKind maps a RequestKind to its AgentKind.
-// - resolveAgentEffort(requestKind, baseEffort): helper-off first (when
-//   helperThinkingOff), then agent-effort override, then default.
+// - resolveAgentEffort(requestKind, baseEffort): agent-effort override, then
+//   default.
 const DEFAULT_AGENT_EFFORTS = { plan: 'max', explore: 'low', inline: 'low', helper: 'low' };
 const AGENT_KIND_BY_REQUEST = {
     'todo-tracker': 'helper', 'prompt-categorizer': 'helper', 'settings-resolver': 'helper',
@@ -85,10 +83,7 @@ function getAgentEffort(kind, configured) {
     const merged = { ...DEFAULT_AGENT_EFFORTS, ...(configured ?? {}) };
     return merged[kind];
 }
-function resolveAgentEffort(requestKind, baseEffort, helperThinkingOff, agentEfforts) {
-    if (helperThinkingOff && INTERNAL_HELPER_KINDS_ARRAY.includes(requestKind)) {
-        return { effort: 'off', source: 'helper-off' };
-    }
+function resolveAgentEffort(requestKind, baseEffort, agentEfforts) {
     const override = getAgentEffort(requestKindToAgentKind(requestKind), agentEfforts);
     if (override) return { effort: override, source: 'agent-effort' };
     return { effort: baseEffort, source: 'default' };
@@ -114,37 +109,25 @@ function check(name, cond, detail) {
     else { fail++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
 }
 
-console.log('=== 1. Effort resolution (executor vs internal helpers) ===');
-// v0.7.32 lean routing gated behind nikas.helperThinkingOff. When applied
-// (true): the executor uses the configured setting; invisible internal
-// helpers (chat titles, commit messages, categorize_prompt, settings
-// resolver, todo tracker, ...) are forced to thinking off. When unapplied
-// (false): Nika parity — helpers run at the configured effort too.
+console.log('=== 1. Effort resolution (Nika parity: no helper forcing) ===');
+// v0.7.69: helper forcing removed. Every request (helpers included) uses the
+// configured setting directly — exactly like upstream Nika.
 
-// --- helperThinkingOff = true (applied) ---
-check('executor max → max', resolveEffort('main-agent', 'max', true) === 'max');
-check('executor low → low', resolveEffort('unknown', 'low', true) === 'low');
-check('executor high → high', resolveEffort('main-agent', 'high', true) === 'high');
-check('chat-title helper → off (even at max)', resolveEffort('chat-title', 'max', true) === 'off');
-check('commit-message helper → off (even at max)', resolveEffort('git-commit-message', 'max', true) === 'off');
-check('categorize_prompt helper → off (even at max)', resolveEffort('prompt-categorizer', 'max', true) === 'off');
-check('settings-resolver helper → off (even at max)', resolveEffort('settings-resolver', 'max', true) === 'off');
-check('todo-tracker helper → off (even at max)', resolveEffort('todo-tracker', 'max', true) === 'off');
-check('rename-suggestions helper → off (even at max)', resolveEffort('rename-suggestions', 'max', true) === 'off');
-check('inline-progress helper → off (even at max)', resolveEffort('inline-progress-message', 'max', true) === 'off');
-check('git-branch helper → off (even at max)', resolveEffort('git-branch-name', 'max', true) === 'off');
-
-// --- helperThinkingOff = false (unapplied, Nika parity) ---
-check('Nika parity: chat-title helper at max → max', resolveEffort('chat-title', 'max', false) === 'max');
-check('Nika parity: commit-message helper at max → max', resolveEffort('git-commit-message', 'max', false) === 'max');
-check('Nika parity: categorize_prompt helper at low → low', resolveEffort('prompt-categorizer', 'low', false) === 'low');
-check('Nika parity: settings-resolver helper at off → off', resolveEffort('settings-resolver', 'off', false) === 'off');
-check('Nika parity: todo-tracker helper at high → high', resolveEffort('todo-tracker', 'high', false) === 'high');
-check('Nika parity: executor max → max', resolveEffort('main-agent', 'max', false) === 'max');
+check('executor max → max', resolveEffort('main-agent', 'max') === 'max');
+check('executor low → low', resolveEffort('unknown', 'low') === 'low');
+check('executor high → high', resolveEffort('main-agent', 'high') === 'high');
+check('chat-title helper at max → max (Nika parity)', resolveEffort('chat-title', 'max') === 'max');
+check('commit-message helper at max → max (Nika parity)', resolveEffort('git-commit-message', 'max') === 'max');
+check('categorize_prompt helper at low → low (Nika parity)', resolveEffort('prompt-categorizer', 'low') === 'low');
+check('settings-resolver helper at off → off (Nika parity)', resolveEffort('settings-resolver', 'off') === 'off');
+check('todo-tracker helper at high → high (Nika parity)', resolveEffort('todo-tracker', 'high') === 'high');
+check('rename-suggestions helper at max → max (Nika parity)', resolveEffort('rename-suggestions', 'max') === 'max');
+check('inline-progress helper at max → max (Nika parity)', resolveEffort('inline-progress-message', 'max') === 'max');
+check('git-branch helper at max → max (Nika parity)', resolveEffort('git-branch-name', 'max') === 'max');
 
 // Invalid saved value must not leak to the API (defaults to low)
-check('invalid saved value → low (guarded)', resolveEffort('unknown', 'xhigh', true) === 'low');
-check('invalid saved value → low (guarded 2)', resolveEffort('unknown', 'yes', true) === 'low');
+check('invalid saved value → low (guarded)', resolveEffort('unknown', 'xhigh') === 'low');
+check('invalid saved value → low (guarded 2)', resolveEffort('unknown', 'yes') === 'low');
 
 console.log('\n=== 1b. Model-picker dropdown effort (v0.7.35, matches Nika) ===');
 // Dropdown wins over the saved setting when it carries a value.
@@ -206,25 +189,22 @@ check('agent kind map: helper → helper', requestKindToAgentKind('chat-title') 
 check('agent kind map: main → main', requestKindToAgentKind('main-agent') === 'main');
 check('agent kind map: unknown → main', requestKindToAgentKind('unknown') === 'main');
 
-// With defaults + helperThinkingOff=false: Plan=max, Explore=low, Inline=low, helper=low.
-check('plan default → max (agent-effort)', resolveAgentEffort('plan-agent', 'low', false, undefined).effort === 'max');
-check('explore default → low (agent-effort)', resolveAgentEffort('explore-agent', 'max', false, undefined).effort === 'low');
-check('inline default → low (agent-effort)', resolveAgentEffort('inline-agent', 'max', false, undefined).effort === 'low');
-check('helper default → low (agent-effort)', resolveAgentEffort('chat-title', 'max', false, undefined).effort === 'low');
-check('main default → configured low (no override)', resolveAgentEffort('main-agent', 'low', false, undefined).effort === 'low');
-check('main default → configured max (no override)', resolveAgentEffort('main-agent', 'max', false, undefined).effort === 'max');
+// With defaults: Plan=max, Explore=low, Inline=low, helper=low.
+check('plan default → max (agent-effort)', resolveAgentEffort('plan-agent', 'low', undefined).effort === 'max');
+check('explore default → low (agent-effort)', resolveAgentEffort('explore-agent', 'max', undefined).effort === 'low');
+check('inline default → low (agent-effort)', resolveAgentEffort('inline-agent', 'max', undefined).effort === 'low');
+check('helper default → low (agent-effort)', resolveAgentEffort('chat-title', 'max', undefined).effort === 'low');
+check('main default → configured low (no override)', resolveAgentEffort('main-agent', 'low', undefined).effort === 'low');
+check('main default → configured max (no override)', resolveAgentEffort('main-agent', 'max', undefined).effort === 'max');
 
 // User override: set plan→low explicitly.
-check('user override plan→low', resolveAgentEffort('plan-agent', 'low', false, { plan: 'low' }).effort === 'low');
-check('user override explore→off', resolveAgentEffort('explore-agent', 'low', false, { explore: 'off' }).effort === 'off');
-check('user override main→max', resolveAgentEffort('main-agent', 'low', false, { main: 'max' }).effort === 'max');
+check('user override plan→low', resolveAgentEffort('plan-agent', 'low', { plan: 'low' }).effort === 'low');
+check('user override explore→off', resolveAgentEffort('explore-agent', 'low', { explore: 'off' }).effort === 'off');
+check('user override main→max', resolveAgentEffort('main-agent', 'low', { main: 'max' }).effort === 'max');
+check('user override helper→off', resolveAgentEffort('chat-title', 'low', { helper: 'off' }).effort === 'off');
 
-// helperThinkingOff=true still wins for internal helpers (helper-off source).
-check('helperThinkingOff on → helper off (helper-off source)',
-    resolveAgentEffort('chat-title', 'max', true, undefined).source === 'helper-off'
-    && resolveAgentEffort('chat-title', 'max', true, undefined).effort === 'off');
-check('helperThinkingOff on → plan still max (not helper)',
-    resolveAgentEffort('plan-agent', 'low', true, undefined).effort === 'max');
+// Helper kind without override falls back to default (helper=low) or base.
+check('helper default source → agent-effort (low)', resolveAgentEffort('chat-title', 'max', undefined).source === 'agent-effort');
 
 // Inline heuristic mirrors classifyProviderRequest.
 check('inline: no tools → inline', isLikelyInline([]) === true);

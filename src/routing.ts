@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getAgentEffort, AgentKind, getHelperThinkingOff, ThinkingEffort } from './config.js';
+import { getAgentEffort, AgentKind, ThinkingEffort } from './config.js';
 
 /**
  * Request-kind classifier (lean re-add, v0.7.31, extended v0.7.67 for
@@ -21,6 +21,8 @@ import { getAgentEffort, AgentKind, getHelperThinkingOff, ThinkingEffort } from 
  *   `nikas.helperThinkingOff` (v0.7.32).
  * - v0.7.66 flipped `nikas.helperThinkingOff` default to false (Nika parity).
  * - v0.7.67 added `nikas.agentEfforts` for per-agent thinking effort.
+ * - v0.7.69 removed `nikas.helperThinkingOff` entirely (Nika parity: no
+ *   helper forcing; only per-agent agentEfforts remain).
  */
 export type RequestKind =
     | 'todo-tracker'
@@ -84,29 +86,17 @@ export function requestKindToAgentKind(kind: RequestKind): AgentKind {
 }
 
 /**
- * Whether this request kind is an invisible internal helper that should run
- * with thinking FORCED OFF — gated behind `nikas.helperThinkingOff`.
- */
-export function shouldForceHelperThinkingOff(requestKind: RequestKind): boolean {
-    return getHelperThinkingOff() && INTERNAL_HELPER_KINDS.has(requestKind);
-}
-
-/**
  * Resolve the final thinking effort for a request kind.
  *
  * Priority:
- *  1. If helper forcing is on AND it's an internal helper → 'off'.
- *  2. Else if the per-agent effort map (`nikas.agentEfforts`) has an override
+ *  1. If the per-agent effort map (`nikas.agentEfforts`) has an override
  *     for this request's agent kind → that effort.
- *  3. Else → the caller's normal effort resolution (configured effort).
+ *  2. Else → the caller's normal effort resolution (configured effort).
  */
 export function resolveAgentEffort(
     requestKind: RequestKind,
     baseEffort: ThinkingEffort,
-): { effort: ThinkingEffort; source: 'helper-off' | 'agent-effort' | 'default' } {
-    if (shouldForceHelperThinkingOff(requestKind)) {
-        return { effort: 'off', source: 'helper-off' };
-    }
+): { effort: ThinkingEffort; source: 'agent-effort' | 'default' } {
     const override = getAgentEffort(requestKindToAgentKind(requestKind));
     if (override) {
         return { effort: override, source: 'agent-effort' };

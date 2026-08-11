@@ -27,6 +27,10 @@ export const REMOVED_SETTINGS: ReadonlyArray<{ key: string; reason: string }> = 
         key: 'routing.forceThinkingNone',
         reason: 'request-kind routing removed in v0.7.27 for Nika-parity',
     },
+    {
+        key: 'helperThinkingOff',
+        reason: 'helper thinking forcing removed for Nika-parity',
+    },
 ];
 
 export const VISION_MODELS = [
@@ -172,20 +176,6 @@ export function getConcisePrompt(): boolean {
     return getConfig().get<boolean>('concisePrompt') ?? false;
 }
 
-/**
- * Whether invisible internal Copilot helper requests (chat titles, commit
- * messages, settings resolver, todo tracker, categorize_prompt, ...) should
- * run with thinking FORCED OFF regardless of `nikas.thinkingEffort`.
- *
- * - false (default) — Nika parity: every request (including helpers) runs at
- *   the configured thinking effort, exactly like upstream Nika (no routing).
- * - true — helpers never burn thinking tokens; the configured effort still
- *   applies to the real agent (the executor). "executor max, helpers none".
- */
-export function getHelperThinkingOff(): boolean {
-    return getConfig().get<boolean>('helperThinkingOff') ?? false;
-}
-
 export type AgentKind = 'main' | 'plan' | 'explore' | 'inline' | 'helper';
 
 /**
@@ -195,8 +185,8 @@ export type AgentKind = 'main' | 'plan' | 'explore' | 'inline' | 'helper';
  * e.g. give the Plan agent max reasoning (it just plans), keep Explore/Inline
  * light, and reserve the configured `nikas.thinkingEffort` for the main
  * coding agent. Only entries explicitly present are applied; absent kinds fall
- * back to the normal effort resolution (configured effort, minus helper
- * forcing). Valid effort values: 'off' | 'low' | 'high' | 'max'.
+ * back to the normal effort resolution (configured effort). Valid effort
+ * values: 'off' | 'low' | 'high' | 'max'.
  */
 export type AgentEfforts = Partial<Record<AgentKind, ThinkingEffort>>;
 
@@ -334,8 +324,7 @@ export function getThinkingEffort(): ThinkingEffort {
     // (OpenAI reasoning guide: 'none' is for no-tool latency tasks like voice /
     // retrieval / classification; 'low' is for tool-use, planning, and
     // execution-oriented coding). 'off' stays available for max speed / exact
-    // upstream Nika behavior, and invisible helpers are ALWAYS forced off via
-    // nikas.helperThinkingOff regardless of this setting.
+    // upstream Nika behavior.
     return 'low';
 }
 
