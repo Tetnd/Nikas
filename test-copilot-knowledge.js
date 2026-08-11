@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 3200 chars)', guide.length < 3200, `got ${guide.length}`);
+    check('guide is concise (< 3600 chars)', guide.length < 3600, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -193,7 +193,15 @@ console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
     check('guide progress updates', guide.includes('send concise progress updates'));
     check('guide concise final ≤10 lines', guide.includes('≤10 lines'));
     check('guide file path:line refs', guide.includes('`path:line`'));
-    check('guide stays under 3200 chars', guide.length < 3200, `got ${guide.length}`);
+    // grok-build task discipline (todo-gate / goal plan block / goal task discipline).
+    check('guide no permission to continue in-flight', guide.includes('do not ask permission to continue a task already in flight'));
+    check('guide user questions only for ambiguity', guide.includes('only for genuine ambiguity'));
+    check('guide todo list is scratchpad', guide.includes('memory aid, not a deliverable'));
+    check('guide one in_progress step', guide.includes('roughly one in_progress step'));
+    check('guide plan is source of truth', guide.includes('source of truth for "done"'));
+    check('guide flips checklist boxes', guide.includes('`- [ ]` to `- [x]`'));
+    check('guide records deviations terse', guide.includes('one terse bullet'));
+    check('guide stays under 3600 chars', guide.length < 3600, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));
