@@ -613,8 +613,10 @@ async function maybeCompactContext(
     }
 
     const keep: DeepSeekMessage[] = [];
+    let perMsgSum = 0;
     for (let i = others.length - 1; i >= 0; i--) {
         const t = estimateMessageTokens([others[i]], sessionKey);
+        perMsgSum += t;
         if (t <= keepBudget) {
             keep.unshift(others[i]);
             keepBudget -= t;
@@ -643,7 +645,7 @@ async function maybeCompactContext(
         }
     }
     if (splitIdx <= 0) {
-        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 (everything fits in keep) — estimated=${estimated}, budgetCap=${budgetCap}, system=${system.length}, others=${others.length}, keep=${keep.length}, sumOthers=${estimateMessageTokens(others, sessionKey)}`);
+        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 — estimated=${estimated}, budgetCap=${budgetCap}, system=${system.length}, others=${others.length}, keep=${keep.length}, sumOthers=${estimateMessageTokens(others, sessionKey)}, perMsgSum=${perMsgSum}, keepBudgetLeft=${keepBudget}`);
         return messages; // everything fits in keep — no old block
     }
 
