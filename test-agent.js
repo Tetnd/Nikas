@@ -95,11 +95,13 @@ console.log('\n=== 4. Agent loop (mock transport) ===');
         onText('done.');
         return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
     };
+    const logs = [];
     const result = await runAgentLoop('make a file', {
         apiKey: 'k',
         cwd: os.tmpdir(),
         tools: DEFAULT_TOOLSET,
         transport: mockTransport,
+        onLog: (m) => logs.push(m),
         executor: async (tool, args) => {
             check('executor ran write_file', tool.name === 'write_file');
             return '[wrote]';
@@ -109,6 +111,9 @@ console.log('\n=== 4. Agent loop (mock transport) ===');
     check('loop iterations = 2', result.iterations === 2, `got ${result.iterations}`);
     check('loop text includes both chunks', result.text.includes('writing...') && result.text.includes('done.'));
     check('loop executed 1 tool call', result.toolCalls === 1, `got ${result.toolCalls}`);
+    check('sequence records tool names in order', JSON.stringify(result.sequence) === JSON.stringify(['write_file']), `got ${JSON.stringify(result.sequence)}`);
+    check('onLog captured exec line', logs.some(l => l.includes('exec write_file')), `got ${JSON.stringify(logs)}`);
+    check('onLog captured done line', logs.some(l => l.includes('done after')), `got ${JSON.stringify(logs)}`);
 }
 
 // ── 5. Agent loop: maxIterations truncation ──────────────────────────────
@@ -131,6 +136,7 @@ console.log('\n=== 5. Agent loop maxIterations ===');
     check('truncated at maxIterations', result.truncated);
     check('iterations == maxIterations', result.iterations === 3, `got ${result.iterations}`);
     check('toolCalls == 3', result.toolCalls === 3, `got ${result.toolCalls}`);
+    check('truncated sequence has 3 read_file', result.sequence.length === 3 && result.sequence.every(n => n === 'read_file'), `got ${JSON.stringify(result.sequence)}`);
 }
 
 // ── 6. Agent loop: unknown tool ──────────────────────────────────────────

@@ -35,6 +35,8 @@ export interface ToolKnowledge {
     whenToUse: string;
     /** Optional caution (e.g. destructive operations, side effects). */
     caution?: string;
+    /** Optional "prefer X over Y" guidance — when this tool beats an alternative. */
+    prefer?: string;
 }
 
 /**
@@ -58,6 +60,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'file',
         enrichedDescription: 'Read files in the workspace. Prefer targeted reads over dumping whole large files; you can read a specific line range.',
         whenToUse: 'Use to inspect a file before editing it, or to confirm what code exists.',
+        prefer: 'Prefer targeted line-range reads over dumping an entire large file.',
     },
     readFile: {
         category: 'file',
@@ -74,6 +77,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Edit files in the workspace. Applies one or more changes to file content.',
         whenToUse: 'Use to modify code. Prefer small, targeted edits over rewriting whole files.',
         caution: 'Changes are real and persistent — do not make edits you are not confident about.',
+        prefer: 'Prefer targeted edits (edit / replace_string) over rewriting an entire file.',
     },
     editFiles: {
         category: 'edit',
@@ -102,6 +106,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'search',
         enrichedDescription: 'Search files in the workspace for content matching a pattern.',
         whenToUse: 'Use to locate where a symbol, string, or pattern lives before editing.',
+        prefer: 'Prefer search/grep over reading many files to find a symbol or string.',
     },
     textSearch: {
         category: 'search',
@@ -145,6 +150,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Run a shell command in the workspace terminal and return its output. This is how you build, run tests, or execute scripts.',
         whenToUse: 'Use to build, run tests, run the app, or execute shell commands to verify behavior.',
         caution: 'Commands have real side effects (they run in the actual terminal). Prefer read-only commands when you only need information.',
+        prefer: 'For test runs prefer the dedicated runTests/run_task tool over a hand-typed command.',
     },
     execute: {
         category: 'terminal',
@@ -393,6 +399,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Write content to a file (create or overwrite) in the workspace.',
         whenToUse: 'Use to create or fully rewrite a file.',
         caution: 'Overwrites existing content — do not clobber a file you have not read.',
+        prefer: 'Prefer targeted edits over a full rewrite unless the whole file changes.',
     },
     edit_files: {
         category: 'edit',
@@ -746,6 +753,7 @@ export function augmentToolDescription(name: string, original: string): string {
     const parts = [k.enrichedDescription];
     if (k.whenToUse) parts.push(`When to use: ${k.whenToUse}`);
     if (k.caution) parts.push(`Caution: ${k.caution}`);
+    if (k.prefer) parts.push(`Prefer: ${k.prefer}`);
     return parts.join(' ');
 }
 
@@ -779,12 +787,11 @@ export function buildCopilotOperatingGuide(): string {
         'You are running inside VS Code Copilot Chat as a coding agent. Copilot exposes a rich native toolset ' +
         '(file read/edit, workspace search, terminal, and a live browser with page control and dev tools). ' +
         'Tool results come back framed as [tool NAME: STATUS] with OK or ERROR — treat ERROR as a failure to fix, not to ignore. ' +
-        'Follow these Copilot-environment rules:\n' +
-        '• To understand code before editing: use search/read tools; gather context first, then act.\n' +
-        '• To modify code: prefer targeted edit tools over rewriting whole files.\n' +
-        '• To build/verify: use the terminal (run build/tests) after edits; confirm the result.\n' +
-        '• If the task involves a live UI or a web page: use the browser tools (open, read page, click, type) and the page snapshot to inspect before acting.\n' +
-        '• Batch independent read-only calls together; do not repeat work already done.\n' +
-        '• When finished, give a concise final result. Do not stop at analysis — complete the task end-to-end.'
+        'Operate like a senior software engineer — READ → EDIT → VERIFY:\n' +
+        '• UNDERSTAND first: search/read to learn the code before changing it; batch independent reads.\n' +
+        '• EDIT surgically: prefer targeted edits over rewriting whole files; gather all needed context first.\n' +
+        '• VERIFY: run build/tests in the terminal after editing and confirm the result before finishing.\n' +
+        '• BROWSER: for live UI, open/read the page, interact, then screenshot to confirm the change.\n' +
+        '• Do not repeat work already done; do not stop at analysis — complete the task end-to-end, then give a concise final result.'
     );
 }

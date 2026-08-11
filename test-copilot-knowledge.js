@@ -152,5 +152,23 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
     check('snake terminal enrichment has caution', enr.includes('Caution:'));
 }
 
+// ── 8. SWE protocol guide + prefer guidance ───────────────────────────────
+console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
+{
+    const guide = buildCopilotOperatingGuide();
+    check('guide has READ step', guide.includes('UNDERSTAND first'));
+    check('guide has EDIT step', guide.includes('EDIT surgically'));
+    check('guide has VERIFY step', guide.includes('VERIFY'));
+    check('guide has BROWSER guidance', guide.includes('BROWSER'));
+    check('guide instructs verify-before-done', guide.includes('confirm the result'));
+    check('guide stays under 1200 chars', guide.length < 1200, `got ${guide.length}`);
+
+    const pref = augmentToolDescription('read', 'Read');
+    check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));
+    check('prefer advises targeted reads', pref.includes('targeted line-range reads'));
+    check('edit prefer present', augmentToolDescription('edit', 'Edit').includes('Prefer targeted edits'));
+    check('terminal prefer present', augmentToolDescription('runInTerminal', 'Run').includes('For test runs prefer'));
+}
+
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);
 process.exit(failures === 0 ? 0 : 1);

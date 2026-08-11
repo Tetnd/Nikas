@@ -87,6 +87,8 @@ export interface AgentRunOptions extends Omit<AgentLoopOptions, 'tools'> {
     categorySelector?: CategorySelector;
     /** Optional matcher/expansion override (unused by the facade by default). */
     maxTools?: number;
+    /** Optional logger (category selection + agent loop). */
+    onLog?: (msg: string) => void;
 }
 
 /**
@@ -105,6 +107,7 @@ export async function runAgent(task: string, options: AgentRunOptions): Promise<
         options.categorySelector,
         options.maxTools ?? 128,
         options.signal,
+        options.onLog,
     );
 
     // Filter the real toolset down to what the model is allowed to call.
@@ -114,5 +117,6 @@ export async function runAgent(task: string, options: AgentRunOptions): Promise<
     return runAgentLoop(task, {
         ...options,
         tools: scopedTools,
+        onLog: options.onLog,
     });
 }

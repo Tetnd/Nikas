@@ -100,6 +100,8 @@ export interface AgentLoopOptions {
     verifyCommand?: string;
     /** Max tool output chars before truncation. Default 8_000. */
     maxOutputChars?: number;
+    /** Optional logger for the tool-call sequence (for observability). */
+    onLog?: (msg: string) => void;
 }
 
 export interface AgentLoopResult {
@@ -109,6 +111,8 @@ export interface AgentLoopResult {
     iterations: number;
     /** Number of tool calls executed. */
     toolCalls: number;
+    /** Ordered names of every tool executed, in the order they ran. */
+    sequence: string[];
     /** True if stopped because the model said it was done. */
     completed: boolean;
     /** True if stopped by maxIterations. */
@@ -287,6 +291,7 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
     let text = '';
     let iterations = 0;
     let toolCalls = 0;
+    const sequence: string[] = [];
 
     for (; iterations < maxIterations; iterations++) {
         const turn = await runTurn(options, messages, toolSet);
@@ -298,8 +303,11 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
             if (options.verifyCommand) {
                 verify = await runVerify(options, executor);
             }
-            return { text: text.trim(), iterations: iterations + 1, toolCalls, completed: true, truncated: false, verify };
+            options.onLog?.(`[agent] done after ${iterations + 1} iterations, ${toolCalls} tool calls`);
+            return { text: text.trim(), iterations: iterations + 1, toolCalls, sequence, completed: true, truncated: false, verify };
         }
+
+        options.onLog?.(`[agent] turn ${iterations + 1}: ${turn.toolCalls.map(c => c.name).join(', ')}`);
 
         // Append the assistant message with its tool calls.
         const assistantMsg: DeepSeekMessage = {
@@ -321,6 +329,8 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
                 batch.map(async (call) => {
                     const tool = toolById.get(call.name);
                     toolCalls++;
+                    sequence.push(call.name);
+                    options.onLog?.(`[agent] exec ${call.name}`);
                     if (!tool) {
                         return { output: `[unknown tool: ${call.name}]`, ok: false, tag: 'tool-error' } as ToolResult;
                     }
@@ -346,7 +356,8 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
         messages.push(...(guarded as DeepSeekMessage[]));
     }
 
-    return { text: text.trim(), iterations, toolCalls, completed: false, truncated: true };
+    options.onLog?.(`[agent] truncated after ${iterations} iterations, ${toolCalls} tool calls; sequence: ${sequence.join(' → ') || '(none)'}`);
+    return { text: text.trim(), iterations, toolCalls, sequence, completed: false, truncated: true };
 }
 
 /** Run the optional verify command (e.g. `npm test`) and return a ToolResult. */

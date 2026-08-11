@@ -17,6 +17,7 @@
  */
 import type { DeepSeekRequest } from '../api/types.js';
 import { EMBEDDINGS_GROUP, type VirtualToolGroup } from './virtualTools.js';
+import { getToolKnowledge } from './copilotKnowledge.js';
 
 /** Lazy transport import — avoids loading the vscode-dependent api client at module load (keeps this testable in plain Node). */
 async function loadTransport() {
@@ -54,7 +55,17 @@ export class DeepSeekCategorySelector implements CategorySelector {
                 {
                     role: 'user',
                     content: `Task: ${task}\n\nCategories:\n${groups
-                        .map(g => `- ${g.name}: ${g.tools.map(t => t.name).join(', ')}`)
+                        .map(g => {
+                            const names = g.tools.map(t => t.name).join(', ');
+                            // Add a one-line hint from the knowledge catalog when available.
+                            const hint = g.tools
+                                .map(t => getToolKnowledge(t.name)?.category)
+                                .filter((c): c is string => !!c)
+                                .length > 0
+                                ? ` [${[...new Set(g.tools.map(t => getToolKnowledge(t.name)?.category).filter((c): c is string => !!c))].join(', ')}]`
+                                : '';
+                            return `- ${g.name}${hint}: ${names}`;
+                        })
                         .join('\n')}`,
                 },
             ],
@@ -121,6 +132,7 @@ export async function selectToolsForTask(
     selector: CategorySelector | undefined,
     maxTools = 128,
     signal?: AbortSignal,
+    onLog?: (msg: string) => void,
 ): Promise<VirtualToolGroup['tools']> {
     const out: VirtualToolGroup['tools'] = [];
     const seen = new Set<string>();
@@ -142,12 +154,18 @@ export async function selectToolsForTask(
 
     // Which collapsible groups to expand.
     let chosen: Set<string>;
+    let selectedBy: string;
     if (selector) {
         const picked = await selector.select(task, groups, signal);
+        selectedBy = picked ? 'selector' : 'selector-no-opinion → fallback all';
         chosen = new Set(picked ?? collapsible.map(g => g.name));
     } else {
+        selectedBy = 'no-selector → all';
         chosen = new Set(collapsible.map(g => g.name));
     }
+
+    const chosenNames = [...chosen].sort().join(', ') || '(none)';
+    if (onLog) onLog(`[knowledge] category selection (${selectedBy}): expanded ${chosen.size} groups → ${chosenNames}`);
 
     for (const g of collapsible) {
         if (chosen.has(g.name)) {
