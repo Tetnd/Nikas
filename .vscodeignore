@@ -19,9 +19,6 @@ CachedProfilesData/**
 machineid
 nikas.log
 *.log
-# Managed per-workspace instruction file — generated at runtime, never package.
-AGENTS.md
-AGENTS.md.nikas-backup
 test-patches.js
 apply-patches.js
 test-rotation.js

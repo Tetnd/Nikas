@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getSweOperatingGuide } from './config.js';
-import { augmentToolDescription, buildCopilotOperatingGuide, getToolKnowledge } from './harness/copilotKnowledge.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge } from './config.js';
+import { augmentToolDescription, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -10,7 +10,6 @@ import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './visio
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
-import { isAgentInstructionsActive } from './agentInstructions.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
@@ -1216,18 +1215,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Truncate messages to fit within the configured context window
         deepseekMessages = truncateMessagesToContextWindow(deepseekMessages, sessionKey);
 
-        // Optionally inject the agent directive + Copilot operating guide
-        // (chat-completions path). The directive reinforces persistent,
-        // action-first agent behavior; the guide teaches DeepSeek how to use
-        // Copilot's native tools. Both WITHOUT reducing the tool set.
-        //
-        // The operating guide is NOT injected here when the repo AGENTS.md
-        // manager is actively carrying the guide (`nikas.agentInstructions`),
-        // so the two channels never duplicate the same text on one request.
-        const fileGuideActive = isAgentInstructionsActive(vscode.workspace.workspaceFolders?.[0]);
+        // Optionally inject the agent directive (chat-completions path). The
+        // directive reinforces persistent, action-first agent behavior WITHOUT
+        // reducing the tool set.
         const systemSuffix =
-            (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getSweOperatingGuide() && !fileGuideActive ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
         if (systemSuffix && deepseekMessages.length > 0) {
             const first = deepseekMessages[0];
             if (first.role === 'system') {
@@ -1590,15 +1582,10 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // the adaptive calibration on completion (see chat handler rationale).
         const estimatedSentTokens = estimateMessageTokens(deepseekMessages, sessionKey);
 
-        // Optionally inject the "no process narration" directive + the Copilot
-        // operating guide into the instructions. (Controlled by nikas.concisePrompt
-        // and nikas.copilotKnowledge respectively.) The operating guide is skipped
-        // when the repo AGENTS.md manager is actively carrying it, so the two
-        // channels never duplicate on one request.
-        const fileGuideActive = isAgentInstructionsActive(vscode.workspace.workspaceFolders?.[0]);
+        // Optionally inject the "no process narration" directive into the
+        // instructions. (Controlled by nikas.concisePrompt.)
         const conciseDirective =
-            (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
-            (getSweOperatingGuide() && !fileGuideActive ? `\n\n${buildCopilotOperatingGuide()}` : '');
+            getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
 
         // Thinking effort from the nikas.thinkingEffort setting. Invisible
         // internal helper requests are always forced to thinking off (see the

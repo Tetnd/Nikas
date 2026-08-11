@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -14,7 +14,6 @@ import {
     createSetupStatusBarItem,
     updateSetupStatusBar,
 } from './commands/setup.js';
-import { syncAgentInstructions } from './agentInstructions.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -53,10 +52,6 @@ export async function activate(context: vscode.ExtensionContext) {
             // Restart the auto-patch scheduling when the setting toggles.
             if (e.affectsConfiguration('nikas.autoPatchCopilot')) {
                 scheduleAutoPatch(context);
-            }
-            // Apply / restore the managed AGENTS.md when the toggle flips.
-            if (e.affectsConfiguration('nikas.agentInstructions')) {
-                void syncAgentInstructions(vscode.workspace.workspaceFolders?.[0]);
             }
         })
     );
@@ -112,12 +107,6 @@ export async function activate(context: vscode.ExtensionContext) {
     //   - periodically (catches external changes / VS Code updates)
     scheduleAutoPatch(context);
 
-    // Apply / restore the managed repository agent-instruction file
-    // (AGENTS.md or copilot-instructions.md) per the nikas.agentInstructions
-    // toggle. Smart: manages whichever file the user already uses. Uses the
-    // first workspace folder.
-    void syncAgentInstructions(vscode.workspace.workspaceFolders?.[0]);
-
     // Apply the recommended Copilot agent model assignments for any agent the
     // user hasn't configured yet — a fresh install gets the maintainer's setup
     // out of the box. Idempotent (never overrides an existing choice).
@@ -155,7 +144,9 @@ export async function activate(context: vscode.ExtensionContext) {
         // (isCopilotCompactRequest / handleCopilotCompactRequest) which
         // silently summarizes ANY /compact request that reaches the model.
         vscode.commands.registerCommand('nikas.compactConversation', () => runSilentCompact()),
+        vscode.commands.registerCommand('nikas.toggleAgentEfforts', () => toggleAgentEfforts()),
         vscode.commands.registerCommand('nikas.manage', () => {
+            const agentEffortsOn = getAgentEffortsEnabled();
             vscode.window.showQuickPick(
                 [
                     {
@@ -190,6 +181,12 @@ export async function activate(context: vscode.ExtensionContext) {
                     {
                         label: '$(symbol-misc) Agent Model Assignments',
                         description: 'Configure which model each Copilot agent uses (Explore, Plan, etc.)',
+                    },
+                    {
+                        label: agentEffortsOn ? '$(symbol-method) Agent Efforts: Applied' : '$(symbol-method) Agent Efforts: OFF',
+                        description: agentEffortsOn
+                            ? 'Per-agent thinking overrides active (plan=max, explore=low, inline=low, helper=low). Click to turn OFF helpers/inline.'
+                            : 'Per-agent overrides off for helpers/inline (Plan/Explore kept). Click to re-apply.',
                     },
                     {
                         label: '$(rocket) Apply Recommended Agent Models',
@@ -256,6 +253,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(symbol-misc) Agent Model Assignments':
                         vscode.commands.executeCommand('nikas.agentModelAssignments');
+                        break;
+                    case '$(symbol-method) Agent Efforts: Applied':
+                    case '$(symbol-method) Agent Efforts: OFF':
+                        toggleAgentEfforts();
                         break;
                     case '$(rocket) Apply Recommended Agent Models':
                         vscode.commands.executeCommand('nikas.setFlashForAllAgents');
@@ -526,6 +527,25 @@ async function setOllamaHost(): Promise<void> {
 
     await config.update('ollamaBaseUrl', url.trim().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
     vscode.window.showInformationMessage(`Nikas: Ollama host set to ${url.trim().replace(/\/$/, '')}`);
+}
+
+/**
+ * Toggle the master switch for the per-agent thinking-effort overrides
+ * (`nikas.agentEffortsEnabled`). Flipping it OFF keeps Plan/Explore overrides
+ * but drops Inline + helper overrides (they fall back to nikas.thinkingEffort);
+ * flipping ON re-applies all of them. Flips the setting globally so it
+ * persists across sessions.
+ */
+async function toggleAgentEfforts(): Promise<void> {
+    const config = getConfig();
+    const on = getAgentEffortsEnabled();
+    const next = !on;
+    await config.update('agentEffortsEnabled', next, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(
+        next
+            ? 'Nikas: Agent Efforts APPLIED — plan=max, explore=low, inline=low, helper=low.'
+            : 'Nikas: Agent Efforts OFF — helpers/inline fall back to nikas.thinkingEffort (Plan/Explore kept).'
+    );
 }
 
 /**

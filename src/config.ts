@@ -31,6 +31,14 @@ export const REMOVED_SETTINGS: ReadonlyArray<{ key: string; reason: string }> = 
         key: 'helperThinkingOff',
         reason: 'helper thinking forcing removed for Nika-parity',
     },
+    {
+        key: 'sweOperatingGuide',
+        reason: 'operating-guide system-prompt injection removed (Nika has no such setting)',
+    },
+    {
+        key: 'agentInstructions',
+        reason: 'managed AGENTS.md/copilot-instructions.md feature removed (Nika has no such setting)',
+    },
 ];
 
 export const VISION_MODELS = [
@@ -203,11 +211,31 @@ const DEFAULT_AGENT_EFFORTS: AgentEfforts = {
  * if none is configured (caller falls back to normal effort resolution).
  * `inline` defaults to `main`'s behaviour when not explicitly set (both share
  * the same system prompt), so the effective value is what callers use.
+ *
+ * When the master toggle (`nikas.agentEffortsEnabled`) is OFF, the Inline and
+ * helper overrides are dropped (they fall back to nikas.thinkingEffort) while
+ * Plan/Explore overrides are kept — so invisible helpers stop burning tokens
+ * on extra reasoning but planning/research keep their configured depth.
  */
 export function getAgentEffort(kind: AgentKind): ThinkingEffort | undefined {
     const configured = getConfig().get<AgentEfforts>('agentEfforts');
     const merged: AgentEfforts = { ...DEFAULT_AGENT_EFFORTS, ...(configured ?? {}) };
+    if (!getAgentEffortsEnabled()) {
+        if (kind === 'helper' || kind === 'inline') return undefined;
+    }
     return merged[kind];
+}
+
+/**
+ * Master toggle for the per-agent thinking-effort overrides
+ * (`nikas.agentEfforts`). Defaults to ON.
+ *
+ * - true  — every configured agent effort applies.
+ * - false — Inline + helper overrides are dropped (they fall back to
+ *   nikas.thinkingEffort); Plan/Explore overrides are kept.
+ */
+export function getAgentEffortsEnabled(): boolean {
+    return getConfig().get<boolean>('agentEffortsEnabled') ?? true;
 }
 
 /**
@@ -226,32 +254,8 @@ export function getCopilotKnowledge(): boolean {
 }
 
 /**
- * Whether to inject the pro-SWE "operating guide" into the system prompt
- * (see buildCopilotOperatingGuide in src/harness/copilotKnowledge.ts). This
- * is independent of getCopilotKnowledge() (tool-description enrichment) so
- * the behavioral guide can be benchmarked on its own and toggled without
- * changing the tool set Copilot passes through.
- *
- * - false (default) — Nika parity: no injected guide.
- * - true — inject the operating guide. Costs ~180 tokens/request.
- */
-export function getSweOperatingGuide(): boolean {
-    return getConfig().get<boolean>('sweOperatingGuide') ?? false;
-}
-
-/**
- * Whether to manage a repository agent-instruction file (AGENTS.md or
- * copilot-instructions.md) that forces Nikas' pro-SWE operating guide onto
- * Copilot's native agent-instruction mechanism. When true, we write/keep the
- * guide in whichever file the user already has (defaulting to AGENTS.md),
- * backing up existing content; when false, we restore the original / remove
- * ours. Never manages both files at once (Copilot reads only one).
- */
-export function getAgentInstructions(): boolean {
-    return getConfig().get<boolean>('agentInstructions') ?? false;
-}
-
-/**
+ * The behavioral directive appended to the system prompt when
+ * `nikas.concisePrompt` is enabled.
  * The behavioral directive appended to the system prompt when
  * `nikas.concisePrompt` is enabled.
  *
