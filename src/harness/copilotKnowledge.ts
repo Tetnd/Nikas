@@ -137,6 +137,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'search',
         enrichedDescription: 'Dispatch a search subagent to explore the codebase and answer questions.',
         whenToUse: 'Use for broad exploration when you need to gather context across many files.',
+        prefer: 'Give the subagent a detailed, self-contained prompt — it only receives a compacted AGENTS.md, not your full session.',
     },
     problems: {
         category: 'diagnostics',
@@ -548,16 +549,19 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'task',
         enrichedDescription: 'Dispatch a subagent to handle a complex, multi-step task autonomously and return its report.',
         whenToUse: 'Use to delegate research, search, or a well-scoped subtask to a fresh agent.',
+        prefer: 'Prefer doing the work yourself unless delegation is clearly necessary (e.g. parallel independent areas). Give the subagent a detailed, self-contained prompt — it only receives a compacted AGENTS.md, not your full session.',
     },
     search_subagent: {
         category: 'search',
         enrichedDescription: 'Dispatch a search subagent to explore the codebase and answer questions.',
         whenToUse: 'Use for broad exploration when you need to gather context across many files.',
+        prefer: 'Give the subagent a detailed, self-contained prompt — it only receives a compacted AGENTS.md, not your full session.',
     },
     explore_subagent: {
         category: 'search',
         enrichedDescription: 'Dispatch a subagent to explore a specific area of the codebase.',
         whenToUse: 'Use to investigate an unfamiliar module or subsystem.',
+        prefer: 'Explore subagents are read-only (search/read/list and read-only commands only).',
     },
 
     // ── browser ────────────────────────────────────────────────────────
@@ -816,7 +820,7 @@ export function buildCopilotOperatingGuide(): string {
         'Tool discipline: use specialized tools over bash when possible (read instead of cat/tail, edit instead of sed/awk); ' +
         'reserve bash for real system commands. NEVER use bash echo to communicate — put messages in your response text. ' +
         'Default scope is the workspace; do not run whole-filesystem searches unless clearly required. ' +
-        'Dispatched Explore subagents are read-only (search/read/list and read-only commands only).\n' +
+        'Dispatched Explore subagents are read-only; when delegating, give a detailed self-contained prompt (subagents only get a compacted AGENTS.md).\n' +
         'Precision: fix root cause, not symptoms; keep changes minimal, consistent with existing style; do not fix unrelated bugs ' +
         '(mention them). New task → be ambitious; existing codebase → be surgical (no unnecessary renames). Do not commit unless asked; ' +
         'do not re-read a file right after editing it.\n' +

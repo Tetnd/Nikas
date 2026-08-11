@@ -59,6 +59,8 @@ console.log('\n=== 1. buildAgentInstructionsContent ===');
     check('prefer doing work yourself', content.includes('Prefer doing the work yourself unless delegation'));
     check('workspace scope default', content.includes('Default scope is the workspace'));
     check('no time estimates', content.includes('Do not give time estimates'));
+    check('subagent delegation detailed prompt', content.includes('detailed, self-contained prompt'));
+    check('subagent compacted AGENTS.md', content.includes('compacted copy of this file'));
 }
 
 function folderFor(dir) { return { uri: { fsPath: dir } }; }

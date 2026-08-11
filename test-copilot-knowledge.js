@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 4000 chars)', guide.length < 4000, `got ${guide.length}`);
+    check('guide is concise (< 4100 chars)', guide.length < 4100, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -207,13 +207,22 @@ console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
     check('guide workspace scope default', guide.includes('Default scope is the workspace'));
     check('guide Explore subagent read-only', guide.includes('Explore subagents are read-only'));
     check('guide no time estimates', guide.includes('Do not give time estimates'));
-    check('guide stays under 4000 chars', guide.length < 4000, `got ${guide.length}`);
+    check('guide subagents read-only', guide.includes('Explore subagents are read-only'));
+    check('guide subagent detailed prompt', guide.includes('detailed self-contained prompt'));
+    check('guide subagent compacted AGENTS.md', guide.includes('compacted AGENTS.md'));
+    check('guide stays under 4100 chars', guide.length < 4100, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));
     check('prefer advises targeted reads', pref.includes('targeted line-range reads'));
     check('edit prefer present', augmentToolDescription('edit', 'Edit').includes('Prefer targeted edits'));
     check('terminal prefer present', augmentToolDescription('runInTerminal', 'Run').includes('For test runs prefer'));
+    // subagent tool descriptions carry grok-build delegation discipline.
+    const runSub = augmentToolDescription('runSubagent', 'Dispatch');
+    check('runSubagent prefer self unless delegating', runSub.includes('Prefer doing the work yourself unless delegation'));
+    check('runSubagent prefer detailed prompt', runSub.includes('detailed, self-contained prompt'));
+    const expl = augmentToolDescription('explore_subagent', 'Explore');
+    check('explore_subagent read-only prefer', expl.includes('read-only'));
 }
 
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);
