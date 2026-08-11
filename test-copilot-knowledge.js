@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 2600 chars)', guide.length < 2600, `got ${guide.length}`);
+    check('guide is concise (< 3200 chars)', guide.length < 3200, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -182,7 +182,18 @@ console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
     check('guide clarifies ambiguous tasks', guide.includes('clarify with the user before assuming'));
     check('guide plans dependencies + verification', guide.includes('explicit dependencies') && guide.includes('verification steps'));
     check('guide tracks plan in todo list', guide.includes('todo list') && guide.includes('keep it updated'));
-    check('guide stays under 2600 chars', guide.length < 2600, `got ${guide.length}`);
+    // grok-build codex precision/validation/communication discipline.
+    check('guide keeps changes minimal', guide.includes('minimal, consistent with existing style'));
+    check('guide does not fix unrelated bugs', guide.includes('do not fix unrelated bugs'));
+    check('guide ambition vs surgical', guide.includes('be ambitious') && guide.includes('be surgical'));
+    check('guide no commit unless asked', guide.includes('Do not commit unless asked'));
+    check('guide validation specific-to-broad', guide.includes('test specific-to-broad'));
+    check('guide no tests in testless codebase', guide.includes('do not add tests to a codebase with none'));
+    check('guide pairs message with tool calls', guide.includes('pair a brief message with tool calls'));
+    check('guide progress updates', guide.includes('send concise progress updates'));
+    check('guide concise final ≤10 lines', guide.includes('≤10 lines'));
+    check('guide file path:line refs', guide.includes('`path:line`'));
+    check('guide stays under 3200 chars', guide.length < 3200, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));

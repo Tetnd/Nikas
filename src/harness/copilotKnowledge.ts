@@ -814,6 +814,12 @@ export function buildCopilotOperatingGuide(): string {
         'If you find unexpected state, investigate before deleting or overwriting.\n' +
         'Tool discipline: use specialized tools over bash when possible (read instead of cat/tail, edit instead of sed/awk); ' +
         'reserve bash for real system commands. NEVER use bash echo to communicate — put messages in your response text.\n' +
+        'Precision: fix root cause, not symptoms; keep changes minimal, consistent with existing style; do not fix unrelated bugs ' +
+        '(mention them). New task → be ambitious; existing codebase → be surgical (no unnecessary renames). Do not commit unless asked; ' +
+        'do not re-read a file right after editing it.\n' +
+        'Validation: test specific-to-broad; do not add tests to a codebase with none. Use the project formatter if configured.\n' +
+        'Communication: pair a brief message with tool calls; send concise progress updates on long tasks; tell the user before ' +
+        'a latency-heavy action. Finish concise (≤10 lines), reference files as `path:line`, do not re-paste large files.\n' +
         'Output: concise but clear, proportional to task complexity. Use markdown (bullets, inline code, small tables) where it helps.\n' +
         '• Do not repeat work already done; continue from where you left off.\n' +
         '• For live UI/web pages: open/read the page, interact, then screenshot to confirm the change.'
