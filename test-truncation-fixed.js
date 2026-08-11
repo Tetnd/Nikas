@@ -798,24 +798,22 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
         const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
         const others = messages.slice(system.length);
         const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-        let keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
+        const keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
         if (keepBudget < 1024) return null;
-        const keep = [];
-        for (let i = others.length - 1; i >= 0; i--) {
-            const t = estimateMessageTokens([others[i]]);
-            if (t <= keepBudget) { keep.unshift(others[i]); keepBudget -= t; }
-            else break;
-        }
-        let splitIdx = others.length - keep.length;
-        if (keep.length > 0 && keep[0].role !== 'user') {
-            let snapped = false;
-            for (let j = splitIdx - 1; j >= 0; j--) {
-                if (others[j].role === 'user') { keep.unshift(...others.slice(j, splitIdx)); splitIdx = j; snapped = true; break; }
-            }
-            if (!snapped) return null;
+        // Aggregate-based split landing on a USER-TURN boundary: walk the user
+        // boundaries from the oldest, pick the smallest old block whose kept
+        // suffix fits budget (measured with the same aggregate estimator). This
+        // guarantees an old block whenever estimated > budget and never splits
+        // a tool-call/tool-result pair.
+        const userBoundaries = [];
+        for (let i = 0; i < others.length; i++) if (others[i].role === 'user') userBoundaries.push(i);
+        let splitIdx = -1;
+        for (const i of userBoundaries) {
+            if (estimateMessageTokens(others.slice(i)) <= keepBudget) { splitIdx = i; break; }
         }
         if (splitIdx <= 0) return null;
         const oldBlock = others.slice(0, splitIdx);
+        const keep = others.slice(splitIdx);
         if (oldBlock.length < MIN_COMPACT_BLOCK) return null;
         return { system, others, keep, oldBlock, estimated, budgetCap };
     }
@@ -911,6 +909,35 @@ console.log('\n=== 14. Compaction plan (reliability limit) ===');
     check('reuse rule: same anchor + small growth reuses', canReuse(true, 100, 105));
     check('reuse rule: big growth recomputes', !canReuse(true, 100, 140));
     check('reuse rule: different anchor recomputes', !canReuse(false, 100, 105));
+
+    // ── 14b. REGRESSION: many-small-messages over budget MUST compact ──
+    // Reproduces the root cause: a long agent session with hundreds of small
+    // tool/assistant messages. The OLD per-message keep loop summed each tiny
+    // message and could "fit everything" (splitIdx=0) even when the AGGREGATE
+    // estimate is well over the reliability limit — so compaction silently
+    // never fired (observed at ~393K on a 512K window). The new aggregate-based
+    // split must always produce a non-empty old block when over budget.
+    {
+        const msgs = [{ role: 'system', content: 'sys' }];
+        for (let r = 0; r < 300; r++) {
+            msgs.push({ role: 'user', content: `Q${r} ` + 'x'.repeat(100) });
+            msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: `c${r}`, type: 'function', function: { name: 'f', arguments: '{}' } }] });
+            msgs.push({ role: 'tool', tool_call_id: `c${r}`, content: 'r ' + 'y'.repeat(200) });
+        }
+        msgs.push({ role: 'user', content: 'final' });
+        const lim = 20000;
+        const est = estimateMessageTokens(msgs);
+        check('14b: aggregate over budget', est > lim, `est=${est} limit=${lim}`);
+        const plan = planCompaction(msgs, lim);
+        check('14b: compaction plan produced (NOT splitIdx=0)', plan !== null, plan ? '' : 'plan is null');
+        if (plan) {
+            check('14b: non-trivial old block', plan.oldBlock.length >= MIN_COMPACT_BLOCK, `oldBlock=${plan.oldBlock.length}`);
+            check('14b: keep fits under budget', estimateMessageTokens(plan.keep) <= lim, `keep=${estimateMessageTokens(plan.keep)}`);
+            const out = applyCompaction(plan, 'MEM: compacted');
+            check('14b: compacted sequence valid', findDeepSeekIssues(out).length === 0, JSON.stringify(findDeepSeekIssues(out)));
+            check('14b: newest user turn survives', out.some(x => x.role === 'user' && messageText(x).includes('final')));
+        }
+    }
 
     // ── 15. Summarizer prompt scoping (compact.ts SUMMARIZE_SYSTEM_PROMPT) ──
     // Mirrors the "Scoping (CRITICAL)" section added after the benchmark found

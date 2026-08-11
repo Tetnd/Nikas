@@ -603,53 +603,48 @@ async function maybeCompactContext(
     const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
     const others = messages.slice(system.length);
 
-    // Keep the NEWEST content up to the compacted budget; the rest becomes the
-    // old block to summarize. Reserve headroom for the summary message.
+    // Reserve headroom for the summary message.
     const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-    let keepBudget = budgetCap - estimateMessageTokens(system, sessionKey) - summaryOverhead;
+    const keepBudget = budgetCap - estimateMessageTokens(system, sessionKey) - summaryOverhead;
     if (keepBudget < 1024) {
         log.verbose(`[compact] skipped: keepBudget ${keepBudget} < 1024 (system+overhead exceed budgetCap)`);
         return messages;
     }
 
-    const keep: DeepSeekMessage[] = [];
-    let perMsgSum = 0;
-    for (let i = others.length - 1; i >= 0; i--) {
-        const t = estimateMessageTokens([others[i]], sessionKey);
-        perMsgSum += t;
-        if (t <= keepBudget) {
-            keep.unshift(others[i]);
-            keepBudget -= t;
-        } else {
+    // Compute the split from the AGGREGATE estimate, landing on a USER-TURN
+    // boundary so the kept suffix starts at a real user message (never
+    // mid-tool-call). Walk the user-turn boundaries from the oldest and pick
+    // the smallest old block whose kept suffix fits the budget, measured with
+    // the SAME aggregate estimator as the budget check. This guarantees a
+    // non-empty old block whenever `estimated > budgetCap`, because the budget
+    // check and the split now use one consistent measure. (Previously the split
+    // was decided by summing PER-MESSAGE estimates, which under-count vs the
+    // aggregate — so the loop could "fit everything" and never produce an old
+    // block, silently skipping compaction even at 400K context. This was the
+    // root cause.)
+    const userBoundaries: number[] = [];
+    for (let i = 0; i < others.length; i++) {
+        if (others[i].role === 'user') userBoundaries.push(i);
+    }
+    let splitIdx = -1;
+    for (const i of userBoundaries) {
+        if (estimateMessageTokens(others.slice(i), sessionKey) <= keepBudget) {
+            splitIdx = i;
             break;
         }
     }
-
-    // Snap the boundary so keep starts at a real user turn — this avoids
-    // splitting tool-call/tool-result pairs and lets the summary merge cleanly
-    // into the first kept user message.
-    let splitIdx = others.length - keep.length;
-    if (keep.length > 0 && keep[0].role !== 'user') {
-        let snapped = false;
-        for (let j = splitIdx - 1; j >= 0; j--) {
-            if (others[j].role === 'user') {
-                keep.unshift(...others.slice(j, splitIdx));
-                splitIdx = j;
-                snapped = true;
-                break;
-            }
-        }
-        if (!snapped) {
-            log.verbose(`[compact] skipped: no clean user boundary to snap to (keep[0] role=${keep[0]?.role}, splitIdx=${splitIdx})`);
-            return messages; // no clean user boundary — don't compact
-        }
-    }
     if (splitIdx <= 0) {
-        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 — estimated=${estimated}, budgetCap=${budgetCap}, system=${system.length}, others=${others.length}, keep=${keep.length}, sumOthers=${estimateMessageTokens(others, sessionKey)}, perMsgSum=${perMsgSum}, keepBudgetLeft=${keepBudget}`);
-        return messages; // everything fits in keep — no old block
+        // No user boundary yields a kept suffix within budget — either a single
+        // newest user turn (plus following tool group) is too large to fit, or
+        // there are no user messages. Cannot compact meaningfully; fall through
+        // to truncation.
+        log.verbose(`[compact] skipped: no user-turn boundary reaches budget (splitIdx=${splitIdx})`);
+        return messages;
     }
 
     const oldBlock = others.slice(0, splitIdx);
+    const keep = others.slice(splitIdx);
+
     if (oldBlock.length < MIN_COMPACT_BLOCK) {
         log.verbose(`[compact] skipped: oldBlock ${oldBlock.length} < MIN_COMPACT_BLOCK ${MIN_COMPACT_BLOCK}`);
         return messages;
