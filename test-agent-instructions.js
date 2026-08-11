@@ -140,8 +140,49 @@ let agentsPath = path.join(tmp, 'AGENTS.md');
         check('sync with no folder resolves', ok === undefined || ok === false);
     }
 
+    console.log('\n=== 8. smart: honors existing copilot-instructions.md (no duplicate AGENTS.md) ===');
+    let tmp4 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai4-'));
+    let ghDir = path.join(tmp4, '.github');
+    fs.mkdirSync(ghDir, { recursive: true });
+    let copilotPath = path.join(ghDir, 'copilot-instructions.md');
+    let agentsPath4 = path.join(tmp4, 'AGENTS.md');
+    {
+        const original = '# user copilot instructions\n\nkeep me\n';
+        fs.writeFileSync(copilotPath, original, 'utf8');
+
+        setSetting(true);
+        await applyAgentInstructions(folderFor(tmp4));
+
+        // We manage the file the user already has.
+        check('manages existing copilot-instructions.md', fs.readFileSync(copilotPath, 'utf8').startsWith(header));
+        check('backs up user copilot-instructions.md', fs.existsSync(copilotPath + suffix) && fs.readFileSync(copilotPath + suffix, 'utf8') === original);
+        // Crucially, we must NOT also create a duplicate AGENTS.md.
+        check('does NOT create duplicate AGENTS.md', !fs.existsSync(agentsPath4));
+
+        // Restore brings back the user's original.
+        setSetting(false);
+        await syncAgentInstructions(folderFor(tmp4));
+        check('restores user copilot-instructions.md', fs.readFileSync(copilotPath, 'utf8') === original);
+        check('no stray AGENTS.md after restore', !fs.existsSync(agentsPath4));
+    }
+
+    console.log('\n=== 9. defaults to AGENTS.md when user has neither ===');
+    let tmp5 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai5-'));
+    let agentsPath5 = path.join(tmp5, 'AGENTS.md');
+    {
+        setSetting(true);
+        await applyAgentInstructions(folderFor(tmp5));
+        check('writes default AGENTS.md', fs.existsSync(agentsPath5) && fs.readFileSync(agentsPath5, 'utf8').startsWith(header));
+        // No copilot-instructions.md created.
+        check('does not create .github/copilot-instructions.md', !fs.existsSync(path.join(tmp5, '.github', 'copilot-instructions.md')));
+
+        setSetting(false);
+        await syncAgentInstructions(folderFor(tmp5));
+        check('removed AGENTS.md on disable', !fs.existsSync(agentsPath5));
+    }
+
     // Cleanup temp dirs
-    for (const d of [tmp, tmp2, tmp3]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+    for (const d of [tmp, tmp2, tmp3, tmp4, tmp5]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
 
     console.log(`\nResult: ${safe} passed, ${failures} failed`);
     process.exit(failures === 0 ? 0 : 1);

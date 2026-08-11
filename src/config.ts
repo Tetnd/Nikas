@@ -204,10 +204,12 @@ export function getSweOperatingGuide(): boolean {
 }
 
 /**
- * Whether to manage a repository AGENTS.md that forces Nikas' pro-SWE
- * operating guide onto Copilot's native agent-instruction mechanism. When
- * true, we write/keep the guide in <workspace>/AGENTS.md (backing up any
- * existing file); when false, we restore the original / remove ours.
+ * Whether to manage a repository agent-instruction file (AGENTS.md or
+ * copilot-instructions.md) that forces Nikas' pro-SWE operating guide onto
+ * Copilot's native agent-instruction mechanism. When true, we write/keep the
+ * guide in whichever file the user already has (defaulting to AGENTS.md),
+ * backing up existing content; when false, we restore the original / remove
+ * ours. Never manages both files at once (Copilot reads only one).
  */
 export function getAgentInstructions(): boolean {
     return getConfig().get<boolean>('agentInstructions') ?? false;

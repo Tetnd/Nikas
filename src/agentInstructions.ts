@@ -1,14 +1,25 @@
 /**
- * Repository AGENTS.md manager.
+ * Repository instruction-file manager (AGENTS.md / copilot-instructions.md).
  *
- * Copilot (and AGENTS.md-compatible agents) auto-read the nearest AGENTS.md
- * and inject it into every request — including to a BYOK model like DeepSeek.
- * This manager forces Nikas' pro-SWE operating guide onto that native
- * mechanism:
+ * Copilot auto-reads the nearest agent-instruction file and injects it into
+ * every request — including to a BYOK model like DeepSeek. This manager
+ * forces Nikas' pro-SWE operating guide onto that native mechanism.
  *
- *   1. When enabled, writes `<workspace>/AGENTS.md` with the guide. If a file
- *      already exists, its contents are backed up to a sibling
- *      `AGENTS.md.nikas-backup` so we never destroy user content.
+ * Copilot's rule is to use ONLY ONE instruction file per repo — either
+ * `.github/copilot-instructions.md` or root `AGENTS.md`, never both. So this
+ * manager is SMART about which file to touch:
+ *
+ *   - It detects which instruction file the user ALREADY has and manages
+ *     exactly that one, so it never duplicates or conflicts with their
+ *     existing instructions.
+ *   - It cleans up any file WE previously managed at the other location, so
+ *     we never leave both a managed `AGENTS.md` and a managed
+ *     `copilot-instructions.md` (which would double-inject).
+ *   - If the user has neither, it defaults to root `AGENTS.md`.
+ *
+ * Behavior:
+ *   1. When enabled, writes the guide to the chosen file, backing up any
+ *      existing (unmanaged) content to a sibling `*.nikas-backup`.
  *   2. When disabled, restores the backup (if one exists) or removes the file
  *      we wrote — returning to Copilot's default.
  *
@@ -25,10 +36,26 @@ import { getAgentInstructions } from './config.js';
 const BACKUP_SUFFIX = '.nikas-backup';
 const GUIDE_HEADER = '<!-- nikas:managed - do not edit manually -->';
 
-/** The pro-SWE operating guide in AGENTS.md form (repo-scoped). */
-export function buildAgentInstructionsContent(): string {
+/** The agent-instruction files Copilot reads, in priority order. */
+function instructionCandidates(root: string): string[] {
+    return [
+        path.join(root, '.github', 'copilot-instructions.md'),
+        path.join(root, 'AGENTS.md'),
+    ];
+}
+
+/** Pick the file to manage: the user's existing instruction file if any, else root AGENTS.md. */
+function chooseTargetFile(root: string): string | undefined {
+    for (const c of instructionCandidates(root)) {
+        if (fs.existsSync(c)) return c;
+    }
+    return instructionCandidates(root)[1]; // default AGENTS.md
+}
+
+/** The pro-SWE operating guide in agent-instruction form (repo-scoped). */
+export function buildAgentInstructionsContent(fileName = 'AGENTS.md'): string {
     return `${GUIDE_HEADER}
-# AGENTS.md — Nikas pro-SWE operating guide
+# ${fileName} — Nikas pro-SWE operating guide
 
 This file is managed by the Nikas extension (nikas.agentInstructions). It is
 injected by Copilot into every request in this repository. Edit it at your own
@@ -62,12 +89,6 @@ Work like a senior engineer. Follow this order and keep it in view throughout:
 `;
 }
 
-function agentsFilePath(workspaceFolder?: vscode.WorkspaceFolder): string | undefined {
-    const root = workspaceFolder?.uri?.fsPath;
-    if (!root) return undefined;
-    return path.join(root, 'AGENTS.md');
-}
-
 /** True if the file at `p` is one we manage (has our marker header). */
 function isManaged(p: string): boolean {
     try {
@@ -79,46 +100,20 @@ function isManaged(p: string): boolean {
 }
 
 /**
- * Apply the managed AGENTS.md for the given workspace folder. Backs up an
- * existing (non-managed) file first. Idempotent.
+ * The workspace root of the given folder, or undefined if none is open.
  */
-export async function applyAgentInstructions(workspaceFolder?: vscode.WorkspaceFolder): Promise<boolean> {
-    const target = agentsFilePath(workspaceFolder);
-    if (!target) {
-        log.warn('[AgentInstructions] no workspace folder to write AGENTS.md into');
-        return false;
-    }
-    try {
-        // Already managed by us → nothing to do.
-        if (fs.existsSync(target) && isManaged(target)) return true;
-
-        // An unmanaged file exists → back it up before we take over.
-        if (fs.existsSync(target)) {
-            const backup = target + BACKUP_SUFFIX;
-            if (!fs.existsSync(backup)) {
-                fs.copyFileSync(target, backup);
-                log.info(`[AgentInstructions] backed up existing AGENTS.md → ${backup}`);
-            }
-        }
-        fs.writeFileSync(target, buildAgentInstructionsContent(), 'utf8');
-        log.info(`[AgentInstructions] wrote managed AGENTS.md → ${target}`);
-        return true;
-    } catch (e) {
-        log.error('[AgentInstructions] apply failed', e);
-        return false;
-    }
+function workspaceRoot(workspaceFolder?: vscode.WorkspaceFolder): string | undefined {
+    return workspaceFolder?.uri?.fsPath;
 }
 
 /**
- * Restore Copilot's default AGENTS.md for the given workspace folder: restore
- * the backup if one exists, else remove the file we wrote. Idempotent.
+ * Restore a single instruction file we manage (restore backup or remove ours).
+ * Returns true when the file is no longer managed by Nikas afterwards.
  */
-export async function restoreAgentInstructions(workspaceFolder?: vscode.WorkspaceFolder): Promise<boolean> {
-    const target = agentsFilePath(workspaceFolder);
-    if (!target) return false;
+function restoreManagedFile(p: string): boolean {
+    const backup = p + BACKUP_SUFFIX;
     try {
-        const backup = target + BACKUP_SUFFIX;
-        if (!fs.existsSync(target)) {
+        if (!fs.existsSync(p)) {
             // Nothing to do; also clean up a stray backup if present.
             if (fs.existsSync(backup)) {
                 fs.unlinkSync(backup);
@@ -127,16 +122,16 @@ export async function restoreAgentInstructions(workspaceFolder?: vscode.Workspac
             return true;
         }
         // If it's not ours, leave it alone (user-managed).
-        if (!isManaged(target)) {
-            log.info('[AgentInstructions] AGENTS.md is not managed by Nikas; leaving it as-is');
+        if (!isManaged(p)) {
+            log.info(`[AgentInstructions] ${path.basename(p)} is not managed by Nikas; leaving it as-is`);
             return true;
         }
         if (fs.existsSync(backup)) {
-            fs.renameSync(backup, target);
-            log.info(`[AgentInstructions] restored original AGENTS.md from backup`);
+            fs.renameSync(backup, p);
+            log.info(`[AgentInstructions] restored original ${path.basename(p)} from backup`);
         } else {
-            fs.unlinkSync(target);
-            log.info(`[AgentInstructions] removed managed AGENTS.md`);
+            fs.unlinkSync(p);
+            log.info(`[AgentInstructions] removed managed ${path.basename(p)}`);
         }
         return true;
     } catch (e) {
@@ -146,8 +141,73 @@ export async function restoreAgentInstructions(workspaceFolder?: vscode.Workspac
 }
 
 /**
- * Sync the managed AGENTS.md to the current setting for a workspace folder.
- * Call on activation and on setting change.
+ * Apply the managed instruction file for the given workspace folder. Backs up
+ * an existing (non-managed) file first, and cleans up any OTHER instruction
+ * file we previously managed so Copilot never gets both injected. Idempotent.
+ */
+export async function applyAgentInstructions(workspaceFolder?: vscode.WorkspaceFolder): Promise<boolean> {
+    const root = workspaceRoot(workspaceFolder);
+    if (!root) {
+        log.warn('[AgentInstructions] no workspace folder to write instructions into');
+        return false;
+    }
+    const target = chooseTargetFile(root);
+    if (!target) return false;
+    const fileName = path.basename(target);
+    try {
+        // Clean up the other instruction file if we managed it previously, so
+        // Copilot's "use only one" rule is respected (no double-injection).
+        for (const c of instructionCandidates(root)) {
+            if (c !== target && fs.existsSync(c) && isManaged(c)) {
+                restoreManagedFile(c);
+            }
+        }
+
+        // Already managed by us → nothing to do.
+        if (fs.existsSync(target) && isManaged(target)) return true;
+
+        // An unmanaged file exists → back it up before we take over.
+        if (fs.existsSync(target)) {
+            const backup = target + BACKUP_SUFFIX;
+            if (!fs.existsSync(backup)) {
+                fs.copyFileSync(target, backup);
+                log.info(`[AgentInstructions] backed up existing ${fileName} → ${backup}`);
+            }
+        }
+        fs.writeFileSync(target, buildAgentInstructionsContent(fileName), 'utf8');
+        log.info(`[AgentInstructions] wrote managed ${fileName} → ${target}`);
+        return true;
+    } catch (e) {
+        log.error('[AgentInstructions] apply failed', e);
+        return false;
+    }
+}
+
+/**
+ * Restore Copilot's default instruction file(s) for the given workspace
+ * folder: restore backups or remove the files we wrote. Idempotent.
+ */
+export async function restoreAgentInstructions(workspaceFolder?: vscode.WorkspaceFolder): Promise<boolean> {
+    const root = workspaceRoot(workspaceFolder);
+    if (!root) return false;
+    // Restore every candidate we manage (in case the user switched files mid-way).
+    let ok = true;
+    for (const c of instructionCandidates(root)) {
+        if (fs.existsSync(c) && isManaged(c)) {
+            ok = restoreManagedFile(c) && ok;
+        }
+    }
+    // Also clean a stray backup of the default file if present.
+    const defaultFile = instructionCandidates(root)[1];
+    if (!fs.existsSync(defaultFile) && fs.existsSync(defaultFile + BACKUP_SUFFIX)) {
+        restoreManagedFile(defaultFile);
+    }
+    return ok;
+}
+
+/**
+ * Sync the managed instruction file to the current setting for a workspace
+ * folder. Call on activation and on setting change.
  */
 export async function syncAgentInstructions(workspaceFolder?: vscode.WorkspaceFolder): Promise<void> {
     const enabled = getAgentInstructions();

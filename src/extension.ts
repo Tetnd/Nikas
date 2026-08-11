@@ -112,8 +112,10 @@ export async function activate(context: vscode.ExtensionContext) {
     //   - periodically (catches external changes / VS Code updates)
     scheduleAutoPatch(context);
 
-    // Apply / restore the managed repository AGENTS.md per the
-    // nikas.agentInstructions toggle. Uses the first workspace folder.
+    // Apply / restore the managed repository agent-instruction file
+    // (AGENTS.md or copilot-instructions.md) per the nikas.agentInstructions
+    // toggle. Smart: manages whichever file the user already uses. Uses the
+    // first workspace folder.
     void syncAgentInstructions(vscode.workspace.workspaceFolders?.[0]);
 
     // Apply the recommended Copilot agent model assignments for any agent the
