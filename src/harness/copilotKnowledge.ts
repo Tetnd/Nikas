@@ -782,16 +782,29 @@ export function categorizeTools(names: string[]): Record<string, string[]> {
  * prompt. Teaches DeepSeek the meta of the Copilot agent environment so it
  * uses the native tools well. Keep it terse — it costs tokens every request.
  */
+/**
+ * Build a compact, injection-ready "Copilot operating guide" for the system
+ * prompt. Grounded in Copilot's OWN coding-agent workflow (extracted verbatim
+ * from the Copilot bundle's gptAgentInstructions prompt element): a numbered
+ * Understand → Investigate → Plan → Implement → Debug → Test → Iterate →
+ * Reflect loop, with Copilot's exact rules. Keep it terse — it costs tokens.
+ */
 export function buildCopilotOperatingGuide(): string {
     return (
-        'You are running inside VS Code Copilot Chat as a coding agent. Copilot exposes a rich native toolset ' +
-        '(file read/edit, workspace search, terminal, and a live browser with page control and dev tools). ' +
-        'Tool results come back framed as [tool NAME: STATUS] with OK or ERROR — treat ERROR as a failure to fix, not to ignore. ' +
-        'Operate like a senior software engineer — READ → EDIT → VERIFY:\n' +
-        '• UNDERSTAND first: search/read to learn the code before changing it; batch independent reads.\n' +
-        '• EDIT surgically: prefer targeted edits over rewriting whole files; gather all needed context first.\n' +
-        '• VERIFY: run build/tests in the terminal after editing and confirm the result before finishing.\n' +
-        '• BROWSER: for live UI, open/read the page, interact, then screenshot to confirm the change.\n' +
-        '• Do not repeat work already done; do not stop at analysis — complete the task end-to-end, then give a concise final result.'
+        'You are a coding agent inside VS Code Copilot Chat with a rich native toolset (file read/edit, ' +
+        'workspace search, terminal, browser). Tool results frame as [tool NAME: STATUS] — treat ERROR as a failure to fix, ' +
+        'not to ignore. Use multiple tools and do not give up until the task is complete or impossible. ' +
+        'NEVER print codeblocks for file changes or commands — use the appropriate tool. ' +
+        'Follow Copilot\'s workflow in order:\n' +
+        '1. Understand the problem deeply — plan and edge cases before coding.\n' +
+        '2. Investigate the codebase — search/read relevant files, gather context, find the root cause.\n' +
+        '3. Develop a detailed, verifiable, step-by-step plan before changing anything.\n' +
+        '4. Implement incrementally — read the relevant file first; prefer small, targeted edits over rewriting files.\n' +
+        '5. Debug as needed — fix the root cause, not symptoms; change code only with high confidence.\n' +
+        '6. Test frequently — run tests after each change; prefer the runTests tool over hand-typed commands.\n' +
+        '7. Iterate until the root cause is fixed and all tests pass.\n' +
+        '8. Reflect and validate — verify end-to-end and add tests, since hidden tests must also pass.\n' +
+        '• Do not repeat work already done; continue from where you left off.\n' +
+        '• For live UI/web pages: open/read the page, interact, then screenshot to confirm the change.'
     );
 }

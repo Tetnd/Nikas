@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 1200 chars)', guide.length < 1200, `got ${guide.length}`);
+    check('guide is concise (< 1400 chars)', guide.length < 1400, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -156,12 +156,19 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
 console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
 {
     const guide = buildCopilotOperatingGuide();
-    check('guide has READ step', guide.includes('UNDERSTAND first'));
-    check('guide has EDIT step', guide.includes('EDIT surgically'));
-    check('guide has VERIFY step', guide.includes('VERIFY'));
-    check('guide has BROWSER guidance', guide.includes('BROWSER'));
-    check('guide instructs verify-before-done', guide.includes('confirm the result'));
-    check('guide stays under 1200 chars', guide.length < 1200, `got ${guide.length}`);
+    // Grounded in Copilot's actual gptAgentInstructions workflow ordering.
+    check('guide step 1 Understand', guide.includes('1. Understand the problem deeply'));
+    check('guide step 2 Investigate', guide.includes('2. Investigate the codebase'));
+    check('guide step 3 Plan', guide.includes('3. Develop a detailed'));
+    check('guide step 4 Implement', guide.includes('4. Implement incrementally'));
+    check('guide step 5 Debug', guide.includes('5. Debug as needed'));
+    check('guide step 6 Test', guide.includes('6. Test frequently'));
+    check('guide step 7 Iterate', guide.includes('7. Iterate until the root cause'));
+    check('guide step 8 Reflect', guide.includes('8. Reflect and validate'));
+    check('guide has runTests guidance', guide.includes('runTests tool'));
+    check('guide says root cause not symptoms', guide.includes('root cause, not symptoms'));
+    check('guide says no codeblocks', guide.includes('NEVER print codeblocks'));
+    check('guide stays under 1400 chars', guide.length < 1400, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));
