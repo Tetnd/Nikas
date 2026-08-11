@@ -1204,6 +1204,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Create an AbortController for cancellation
         const abortController = new AbortController();
         const cancelDisposable = token.onCancellationRequested(() => {
+            // Log whether the stop came from VS Code/Copilot (agent loop) vs a
+            // user Stop. A silent mid-turn stop is otherwise indistinguishable
+            // from a hung stream — both log nothing today.
+            log.info(
+                `Chat request cancellation requested by VS Code/user (Copilot) — aborting stream. ` +
+                `model=${modelId}, messages=${deepseekMessages.length}, thinking=${thinkingEnabled}`
+            );
             abortController.abort();
         });
 
@@ -1288,8 +1295,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         } catch (err) {
             if (abortController.signal.aborted) {
-                // Cancelled by user — silently stop
-                return;
+                log.info(
+                    `Chat request aborted mid-stream — turn did not complete. ` +
+                    `model=${modelId}, messages=${deepseekMessages.length}, thinking=${thinkingEnabled}`
+                );
+                return; // Cancelled by user / VS Code — silent stop
             }
             // Build a descriptive error for VS Code's error reporting.
             // The Copilot summarizer catches errors and logs them; an opaque
@@ -1328,6 +1338,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         } finally {
             cancelDisposable.dispose();
         }
+        log.info(
+            `Chat request completed: model=${modelId}, messages=${deepseekMessages.length}, thinking=${thinkingEnabled}`
+        );
     }
 
     /**
@@ -1498,6 +1511,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         const abortController = new AbortController();
         const cancelDisposable = token.onCancellationRequested(() => {
+            // Log whether the stop came from VS Code/Copilot (agent loop) vs a
+            // user Stop. A silent mid-turn stop is otherwise indistinguishable
+            // from a hung stream — both log nothing today.
+            log.info(
+                `Responses request cancellation requested by VS Code/user (Copilot) — aborting stream. ` +
+                `model=${modelId}, thinking=${thinkingEnabled}`
+            );
             abortController.abort();
         });
 
@@ -1573,7 +1593,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         } catch (err) {
             if (abortController.signal.aborted) {
-                return; // Cancelled by user — silently stop
+                log.info(
+                    `Responses request aborted mid-stream — turn did not complete. ` +
+                    `model=${modelId}, thinking=${thinkingEnabled}`
+                );
+                return; // Cancelled by user / VS Code — silent stop
             }
             const errorMessage = err instanceof Error ? err.message : String(err || 'unknown error');
             const wrappedError = new Error(
@@ -1591,6 +1615,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         } finally {
             cancelDisposable.dispose();
         }
+        log.info(
+            `Responses chat request completed: model=${modelId}, inputItems=${Array.isArray(input) ? input.length : 0}, thinking=${thinkingEnabled}`
+        );
     }
 
     /**
