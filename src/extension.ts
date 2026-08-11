@@ -823,7 +823,7 @@ async function applyDefaultAgentModels(): Promise<void> {
 
 /**
  * Quick-set agents to the recommended models with one click.
- *   - Explore, Plan, Inline Chat → DeepSeek V4 Flash (Responses)
+ *   - Explore, Plan, Inline Chat → DeepSeek V4 Flash (Responses) — Nikas
  */
 async function setFlashForAllAgents(): Promise<void> {
     const config = vscode.workspace.getConfiguration();

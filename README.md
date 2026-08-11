@@ -14,7 +14,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 ## Features
 
 - **DeepSeek V4 Flash & Pro** — fast and powerful models in the Copilot Chat model picker
-- **DeepSeek V4 Flash (Responses)** — the same Flash 0731 model served through DeepSeek's newer Responses API (`POST /responses`), built for agent-native tooling
+- **DeepSeek V4 Flash (Responses) — Nikas** — the same Flash 0731 model served through DeepSeek's newer Responses API (`POST /responses`), built for agent-native tooling
 - **📄 PDF support that survives updates** — Copilot Chat drops PDF attachments for third-party providers. Nikas patches the installed Copilot Chat bundle (8 surgical patches: allow DeepSeek to receive PDFs, raise the 5 MB read limit to 100 MB, let PDFs bypass `omitContents`, drop the `supportsVision` gate, convert `Document` parts to `LanguageModelDataPart`, etc.) and **re-applies them automatically** after every Copilot Chat / VS Code update
 - **Vision preprocessing** — send images in chat and they're automatically described by Gemma 4 (local, via Ollama) or Gemini 2.5 Flash (free tier), then forwarded to DeepSeek
 - **Streaming responses** — real-time token-by-token output
@@ -65,10 +65,10 @@ Once you've set your API key, the status bar changes to **"Nikas: Ready"** ✅.
 
 1. Open Copilot Chat (`Ctrl+Shift+I`)
 2. Click the model picker dropdown at the top
-3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses)**
+3. Select **DeepSeek V4 Flash**, **DeepSeek V4 Pro**, or **DeepSeek V4 Flash (Responses) — Nikas**
 4. Start chatting
 
-> **DeepSeek V4 Flash (Responses)** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's selected via the Copilot model picker only (it's not part of `Nikas: Choose Provider`).
+> **DeepSeek V4 Flash (Responses) — Nikas** uses DeepSeek's newer Responses API (`POST /responses`) instead of Chat Completions. It's selected via the Copilot model picker only (it's not part of `Nikas: Choose Provider`).
 
 ### Manual configuration (skip the wizard)
 

@@ -69,7 +69,7 @@ export type VisionModelId = (typeof VISION_MODELS)[number]['id'];
  */
 export const DEEPSEEK_RESPONSES_MODEL = {
     id: 'deepseek-v4-flash-responses',
-    name: 'DeepSeek V4 Flash (Responses)',
+    name: 'DeepSeek V4 Flash (Responses) — Nikas',
     family: 'deepseek',
     version: '0731',
     maxInputTokens: 1_000_000,
