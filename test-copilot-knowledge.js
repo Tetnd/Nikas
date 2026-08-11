@@ -105,5 +105,52 @@ console.log('\n=== 6. Expanded catalog coverage ===');
         cats['task']?.includes('todo'));
 }
 
+// ── 7. Snake-case Copilot-agent toolset (from bundle) ─────────────────────
+console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
+{
+    check('read_file known', getToolKnowledge('read_file')?.category === 'file');
+    check('grep_search known (search)', getToolKnowledge('grep_search')?.category === 'search');
+    check('run_in_terminal known', getToolKnowledge('run_in_terminal')?.category === 'terminal');
+    check('replace_string_in_file known (edit)', getToolKnowledge('replace_string_in_file')?.category === 'edit');
+    check('click_element known (browser)', getToolKnowledge('click_element')?.category === 'browser');
+    check('run_notebook_cell known (notebook)', getToolKnowledge('run_notebook_cell')?.category === 'notebook');
+    check('manage_todo_list known (task)', getToolKnowledge('manage_todo_list')?.category === 'task');
+    check('vscode_askQuestions known (vscode)', getToolKnowledge('vscode_askQuestions')?.category === 'vscode');
+    check('fetch_webpage known (web)', getToolKnowledge('fetch_webpage')?.category === 'web');
+    check('runSubagent known (task)', getToolKnowledge('runSubagent')?.category === 'task');
+    check('write_file known (edit)', getToolKnowledge('write_file')?.category === 'edit');
+
+    // The full real snake_case list from the bundle must all be present.
+    const realNames = [
+        'manage_todo_list', 'tool_search', 'vscode_askQuestions', 'switch_agent',
+        'vscode_get_confirmation', 'vscode_get_confirmation_with_options',
+        'vscode_get_terminal_confirmation', 'vscode_reviewPlan',
+        'resolve_memory_file_uri', 'memory', 'skill', 'session_store_sql',
+        'edit_files', 'semantic_search', 'file_search', 'grep_search',
+        'read_file', 'view_image', 'list_dir', 'read_project_structure',
+        'search_workspace_symbols', 'get_changed_files', 'fetch_webpage',
+        'github_repo', 'github_text_search', 'test_search',
+        'copilot_getNotebookSummary', 'read_notebook_cell_output',
+        'testFailure', 'run_in_terminal', 'send_to_terminal',
+        'get_terminal_output', 'kill_terminal', 'terminal_selection',
+        'terminal_last_command', 'get_task_output', 'open_browser_page',
+        'screenshot_page', 'navigate_page', 'read_page', 'run_playwright_code',
+        'runSubagent', 'get_errors', 'install_extension', 'apply_patch',
+        'create_directory', 'create_file', 'create_new_jupyter_notebook',
+        'insert_edit_into_file', 'edit_notebook_file',
+        'multi_replace_string_in_file', 'replace_string_in_file',
+        'create_and_run_task', 'run_task', 'runTests', 'run_notebook_cell',
+        'semantic_search', 'get_vscode_api', 'read_project_structure',
+        'search_subagent', 'explore_subagent', 'tool_search', 'task_complete',
+        'vscode_renameSymbol', 'vscode_listCodeUsages',
+    ];
+    const missing = realNames.filter(n => !getToolKnowledge(n));
+    check('all real bundle snake_case names present', missing.length === 0, 'missing: ' + missing.join(', '));
+
+    // Enrichment works for a snake_case tool too.
+    const enr = augmentToolDescription('run_in_terminal', 'Run a command');
+    check('snake terminal enrichment has caution', enr.includes('Caution:'));
+}
+
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);
 process.exit(failures === 0 ? 0 : 1);
