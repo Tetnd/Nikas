@@ -30,5 +30,8 @@ test-thinking.js
 test-directive.js
 test-reasoning.js
 test-routing.js
+test-virtual-tools.js
+test-agent.js
+test-copilot-knowledge.js
 ab-thinking.js
 extension.patched.test.js

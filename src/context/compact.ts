@@ -77,7 +77,14 @@ interface CacheEntry {
     anchor: string;
 }
 
-/** Bounded, session-scoped summary cache. */
+/**
+ * Bounded summary cache. The provider is a process-wide singleton and VS Code
+ * passes no session id to it, so "session scope" is derived from CONTENT: the
+ * cache key hashes the block's full serialized text (see `blockHash`), and the
+ * anchor-reuse fingerprint hashes each message's real text. That keeps every
+ * conversation's summary under its own key — a second chat cannot collide with
+ * or read the first chat's cached summary.
+ */
 const summaryCache = new Map<string, CacheEntry>();
 
 /** Cheap deterministic string hash (FNV-1a-ish) — cache keys only. */
@@ -92,21 +99,42 @@ function simpleHash(input: string): string {
     return ((h1 >>> 0).toString(16) + (h2 >>> 0).toString(16)).slice(0, 16);
 }
 
-/** Stable identity of a message, for cache keys (cheap, no full serialization). */
+/**
+ * Stable identity of a message, for cache keys. Includes a hash of the
+ * message's actual TEXT content — not just its role/shape/length.
+ *
+ * Without the content hash, two different conversations that happen to share
+ * the same structural profile (same roles, same message lengths, same block
+ * count) would produce IDENTICAL fingerprints. The compaction cache is a
+ * process-wide singleton (VS Code re-sends the full history every turn and
+ * passes no session/conversation id to the provider), so those two sessions
+ * would collide on the same cache key and one conversation's summary could
+ * be served to the other — cross-session fact-mixing. Hashing the real text
+ * makes the fingerprint effectively unique per actual message, keeping each
+ * conversation's summary scoped to the conversation it was built for.
+ */
 function messageFingerprint(msg: DeepSeekMessage): string {
     const contentShape = Array.isArray(msg.content)
         ? `arr:${msg.content.length}`
         : typeof msg.content === 'string'
             ? `str:${msg.content.length}`
             : 'null';
-    return `${msg.role}|${contentShape}|${msg.tool_call_id ?? ''}|${msg.tool_calls?.length ?? 0}`;
+    const contentHash = simpleHash(messageText(msg));
+    return `${msg.role}|${contentShape}|${contentHash}|${msg.tool_call_id ?? ''}|${msg.tool_calls?.length ?? 0}`;
 }
 
-/** Bounded block hash — first + last message identity + length. */
+/**
+ * Bounded cache key — hash of the block's FULL serialized content.
+ *
+ * Two unrelated conversations whose edge messages happen to be identical
+ * (e.g. both start and end with the same kind of message) still differ in the
+ * middle, so hashing the whole block (not just first+last+length) guarantees
+ * each session is cached under its own key. This is the primary guard against
+ * cross-session summary bleed; `messageFingerprint`'s content hash covers the
+ * anchor-reuse path below.
+ */
 function blockHash(block: DeepSeekMessage[]): string {
-    const first = block[0] ? messageFingerprint(block[0]) : '∅';
-    const last = block[block.length - 1] ? messageFingerprint(block[block.length - 1]) : '∅';
-    return simpleHash(`${first}|${last}|${block.length}`);
+    return simpleHash(serializeBlock(block));
 }
 
 /** Plain-text content of a message ('' when none) — local copy, no provider dep. */

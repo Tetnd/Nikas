@@ -175,6 +175,21 @@ export function getHelperThinkingOff(): boolean {
 }
 
 /**
+ * Whether to enrich the tool descriptions and system prompt with Copilot
+ * knowledge (see src/harness/copilotKnowledge.ts). When enabled, DeepSeek
+ * gets richer per-tool descriptions and a concise "Copilot operating guide"
+ * in the system prompt, so it uses Copilot's native browser/dev-tools/
+ * terminal/workspace tools more effectively.
+ *
+ * - false (default) — Nika parity: pass Copilot's raw tool descriptions
+ *   through unchanged, no injected guide (saves ~180 tokens/request).
+ * - true — inject Copilot knowledge. Costs a little context every request.
+ */
+export function getCopilotKnowledge(): boolean {
+    return getConfig().get<boolean>('copilotKnowledge') ?? false;
+}
+
+/**
  * The behavioral directive appended to the system prompt when
  * `nikas.concisePrompt` is enabled.
  *
@@ -405,6 +420,33 @@ export function getLogMaxSizeMB(): number {
 export function getLogMaxFiles(): number {
     const v = getConfig().get<number>('logMaxFiles');
     return typeof v === 'number' && v >= 0 ? Math.floor(v) : 5;
+}
+
+// --- Virtual tool expansion (embeddings matching) ---
+
+/**
+ * Default relevance threshold for expanding `activate_embeddings` virtual
+ * tools. The default stands in for Copilot Chat's `chat.virtualTools.threshold`
+ * but is expressed in the units of our DEFAULT lexical matcher (a count of
+ * query terms matched in the tool's name/description, where a name match is
+ * worth 2 and a description match 1). `1` = at least one query term matched.
+ * A real embedding matcher would need a different threshold (e.g. 128 on a
+ * cosine-similarity scale); higher = fewer, more-confident matches.
+ */
+export const DEFAULT_VIRTUAL_TOOL_THRESHOLD = 1;
+
+/**
+ * Relevance threshold (0 = off) for embedding-matched virtual-tool expansion
+ * (`nikas.virtualToolsThreshold`, default 1). 0 disables expansion (all
+ * collapsible tools stay collapsed). When enabled, only tools scoring >= the
+ * threshold against the request query are presented to the model, keeping the
+ * DeepSeek tool list small and relevant (the token budget and the 128-tool API
+ * limit both benefit).
+ */
+export function getVirtualToolsThreshold(): number {
+    const v = getConfig().get<number>('virtualToolsThreshold');
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+    return DEFAULT_VIRTUAL_TOOL_THRESHOLD;
 }
 
 // --- Copilot Chat PDF patcher ---

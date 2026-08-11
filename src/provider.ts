@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge } from './config.js';
+import { augmentToolDescription, buildCopilotOperatingGuide } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -150,32 +151,71 @@ function estimateSegmentTokens(segment: string): number {
  * ~40% and caused premature truncation); converges within a few requests and
  * is clamped to a sane range.
  */
-let adaptiveCalibration = 1.1;
 const ADAPTIVE_ALPHA = 0.25;
 const ADAPTIVE_FLOOR = 0.8;
 const ADAPTIVE_CEIL = 4.0;
+/** Default calibration factor when no session context is available. */
+const DEFAULT_CALIBRATION = 1.1;
+/** Max per-session calibration factors kept in memory (bounds a small map). */
+const CALIBRATION_CACHE_MAX = 32;
+
+/**
+ * Adaptive calibration is inherently workload- and session-dependent: code,
+ * JSON and base64-heavy contexts are denser than prose, and the residual
+ * (real/estimated tokens) is learned from real API usage. Because the provider
+ * is a process-wide singleton shared by every open chat, a SINGLE scalar
+ * learned from ALL sessions would let one conversation's workload skew
+ * truncation/compaction timing for another — cross-session bleed (one chat's
+ * density drives another chat to truncate/compact too early, evicting early
+ * context). So we keep one factor PER session, keyed by the content-derived
+ * session key (see getSessionKeyFromDeepSeek), and fall back to the default
+ * when no session context is available (e.g. the standalone token-count meter,
+ * which receives a single message and cannot know its conversation).
+ */
+const calibrationBySession = new Map<string, number>();
+
+/** Calibration factor for a session (default when unknown or no key). */
+function getCalibration(sessionKey?: string): number {
+    if (sessionKey) {
+        const v = calibrationBySession.get(sessionKey);
+        if (v !== undefined) return v;
+    }
+    return DEFAULT_CALIBRATION;
+}
 
 /** Apply the learned calibration factor to a raw token estimate. */
-function applyCalibration(raw: number): number {
-    return Math.ceil(raw * adaptiveCalibration);
+function applyCalibration(raw: number, sessionKey?: string): number {
+    return Math.ceil(raw * getCalibration(sessionKey));
 }
 
 /**
  * Feed one ground-truth sample (API prompt_tokens vs our estimate of the
- * messages actually sent) into the adaptive calibration. Rejects garbage.
+ * messages actually sent) into the per-session adaptive calibration. Rejects
+ * garbage. Without a session key there is nothing to scope the observation to,
+ * so it is dropped rather than corrupting a shared scalar.
  */
-function observeCalibration(realTokens: number, estimatedTokens: number): void {
+function observeCalibration(
+    sessionKey: string | undefined,
+    realTokens: number,
+    estimatedTokens: number
+): void {
+    if (!sessionKey) return;
     if (!Number.isFinite(realTokens) || !Number.isFinite(estimatedTokens)) return;
     if (realTokens <= 0 || estimatedTokens <= 0) return;
     const ratio = realTokens / estimatedTokens;
     if (ratio <= 0 || ratio > 12) return;
-    adaptiveCalibration = Math.min(
+    const next = Math.min(
         ADAPTIVE_CEIL,
-        Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * adaptiveCalibration)
+        Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * getCalibration(sessionKey))
     );
+    calibrationBySession.set(sessionKey, next);
+    if (calibrationBySession.size > CALIBRATION_CACHE_MAX) {
+        const oldest = calibrationBySession.keys().next().value;
+        if (oldest !== undefined) calibrationBySession.delete(oldest);
+    }
 }
 
-function estimateMessageTokens(messages: DeepSeekMessage[]): number {
+function estimateMessageTokens(messages: DeepSeekMessage[], sessionKey?: string): number {
     let total = 0;
     for (const msg of messages) {
         // Base overhead per message (role + name + JSON framing, ~8 tokens).
@@ -209,7 +249,37 @@ function estimateMessageTokens(messages: DeepSeekMessage[]): number {
             total += estimateTextTokens(msg.reasoning_content);
         }
     }
-    return applyCalibration(total);
+    return applyCalibration(total, sessionKey);
+}
+
+/**
+ * Derive a stable per-conversation key from DeepSeek messages' CONTENT.
+ *
+ * VS Code passes no session/conversation id to the provider, so session state
+ * must be reconstructed in-band. Hashing the text of the earliest user turns
+ * distinguishes conversations (stable within a chat, distinct across chats)
+ * while staying cheap. This mirrors the vision pipeline's
+ * `sessionKeyFromMessages`, but operates on the DeepSeek format used here.
+ * It MUST be called on the ORIGINAL history, before compaction replaces the
+ * oldest user turns with a `[Session memory ...]` summary — otherwise the key
+ * would change after the first compaction and split one conversation into two
+ * calibration buckets.
+ */
+function getSessionKeyFromDeepSeek(messages: DeepSeekMessage[]): string {
+    let h = 0x811c9dc5;
+    let userTurns = 0;
+    for (const msg of messages) {
+        if (msg.role !== 'user') continue;
+        const text = messageText(msg);
+        for (let i = 0; i < text.length; i++) {
+            const c = text.charCodeAt(i);
+            h ^= c;
+            h = Math.imul(h, 0x01000193);
+        }
+        userTurns++;
+        if (userTurns >= 3) break;
+    }
+    return (h >>> 0).toString(36);
 }
 
 /**
@@ -296,11 +366,12 @@ function logContextHealth(
 function logUsageVsWindow(
     promptTokens: number,
     completionTokens: number,
-    estimatedSentTokens: number
+    estimatedSentTokens: number,
+    sessionKey?: string
 ): void {
     // Learn the real estimate→actual ratio for this workload so truncation
-    // timing stays honest (see observeCalibration).
-    observeCalibration(promptTokens, estimatedSentTokens);
+    // timing stays honest (see observeCalibration). Scoped to the session.
+    observeCalibration(sessionKey, promptTokens, estimatedSentTokens);
 
     const windowTokens = getContextWindowTokens();
     const fillPct = Math.round((promptTokens / windowTokens) * 100);
@@ -339,7 +410,7 @@ function logUsageVsWindow(
  * The repair runs on EVERY request (not just when truncating): a conversation
  * that already fits can still end mid-tool-call, and DeepSeek rejects that.
  */
-function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekMessage[] {
+function truncateMessagesToContextWindow(messages: DeepSeekMessage[], sessionKey?: string): DeepSeekMessage[] {
     const maxContextTokens = getContextWindowTokens();
     const maxOutputTokens = getMaxTokens();
     // Reserve space for output — input context = total - max_output - safety buffer.
@@ -366,7 +437,7 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
         }
     }
 
-    const estimatedTokens = estimateMessageTokens(messages);
+    const estimatedTokens = estimateMessageTokens(messages, sessionKey);
     const fillPercent = Math.round((estimatedTokens / availableInputTokens) * 100);
 
     if (estimatedTokens <= availableInputTokens) {
@@ -388,12 +459,12 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 
     // Need to truncate. Keep system message, then keep the most recent messages.
     const keptMessages: DeepSeekMessage[] = [];
-    let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages);
+    let tokenBudget = availableInputTokens - estimateMessageTokens(systemMessages, sessionKey);
     let oversizedKept = false;
 
     for (let i = otherMessages.length - 1; i >= 0; i--) {
         const msg = otherMessages[i];
-        const msgTokens = estimateMessageTokens([msg]);
+        const msgTokens = estimateMessageTokens([msg], sessionKey);
         if (msgTokens <= tokenBudget) {
             keptMessages.unshift(msg);
             tokenBudget -= msgTokens;
@@ -454,7 +525,7 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
     const finalSeq = ensureUserMessage(truncated, otherMessages);
 
     if (oversizedKept) {
-        const keptTokens = estimateMessageTokens(keptMessages);
+        const keptTokens = estimateMessageTokens(keptMessages, sessionKey);
         log.warn(
             `Oversized single message kept beyond budget ` +
             `(~${keptTokens.toLocaleString()} est tokens) — the window is ` +
@@ -505,7 +576,8 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[]): DeepSeekM
 async function maybeCompactContext(
     messages: DeepSeekMessage[],
     apiKey: string,
-    token?: vscode.CancellationToken
+    token: vscode.CancellationToken | undefined,
+    sessionKey?: string
 ): Promise<DeepSeekMessage[]> {
     const reliabilityLimit = getContextReliabilityLimit();
     if (reliabilityLimit <= 0) return messages;
@@ -522,8 +594,11 @@ async function maybeCompactContext(
     );
     const budgetCap = Math.min(reliabilityLimit, availableInput);
 
-    const estimated = estimateMessageTokens(messages);
-    if (estimated <= budgetCap) return messages;
+    const estimated = estimateMessageTokens(messages, sessionKey);
+    if (estimated <= budgetCap) {
+        log.verbose(`[compact] skipped: estimated ${estimated} <= budgetCap ${budgetCap}`);
+        return messages;
+    }
 
     const system = messages.length > 0 && messages[0].role === 'system' ? [messages[0]] : [];
     const others = messages.slice(system.length);
@@ -531,12 +606,15 @@ async function maybeCompactContext(
     // Keep the NEWEST content up to the compacted budget; the rest becomes the
     // old block to summarize. Reserve headroom for the summary message.
     const summaryOverhead = SUMMARY_MAX_TOKENS + 1024;
-    let keepBudget = budgetCap - estimateMessageTokens(system) - summaryOverhead;
-    if (keepBudget < 1024) return messages;
+    let keepBudget = budgetCap - estimateMessageTokens(system, sessionKey) - summaryOverhead;
+    if (keepBudget < 1024) {
+        log.verbose(`[compact] skipped: keepBudget ${keepBudget} < 1024 (system+overhead exceed budgetCap)`);
+        return messages;
+    }
 
     const keep: DeepSeekMessage[] = [];
     for (let i = others.length - 1; i >= 0; i--) {
-        const t = estimateMessageTokens([others[i]]);
+        const t = estimateMessageTokens([others[i]], sessionKey);
         if (t <= keepBudget) {
             keep.unshift(others[i]);
             keepBudget -= t;
@@ -559,12 +637,21 @@ async function maybeCompactContext(
                 break;
             }
         }
-        if (!snapped) return messages; // no clean user boundary — don't compact
+        if (!snapped) {
+            log.verbose(`[compact] skipped: no clean user boundary to snap to (keep[0] role=${keep[0]?.role}, splitIdx=${splitIdx})`);
+            return messages; // no clean user boundary — don't compact
+        }
     }
-    if (splitIdx <= 0) return messages; // everything fits in keep — no old block
+    if (splitIdx <= 0) {
+        log.verbose(`[compact] skipped: splitIdx ${splitIdx} <= 0 (everything fits in keep)`);
+        return messages; // everything fits in keep — no old block
+    }
 
     const oldBlock = others.slice(0, splitIdx);
-    if (oldBlock.length < MIN_COMPACT_BLOCK) return messages;
+    if (oldBlock.length < MIN_COMPACT_BLOCK) {
+        log.verbose(`[compact] skipped: oldBlock ${oldBlock.length} < MIN_COMPACT_BLOCK ${MIN_COMPACT_BLOCK}`);
+        return messages;
+    }
 
     // Build the compacted summary (cached; falls back to no-op on failure).
     let summary: string;
@@ -610,7 +697,7 @@ async function maybeCompactContext(
     // large summary or a snapped boundary pushed it over), let truncation
     // handle it — but this is now rare since the keep budget is capped at
     // availableInput above.
-    if (estimateMessageTokens(finalSeq) > availableInput) {
+    if (estimateMessageTokens(finalSeq, sessionKey) > availableInput) {
         log.verbose(`Compaction skipped — compacted result still exceeds the context window`);
         return messages;
     }
@@ -621,7 +708,7 @@ async function maybeCompactContext(
         `message(s) summarized into session memory; ${finalSeq.length} message(s) sent`
     );
     log.info(
-        `Context compacted: ~${estimated.toLocaleString()} → ~${estimateMessageTokens(finalSeq).toLocaleString()} ` +
+        `Context compacted: ~${estimated.toLocaleString()} → ~${estimateMessageTokens(finalSeq, sessionKey).toLocaleString()} ` +
         `est tokens (${oldBlock.length} messages summarized, limit ${reliabilityLimit.toLocaleString()})`
     );
 
@@ -942,18 +1029,27 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Convert resolved VS Code messages to DeepSeek format
         let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
 
+        // Per-conversation identity for adaptive calibration. Derived from the
+        // ORIGINAL history (before compaction replaces the oldest turns with a
+        // summary) so it stays stable across turns and distinct across chats.
+        const sessionKey = getSessionKeyFromDeepSeek(deepseekMessages);
+
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
         // to the configured window as a safety net.
-        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token);
+        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token, sessionKey);
 
         // Truncate messages to fit within the configured context window
-        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
+        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages, sessionKey);
 
-        // Optionally inject the agent directive (chat-completions path). See the
-        // Responses handler for the rationale — this reinforces persistent,
-        // action-first agent behavior in agent mode WITHOUT reducing the tool set.
-        if (getConcisePrompt() && deepseekMessages.length > 0) {
+        // Optionally inject the agent directive + Copilot operating guide
+        // (chat-completions path). The directive reinforces persistent,
+        // action-first agent behavior; the guide teaches DeepSeek how to use
+        // Copilot's native tools. Both WITHOUT reducing the tool set.
+        const systemSuffix =
+            (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
+            (getCopilotKnowledge() ? `\n\n${buildCopilotOperatingGuide()}` : '');
+        if (systemSuffix && deepseekMessages.length > 0) {
             const first = deepseekMessages[0];
             if (first.role === 'system') {
                 const base = typeof first.content === 'string'
@@ -961,12 +1057,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     : Array.isArray(first.content)
                         ? first.content.map(p => p.type === 'text' ? p.text : '').join('')
                         : '';
-                first.content = `${base}\n\n${CONCISE_PROMPT_DIRECTIVE}`;
+                first.content = `${base}${systemSuffix}`;
             } else {
-                // No leading system message — prepend one carrying the directive
+                // No leading system message — prepend one carrying the directives
                 // so the agent behavior is enforced even without a system turn
                 // (mirrors the Responses path, which always sets instructions).
-                deepseekMessages.unshift({ role: 'system', content: CONCISE_PROMPT_DIRECTIVE });
+                deepseekMessages.unshift({ role: 'system', content: systemSuffix.trim() });
             }
         }
 
@@ -975,7 +1071,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Ground-truth estimate of what we're about to send — fed back into
         // the adaptive calibration on completion so truncation timing stays
         // honest for this workload.
-        const estimatedSentTokens = estimateMessageTokens(deepseekMessages);
+        const estimatedSentTokens = estimateMessageTokens(deepseekMessages, sessionKey);
 
         // Build the API request
         const config = getConfig();
@@ -1141,7 +1237,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             )
                         );
                         // Monitor actual usage vs the configured window
-                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens);
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens, sessionKey);
                     }
 
                     // Inject replay marker if we described images this turn
@@ -1287,23 +1383,27 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Convert + truncate to DeepSeek message form, then to Responses input
         let deepseekMessages = await vscodeMessagesToDeepSeek(resolvedMessages);
+        // Per-conversation identity for adaptive calibration. Derived from the
+        // ORIGINAL history (before compaction) so it stays stable across turns
+        // and distinct across chats.
+        const sessionKey = getSessionKeyFromDeepSeek(deepseekMessages);
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
         // to the configured window as a safety net.
-        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token);
-        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages);
+        deepseekMessages = await maybeCompactContext(deepseekMessages, apiKey, token, sessionKey);
+        deepseekMessages = truncateMessagesToContextWindow(deepseekMessages, sessionKey);
         const { input, instructions } = deepseekMessagesToResponsesInput(deepseekMessages);
 
         // Ground-truth estimate of what we're about to send — fed back into
         // the adaptive calibration on completion (see chat handler rationale).
-        const estimatedSentTokens = estimateMessageTokens(deepseekMessages);
+        const estimatedSentTokens = estimateMessageTokens(deepseekMessages, sessionKey);
 
-        // Optionally inject the "no process narration" directive into the system
-        // prompt. In agent mode Flash tends to narrate its process as visible
-        // reply text ("Let me check...", "I'll search for..."), which reads as
-        // "spamming thinking as replies". This directive stops that WITHOUT
-        // reducing the tool set. (Controlled by nikas.concisePrompt.)
-        const conciseDirective = getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '';
+        // Optionally inject the "no process narration" directive + the Copilot
+        // operating guide into the instructions. (Controlled by nikas.concisePrompt
+        // and nikas.copilotKnowledge respectively.)
+        const conciseDirective =
+            (getConcisePrompt() ? `\n\n${CONCISE_PROMPT_DIRECTIVE}` : '') +
+            (getCopilotKnowledge() ? `\n\n${buildCopilotOperatingGuide()}` : '');
 
         // Thinking effort from the nikas.thinkingEffort setting. Invisible
         // internal helper requests are always forced to thinking off (see the
@@ -1345,7 +1445,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             ...reasoningParams,
         };
         if (instructions) request.instructions = instructions + conciseDirective;
-        else if (conciseDirective) request.instructions = CONCISE_PROMPT_DIRECTIVE;
+        else if (conciseDirective) request.instructions = conciseDirective.trim();
 
         if (options.tools && options.tools.length > 0) {
             request.tools = options.tools.map(mapResponsesTool);
@@ -1419,7 +1519,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             )
                         );
                         // Monitor actual usage vs the configured window
-                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens);
+                        logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens, sessionKey);
                     }
                     if (replayMarkerMetadata.visionText) {
                         progress.report(createReplayMarkerPart(replayMarkerMetadata));
@@ -1902,12 +2002,17 @@ const FALLBACK_SCHEMA = { type: 'object' as const, properties: {} };
 function mapTool(tool: vscode.LanguageModelChatTool): DeepSeekTool {
     const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
     const parameters = sanitizeSchema(rawSchema);
+    // Optionally enrich the description with Copilot knowledge so DeepSeek
+    // understands what the native tool does and when to use it.
+    const description = getCopilotKnowledge()
+        ? augmentToolDescription(tool.name, tool.description ?? '')
+        : tool.description ?? '';
 
     return {
         type: 'function',
         function: {
             name: tool.name,
-            description: tool.description ?? '',
+            description,
             parameters,
         },
     };
@@ -1978,13 +2083,16 @@ function cleanSchemaNode(node: unknown): Record<string, unknown> {
 function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponsesTool {
     const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
     const parameters = sanitizeSchema(rawSchema);
-
-    return {
+    const description = getCopilotKnowledge()
+        ? augmentToolDescription(tool.name, tool.description ?? '')
+        : tool.description ?? '';
+    const raw: DeepSeekResponsesTool = {
         type: 'function',
         name: tool.name,
-        description: tool.description ?? '',
+        description,
         parameters,
     };
+    return raw;
 }
 
 /**

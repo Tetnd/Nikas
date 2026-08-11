@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.37",
+  "version": "0.7.38",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -245,6 +245,17 @@
           "default": 256000,
           "minimum": 0,
           "description": "Reliability ceiling (real tokens) for the ACTIVE context. DeepSeek's coding quality degrades past ~220-260K real tokens (attention degradation / 'lost in the middle'), even on huge windows — so when the conversation crosses this limit the oldest messages are COMPACTED into a session-memory summary instead of being sent raw. The model keeps the newest turns verbatim (the active task) plus a compressed record of everything earlier: sessions can span far more work, reliably. On a window larger than this value (512K/950K) compaction fires at this limit; on a smaller window it fires at the window's edge, replacing blind truncation. Set 0 to disable compaction (pure truncation, exactly like pre-compaction Nikas)."
+        },
+        "nikas.virtualToolsThreshold": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "Relevance threshold (0 = off) for embedding-matched virtual-tool expansion. Stands in for Copilot Chat's chat.virtualTools.threshold but in units of the built-in lexical matcher (query terms matched in the tool name/description). 1 = at least one query term matched. Higher = fewer, more-confident matches; lower = more tools surfaced."
+        },
+        "nikas.copilotKnowledge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enrich what DeepSeek learns about Copilot's native tools. When enabled, DeepSeek receives richer per-tool descriptions (when to use each browser/dev-tools/terminal/file/search tool) plus a concise 'Copilot operating guide' injected into the system prompt, so it uses Copilot's native toolset more effectively while staying on Copilot's native agent loop. Costs ~180 tokens/request. Default false (Nika parity: pass Copilot's raw tool descriptions through unchanged)."
         },
         "nikas.visionModelKey": {
           "type": "string",

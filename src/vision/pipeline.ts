@@ -42,9 +42,12 @@ import { extractPdfTextWithPdfjs, isPdfMime } from '../pdf/extract.js';
  */
 
 // ── Agent-loop cache ──────────────────────────────────────────────────────
-// Keyed by truncated hash of the first image's raw bytes.
+// Keyed by (sessionKey + truncated hash of the first image's raw bytes).
 // The agent shifts message indices between loop iterations but the image
-// bytes stay the same, so content-hash keys work across calls.
+// bytes stay the same, so content-hash keys work across calls. sessionKey is
+// derived from the earliest user turns' text, scoping the cache to its own
+// conversation so one chat's descriptions (or failed-image sentinels) never
+// leak into another that happens to contain the same attachment bytes.
 //
 // Values:
 //   string (non-empty) — successful description, reuse it
@@ -66,16 +69,58 @@ function hashImageBytes(data: Uint8Array): string {
 
 function clearSessionCacheIfNewTurn(messages: readonly vscode.LanguageModelChatRequestMessage[]): void {
     // Track message count to detect direction changes, but do NOT clear the
-    // cache. The cache is keyed by image byte hash (FNV-1a), so it's
-    // collision-safe. Keeping it across turns prevents re-describing the
-    // same image when the user continues the conversation with the same
-    // attachment — fixing the "vision only works on 2nd attempt" bug.
+    // cache. The cache is keyed by (sessionKey, image byte hash), so it's
+    // scoped per conversation and collision-safe. Keeping it across turns
+    // prevents re-describing the same image when the user continues the
+    // conversation with the same attachment — fixing the "vision only works
+    // on 2nd attempt" bug.
     cachedMessageCount = messages.length;
 }
 
-function getCachedVisionByImage(imageParts: DataPartLike[]): string | undefined {
+/**
+ * Derive a stable per-conversation identity from the message history CONTENT.
+ *
+ * VS Code does not pass a session/conversation id to
+ * `provideLanguageModelChatResponse` — the provider is genuinely stateless
+ * (Copilot re-sends the full history every turn, and Nika's replay markers
+ * are the only in-band session state). So we reconstruct a conversation key
+ * from the text of the earliest user turns: within one chat that text is
+ * stable across turns (and across agent-loop iterations, which only shift
+ * part indices), while across different chats it differs. Scoping the image
+ * cache by this key keeps one conversation's descriptions — and its
+ * failed-image sentinels — from leaking into another that happens to contain
+ * the same attachment bytes.
+ */
+function sessionKeyFromMessages(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+): string {
+    let h = 0x811c9dc5;
+    let userTurns = 0;
+    for (const msg of messages) {
+        if (msg.role !== vscode.LanguageModelChatMessageRole.User) continue;
+        let text = '';
+        if (typeof msg.content === 'string') {
+            text = msg.content;
+        } else if (Array.isArray(msg.content)) {
+            text = msg.content
+                .filter((p): p is vscode.LanguageModelTextPart => p instanceof vscode.LanguageModelTextPart)
+                .map(p => p.value)
+                .join(' ');
+        }
+        for (let i = 0; i < text.length; i++) {
+            const c = text.charCodeAt(i);
+            h ^= c;
+            h = Math.imul(h, 0x01000193);
+        }
+        userTurns++;
+        if (userTurns >= 3) break;
+    }
+    return (h >>> 0).toString(36);
+}
+
+function getCachedVisionByImage(sessionKey: string, imageParts: DataPartLike[]): string | undefined {
     if (imageParts.length === 0) return undefined;
-    const key = hashImageBytes(imageParts[0].data);
+    const key = `${sessionKey}:${hashImageBytes(imageParts[0].data)}`;
     const cached = sessionImageCache.get(key);
     // '' (empty string) = failed sentinel — return as-is so the caller
     // can distinguish "cached as failed" from "not in cache" (undefined).
@@ -83,22 +128,22 @@ function getCachedVisionByImage(imageParts: DataPartLike[]): string | undefined 
 }
 
 /** Returns true if the image was previously cached as failed. */
-function isFailedImage(imageParts: DataPartLike[]): boolean {
+function isFailedImage(sessionKey: string, imageParts: DataPartLike[]): boolean {
     if (imageParts.length === 0) return false;
-    const key = hashImageBytes(imageParts[0].data);
+    const key = `${sessionKey}:${hashImageBytes(imageParts[0].data)}`;
     return sessionImageCache.get(key) === '';
 }
 
-function setCachedVisionByImage(imageParts: DataPartLike[], text: string): void {
+function setCachedVisionByImage(sessionKey: string, imageParts: DataPartLike[], text: string): void {
     if (imageParts.length === 0) return;
-    const key = hashImageBytes(imageParts[0].data);
+    const key = `${sessionKey}:${hashImageBytes(imageParts[0].data)}`;
     sessionImageCache.set(key, text);
 }
 
 /** Mark an image as failed so it's silently skipped on subsequent turns. */
-function markFailedImage(imageParts: DataPartLike[]): void {
+function markFailedImage(sessionKey: string, imageParts: DataPartLike[]): void {
     if (imageParts.length === 0) return;
-    const key = hashImageBytes(imageParts[0].data);
+    const key = `${sessionKey}:${hashImageBytes(imageParts[0].data)}`;
     sessionImageCache.set(key, ''); // empty string = failed sentinel
 }
 
@@ -127,6 +172,11 @@ export async function resolveImageMessages(
 
     // Clear the agent-loop cache on new user turns
     clearSessionCacheIfNewTurn(messages);
+
+    // Session identity for the image cache. Derived from the earliest user
+    // turns' content (VS Code passes no session id to the provider) so each
+    // conversation is cached independently.
+    const sessionKey = sessionKeyFromMessages(messages);
 
     // No images at all — pass through unchanged
     if (stats.inputImageParts === 0) {
@@ -185,7 +235,7 @@ export async function resolveImageMessages(
             // Check agent-loop cache first — same image might have been
             // described in a previous turn (e.g. the user re-asks with the
             // same attachment). Skip the API call if we have it cached.
-            const cachedText = getCachedVisionByImage(imageParts);
+            const cachedText = getCachedVisionByImage(sessionKey, imageParts);
             if (cachedText !== undefined) {
                 // Empty string = previously failed — drop images silently.
                 // (PDFs are NOT vision parts; they survive in nonImageParts
@@ -236,9 +286,9 @@ export async function resolveImageMessages(
             // unavailable we don't want to replay "[Image Description unavailable]"
             // on every subsequent turn. Instead, mark as failed so we skip silently.
             if (!visionResolution.failureNotice && !missingVisionProxy) {
-                setCachedVisionByImage(imageParts, visionText);
+                setCachedVisionByImage(sessionKey, imageParts, visionText);
             } else {
-                markFailedImage(imageParts);
+                markFailedImage(sessionKey, imageParts);
             }
 
             result.push(
@@ -254,7 +304,7 @@ export async function resolveImageMessages(
         // first, then fall back to dropping images. Non-image parts (text,
         // PDFs) always survive — PDFs reach the local text-extraction
         // fallback in vscodeMessagesToDeepSeek.
-        const cachedText = getCachedVisionByImage(imageParts);
+        const cachedText = getCachedVisionByImage(sessionKey, imageParts);
         if (cachedText !== undefined) {
             // Empty string = previously failed — drop images silently.
             if (cachedText === '') {

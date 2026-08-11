@@ -9,10 +9,17 @@ const STRUCTURED_PUNCT_THRESHOLD = 0.15;
 const BASE64_RUN_RE = /[A-Za-z0-9+/=]{32,}/g;
 const PUNCT_RE = /[^\p{L}\p{N}\s_]/gu;
 
-let adaptiveCalibration = 1.1;
 const ADAPTIVE_ALPHA = 0.25;
 const ADAPTIVE_FLOOR = 0.8;
 const ADAPTIVE_CEIL = 4.0;
+const DEFAULT_CALIBRATION = 1.1;
+const CALIBRATION_CACHE_MAX = 32;
+// Per-session adaptive calibration (mirrors src/provider.ts).
+const calibrationBySession = new Map();
+function getCalibration(sessionKey) {
+    if (sessionKey) { const v = calibrationBySession.get(sessionKey); if (v !== undefined) return v; }
+    return DEFAULT_CALIBRATION;
+}
 
 function estimateSegmentTokens(segment) {
     if (!segment) return 0;
@@ -37,17 +44,23 @@ function estimateTextTokens(text) {
     return total;
 }
 
-function applyCalibration(raw) { return Math.ceil(raw * adaptiveCalibration); }
+function applyCalibration(raw, sessionKey) { return Math.ceil(raw * getCalibration(sessionKey)); }
 
-function observeCalibration(realTokens, estimatedTokens) {
+function observeCalibration(sessionKey, realTokens, estimatedTokens) {
+    if (!sessionKey) return;
     if (!Number.isFinite(realTokens) || !Number.isFinite(estimatedTokens)) return;
     if (realTokens <= 0 || estimatedTokens <= 0) return;
     const ratio = realTokens / estimatedTokens;
     if (ratio <= 0 || ratio > 12) return;
-    adaptiveCalibration = Math.min(ADAPTIVE_CEIL, Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * adaptiveCalibration));
+    const next = Math.min(ADAPTIVE_CEIL, Math.max(ADAPTIVE_FLOOR, ADAPTIVE_ALPHA * ratio + (1 - ADAPTIVE_ALPHA) * getCalibration(sessionKey)));
+    calibrationBySession.set(sessionKey, next);
+    if (calibrationBySession.size > CALIBRATION_CACHE_MAX) {
+        const oldest = calibrationBySession.keys().next().value;
+        if (oldest !== undefined) calibrationBySession.delete(oldest);
+    }
 }
 
-function estimateMessageTokens(messages) {
+function estimateMessageTokens(messages, sessionKey) {
     let total = 0;
     for (const msg of messages) {
         total += 8;
@@ -72,7 +85,7 @@ function estimateMessageTokens(messages) {
         }
         if (msg.reasoning_content) total += estimateTextTokens(msg.reasoning_content);
     }
-    return applyCalibration(total);
+    return applyCalibration(total, sessionKey);
 }
 
 // ── FIXED logic (copy of src/provider.ts after repair) ──
@@ -709,26 +722,38 @@ console.log('\n=== 11. Oversized newest message kept ===');
 }
 
 // ── 12. Adaptive calibration from real API usage ──
-console.log('\n=== 12. Adaptive calibration ===');
+console.log('\n=== 12. Adaptive calibration (per-session) ===');
 {
     const check = (name, cond, detail) => {
         if (cond) { safe++; console.log(`  PASS ${name}`); }
         else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
     };
-    adaptiveCalibration = 1.0;
-    observeCalibration(1000, 500); // real/est = 2.0
-    check('calibration moves toward observed ratio', adaptiveCalibration > 1.0, `got ${adaptiveCalibration}`);
-    check('calibration bounded', adaptiveCalibration >= ADAPTIVE_FLOOR && adaptiveCalibration <= ADAPTIVE_CEIL, `got ${adaptiveCalibration}`);
-    for (let k = 0; k < 50; k++) observeCalibration(3000, 1000); // ratio 3.0
-    check('calibration converges toward 3.0', adaptiveCalibration >= 2.95 && adaptiveCalibration <= 3.05, `got ${adaptiveCalibration}`);
-    check('applyCalibration reflects factor', applyCalibration(1000) === 3000, `got ${applyCalibration(1000)}`);
-    // garbage samples rejected
-    adaptiveCalibration = 1.1;
-    observeCalibration(0, 0);
-    observeCalibration(-5, 10);
-    observeCalibration(100, -1);
-    observeCalibration(NaN, 100);
-    check('garbage samples rejected', adaptiveCalibration === 1.1, `got ${adaptiveCalibration}`);
+    const S = 'sessionA';
+    calibrationBySession.clear();
+    calibrationBySession.set(S, 1.0);
+    observeCalibration(S, 1000, 500); // real/est = 2.0
+    check('calibration moves toward observed ratio', getCalibration(S) > 1.0, `got ${getCalibration(S)}`);
+    check('calibration bounded', getCalibration(S) >= ADAPTIVE_FLOOR && getCalibration(S) <= ADAPTIVE_CEIL, `got ${getCalibration(S)}`);
+    for (let k = 0; k < 50; k++) observeCalibration(S, 3000, 1000); // ratio 3.0
+    check('calibration converges toward 3.0', getCalibration(S) >= 2.95 && getCalibration(S) <= 3.05, `got ${getCalibration(S)}`);
+    check('applyCalibration reflects factor', applyCalibration(1000, S) === 3000, `got ${applyCalibration(1000, S)}`);
+    // Cross-session isolation: session B must NOT inherit session A's factor.
+    check('new session uses default factor', getCalibration('sessionB') === DEFAULT_CALIBRATION, `got ${getCalibration('sessionB')}`);
+    observeCalibration('sessionB', 1000, 500); // session B ratio 2.0
+    check('session B factor independent of A', getCalibration('sessionB') > DEFAULT_CALIBRATION && getCalibration('sessionB') < 3.0, `got ${getCalibration('sessionB')}`);
+    check('session A unaffected by B', getCalibration(S) >= 2.95 && getCalibration(S) <= 3.05, `got ${getCalibration(S)}`);
+    check('applyCalibration no-key uses default', applyCalibration(1000) === Math.ceil(1000 * DEFAULT_CALIBRATION), `got ${applyCalibration(1000)}`);
+    // garbage samples rejected (per session)
+    calibrationBySession.set('sessionC', DEFAULT_CALIBRATION);
+    observeCalibration('sessionC', 0, 0);
+    observeCalibration('sessionC', -5, 10);
+    observeCalibration('sessionC', 100, -1);
+    observeCalibration('sessionC', NaN, 100);
+    check('garbage samples rejected', getCalibration('sessionC') === DEFAULT_CALIBRATION, `got ${getCalibration('sessionC')}`);
+    // observation without a session key is dropped (no global corruption)
+    const before = getCalibration('sessionD');
+    observeCalibration(undefined, 10000, 1000);
+    check('no-key observation is dropped', getCalibration('sessionD') === before, `got ${getCalibration('sessionD')}`);
 }
 
 // ── 13. API ceiling clamp ──
