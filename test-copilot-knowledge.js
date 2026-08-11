@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 1400 chars)', guide.length < 1400, `got ${guide.length}`);
+    check('guide is concise (< 2200 chars)', guide.length < 2200, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -168,7 +168,15 @@ console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
     check('guide has runTests guidance', guide.includes('runTests tool'));
     check('guide says root cause not symptoms', guide.includes('root cause, not symptoms'));
     check('guide says no codeblocks', guide.includes('NEVER print codeblocks'));
-    check('guide stays under 1400 chars', guide.length < 1400, `got ${guide.length}`);
+    // grok-build-derived discipline (action safety + tool calling + output).
+    check('guide has action-safety rule', guide.includes('Action safety'));
+    check('guide confirms destructive actions', guide.includes('confirm destructive'));
+    check('guide one-approval-not-blank-check', guide.includes('blank check'));
+    check('guide investigates unexpected state', guide.includes('unexpected state'));
+    check('guide uses specialized tools over bash', guide.includes('specialized tools over bash'));
+    check('guide no bash echo to communicate', guide.includes('NEVER use bash echo'));
+    check('guide output proportional to complexity', guide.includes('proportional to task complexity'));
+    check('guide stays under 2200 chars', guide.length < 2200, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));

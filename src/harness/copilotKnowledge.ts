@@ -804,6 +804,12 @@ export function buildCopilotOperatingGuide(): string {
         '6. Test frequently — run tests after each change; prefer the runTests tool over hand-typed commands.\n' +
         '7. Iterate until the root cause is fixed and all tests pass.\n' +
         '8. Reflect and validate — verify end-to-end and add tests, since hidden tests must also pass.\n' +
+        'Action safety: weigh each action by how easily it is undone. Local reversible work (edit, test) is fine freely; ' +
+        'confirm destructive, irreversible, or shared-state actions (deletes, force-push, publishing). One approval is not a blank check. ' +
+        'If you find unexpected state, investigate before deleting or overwriting.\n' +
+        'Tool discipline: use specialized tools over bash when possible (read instead of cat/tail, edit instead of sed/awk); ' +
+        'reserve bash for real system commands. NEVER use bash echo to communicate — put messages in your response text.\n' +
+        'Output: concise but clear, proportional to task complexity. Use markdown (bullets, inline code, small tables) where it helps.\n' +
         '• Do not repeat work already done; continue from where you left off.\n' +
         '• For live UI/web pages: open/read the page, interact, then screenshot to confirm the change.'
     );
