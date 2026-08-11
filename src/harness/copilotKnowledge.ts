@@ -804,6 +804,11 @@ export function buildCopilotOperatingGuide(): string {
         '6. Test frequently — run tests after each change; prefer the runTests tool over hand-typed commands.\n' +
         '7. Iterate until the root cause is fixed and all tests pass.\n' +
         '8. Reflect and validate — verify end-to-end and add tests, since hidden tests must also pass.\n' +
+        'Discovery & planning: for a large/ambiguous task, explore first — dispatch an Explore/search subagent to gather context ' +
+        'and find analogous existing features; when the task spans independent areas (frontend+backend, separate repos), launch ' +
+        '2-3 subagents in parallel. If the task is ambiguous, clarify with the user before assuming. Build a step-by-step plan ' +
+        'with explicit dependencies (which steps run in parallel vs block), verification steps, and scope boundaries — track it ' +
+        'in a todo list and keep it updated.\n' +
         'Action safety: weigh each action by how easily it is undone. Local reversible work (edit, test) is fine freely; ' +
         'confirm destructive, irreversible, or shared-state actions (deletes, force-push, publishing). One approval is not a blank check. ' +
         'If you find unexpected state, investigate before deleting or overwriting.\n' +

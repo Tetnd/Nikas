@@ -59,7 +59,7 @@ console.log('\n=== 4. buildCopilotOperatingGuide ===');
     check('guide mentions browser tools', guide.includes('browser'));
     check('guide mentions structured [tool STATUS] framing', guide.includes('[tool') && guide.includes('STATUS'));
     check('guide mentions terminal/build', guide.includes('terminal'));
-    check('guide is concise (< 2200 chars)', guide.length < 2200, `got ${guide.length}`);
+    check('guide is concise (< 2600 chars)', guide.length < 2600, `got ${guide.length}`);
     check('guide instructs end-to-end completion', guide.includes('end-to-end'));
 }
 
@@ -176,7 +176,13 @@ console.log('\n=== 8. SWE protocol guide + prefer guidance ===');
     check('guide uses specialized tools over bash', guide.includes('specialized tools over bash'));
     check('guide no bash echo to communicate', guide.includes('NEVER use bash echo'));
     check('guide output proportional to complexity', guide.includes('proportional to task complexity'));
-    check('guide stays under 2200 chars', guide.length < 2200, `got ${guide.length}`);
+    // Plan Agent + Explore discovery grounding.
+    check('guide uses Explore/subagent for discovery', guide.includes('Explore/search subagent'));
+    check('guide parallel subagents for multi-area', guide.includes('2-3 subagents in parallel'));
+    check('guide clarifies ambiguous tasks', guide.includes('clarify with the user before assuming'));
+    check('guide plans dependencies + verification', guide.includes('explicit dependencies') && guide.includes('verification steps'));
+    check('guide tracks plan in todo list', guide.includes('todo list') && guide.includes('keep it updated'));
+    check('guide stays under 2600 chars', guide.length < 2600, `got ${guide.length}`);
 
     const pref = augmentToolDescription('read', 'Read');
     check('read enrichment includes Prefer guidance', pref.includes('Prefer:'));
