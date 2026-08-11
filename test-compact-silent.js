@@ -56,9 +56,12 @@ function filterConversation(messages) {
 }
 
 // ── Mirrors of src/extension.ts runSilentCompact (command sequence) ──
-// The stock Copilot button only did open with /compact; the fix also submits.
+// chat.open {query, preserveInput:true} already auto-submits /compact (VS Code
+// calls acceptInput(query)), so the button does NOT need a separate submit.
+// A redundant workbench.action.chat.submit would double-fire (it has a
+// "no request in progress" precondition) and break the button.
 function runSilentCompact(cmds, failures = new Set()) {
-    // Step 1: open chat with /compact
+    // Step 1: open chat with /compact (this auto-submits).
     const openOk = !failures.has('workbench.action.chat.open');
     if (!openOk) {
         // Fall back: retry open once (stock behavior).
@@ -66,12 +69,8 @@ function runSilentCompact(cmds, failures = new Set()) {
         return { submitted: false };
     }
     cmds.push('open');
-    // Step 2: submit
-    if (failures.has('workbench.action.chat.submit')) {
-        cmds.push('open-fallback');
-        return { submitted: false };
-    }
-    cmds.push('submit');
+    // No separate submit step — chat.open with query+preserveInput already
+    // submitted /compact. A second submit would double-fire.
     return { submitted: true };
 }
 
@@ -150,21 +149,28 @@ function sectionFilter() {
     eq(filterConversation(normal).length, 2, 'normal request unchanged');
 }
 
-// ── 3. runSilentCompact auto-submits (no manual typing) ──
+// ── 3. runSilentCompact auto-submits (no manual typing, no double-submit) ──
 function sectionButton() {
-    // Happy path: open + submit.
+    // Happy path: chat.open with query+preserveInput auto-submits /compact.
+    // The button does NOT issue a separate chat.submit (would double-fire).
     {
         const cmds = [];
         const r = runSilentCompact(cmds);
-        eq(cmds.join(','), 'open,submit', 'button opens chat with /compact then submits');
-        ok(r.submitted, 'button submits');
+        eq(cmds.join(','), 'open', 'button opens chat with /compact (auto-submits, no separate submit)');
+        ok(r.submitted, 'button submits via chat.open auto-submit');
     }
-    // Submit failure → falls back to open (stock behavior, still useful).
+    // Open failure → falls back to open (stock behavior, still useful).
     {
         const cmds = [];
-        const r = runSilentCompact(cmds, new Set(['workbench.action.chat.submit']));
-        ok(!r.submitted, 'submit failure not reported as submitted');
-        ok(cmds.includes('open-fallback'), 'falls back to open on submit failure');
+        const r = runSilentCompact(cmds, new Set(['workbench.action.chat.open']));
+        ok(!r.submitted, 'open failure not reported as submitted');
+        ok(cmds.includes('open-fallback'), 'falls back to open on open failure');
+    }
+    // Guard: the button must never issue a second submit after chat.open.
+    {
+        const cmds = [];
+        runSilentCompact(cmds);
+        ok(!cmds.includes('submit'), 'no redundant workbench.action.chat.submit (double-submit guard)');
     }
 }
 

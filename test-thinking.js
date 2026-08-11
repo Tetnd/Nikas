@@ -64,6 +64,43 @@ function buildResponsesThinkingParams(effort) {
     return { reasoning: { effort } };
 }
 
+// v0.7.67: per-agent effort (nikas.agentEfforts). Mirrors src/routing.ts.
+// - DEFAULT_AGENT_EFFORTS: plan→max, explore→low, inline→low, helper→low
+//   (main absent → uses configured effort).
+// - requestKindToAgentKind maps a RequestKind to its AgentKind.
+// - resolveAgentEffort(requestKind, baseEffort): helper-off first (when
+//   helperThinkingOff), then agent-effort override, then default.
+const DEFAULT_AGENT_EFFORTS = { plan: 'max', explore: 'low', inline: 'low', helper: 'low' };
+const AGENT_KIND_BY_REQUEST = {
+    'todo-tracker': 'helper', 'prompt-categorizer': 'helper', 'settings-resolver': 'helper',
+    'chat-title': 'helper', 'inline-progress-message': 'helper', 'git-branch-name': 'helper',
+    'git-commit-message': 'helper', 'rename-suggestions': 'helper',
+    'plan-agent': 'plan', 'explore-agent': 'explore', 'inline-agent': 'inline',
+    'main-agent': 'main', 'unknown': 'main',
+};
+const INTERNAL_HELPER_KINDS_ARRAY = ['todo-tracker', 'prompt-categorizer', 'settings-resolver', 'chat-title',
+    'inline-progress-message', 'git-branch-name', 'git-commit-message', 'rename-suggestions'];
+function requestKindToAgentKind(kind) { return AGENT_KIND_BY_REQUEST[kind] ?? 'main'; }
+function getAgentEffort(kind, configured) {
+    const merged = { ...DEFAULT_AGENT_EFFORTS, ...(configured ?? {}) };
+    return merged[kind];
+}
+function resolveAgentEffort(requestKind, baseEffort, helperThinkingOff, agentEfforts) {
+    if (helperThinkingOff && INTERNAL_HELPER_KINDS_ARRAY.includes(requestKind)) {
+        return { effort: 'off', source: 'helper-off' };
+    }
+    const override = getAgentEffort(requestKindToAgentKind(requestKind), agentEfforts);
+    if (override) return { effort: override, source: 'agent-effort' };
+    return { effort: baseEffort, source: 'default' };
+}
+// Mirrors classifyProviderRequest's inline heuristic.
+const AGENT_HALLMARKS = ['open_browser_page', 'run_in_terminal', 'runInTerminal', 'browser', 'search', 'grep_search'];
+function isLikelyInline(toolNames) {
+    if (toolNames.length === 0) return true;
+    const hasHallmark = AGENT_HALLMARKS.some(t => toolNames.includes(t));
+    return !hasHallmark && toolNames.length <= 4;
+}
+
 function boostedTokens(_thinkingEnabled, effectiveMaxTokens, _effort) {
     // NOTE (2026-08-09): the boost was REMOVED — the configured maxTokens is
     // sent as-is for every effort level, thinking on or off.
@@ -159,6 +196,41 @@ const ch = chatRequest('high', 8192);
 check('chat high request enables without boost', ch.max_tokens === 8192 && ch.thinking.type === 'enabled' && ch.reasoning_effort === 'high');
 const rr = responsesRequest('max', 8192);
 check('responses max request enables without boost', rr.max_output_tokens === 8192 && rr.reasoning.effort === 'max');
+
+console.log('\n=== 6. Per-agent effort (nikas.agentEfforts, v0.7.67) ===');
+// Default map: plan→max, explore→low, inline→low, helper→low, main→(unset).
+check('agent kind map: plan → plan', requestKindToAgentKind('plan-agent') === 'plan');
+check('agent kind map: explore → explore', requestKindToAgentKind('explore-agent') === 'explore');
+check('agent kind map: inline → inline', requestKindToAgentKind('inline-agent') === 'inline');
+check('agent kind map: helper → helper', requestKindToAgentKind('chat-title') === 'helper');
+check('agent kind map: main → main', requestKindToAgentKind('main-agent') === 'main');
+check('agent kind map: unknown → main', requestKindToAgentKind('unknown') === 'main');
+
+// With defaults + helperThinkingOff=false: Plan=max, Explore=low, Inline=low, helper=low.
+check('plan default → max (agent-effort)', resolveAgentEffort('plan-agent', 'low', false, undefined).effort === 'max');
+check('explore default → low (agent-effort)', resolveAgentEffort('explore-agent', 'max', false, undefined).effort === 'low');
+check('inline default → low (agent-effort)', resolveAgentEffort('inline-agent', 'max', false, undefined).effort === 'low');
+check('helper default → low (agent-effort)', resolveAgentEffort('chat-title', 'max', false, undefined).effort === 'low');
+check('main default → configured low (no override)', resolveAgentEffort('main-agent', 'low', false, undefined).effort === 'low');
+check('main default → configured max (no override)', resolveAgentEffort('main-agent', 'max', false, undefined).effort === 'max');
+
+// User override: set plan→low explicitly.
+check('user override plan→low', resolveAgentEffort('plan-agent', 'low', false, { plan: 'low' }).effort === 'low');
+check('user override explore→off', resolveAgentEffort('explore-agent', 'low', false, { explore: 'off' }).effort === 'off');
+check('user override main→max', resolveAgentEffort('main-agent', 'low', false, { main: 'max' }).effort === 'max');
+
+// helperThinkingOff=true still wins for internal helpers (helper-off source).
+check('helperThinkingOff on → helper off (helper-off source)',
+    resolveAgentEffort('chat-title', 'max', true, undefined).source === 'helper-off'
+    && resolveAgentEffort('chat-title', 'max', true, undefined).effort === 'off');
+check('helperThinkingOff on → plan still max (not helper)',
+    resolveAgentEffort('plan-agent', 'low', true, undefined).effort === 'max');
+
+// Inline heuristic mirrors classifyProviderRequest.
+check('inline: no tools → inline', isLikelyInline([]) === true);
+check('inline: 2 edit tools, no hallmark → inline', isLikelyInline(['edit', 'read']) === true);
+check('not inline: browser present → false', isLikelyInline(['edit', 'open_browser_page', 'search', 'runInTerminal', 'grep_search', 'read']) === false);
+check('not inline: many tools, no hallmark → false (too many)', isLikelyInline(['a', 'b', 'c', 'd', 'e', 'f']) === false);
 
 console.log('');
 console.log(`===== ${pass} passed, ${fail} failed =====`);

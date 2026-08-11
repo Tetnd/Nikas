@@ -177,14 +177,47 @@ export function getConcisePrompt(): boolean {
  * messages, settings resolver, todo tracker, categorize_prompt, ...) should
  * run with thinking FORCED OFF regardless of `nikas.thinkingEffort`.
  *
- * - true  (default) — helpers never burn thinking tokens; the configured
- *   effort still applies to the real agent (the executor). This is the
- *   "executor max, helpers none" setup.
- * - false — Nika parity: every request (including helpers) runs at the
- *   configured thinking effort, exactly like upstream Nika (no routing).
+ * - false (default) — Nika parity: every request (including helpers) runs at
+ *   the configured thinking effort, exactly like upstream Nika (no routing).
+ * - true — helpers never burn thinking tokens; the configured effort still
+ *   applies to the real agent (the executor). "executor max, helpers none".
  */
 export function getHelperThinkingOff(): boolean {
-    return getConfig().get<boolean>('helperThinkingOff') ?? true;
+    return getConfig().get<boolean>('helperThinkingOff') ?? false;
+}
+
+export type AgentKind = 'main' | 'plan' | 'explore' | 'inline' | 'helper';
+
+/**
+ * Per-agent thinking-effort overrides, keyed by agent kind.
+ *
+ * Lets the user run different Copilot agents at different reasoning efforts:
+ * e.g. give the Plan agent max reasoning (it just plans), keep Explore/Inline
+ * light, and reserve the configured `nikas.thinkingEffort` for the main
+ * coding agent. Only entries explicitly present are applied; absent kinds fall
+ * back to the normal effort resolution (configured effort, minus helper
+ * forcing). Valid effort values: 'off' | 'low' | 'high' | 'max'.
+ */
+export type AgentEfforts = Partial<Record<AgentKind, ThinkingEffort>>;
+
+const DEFAULT_AGENT_EFFORTS: AgentEfforts = {
+    plan: 'max',
+    explore: 'low',
+    inline: 'low',
+    helper: 'low',
+    // main intentionally absent → uses the configured nikas.thinkingEffort.
+};
+
+/**
+ * Resolve the per-agent effort override for a given agent kind, or `undefined`
+ * if none is configured (caller falls back to normal effort resolution).
+ * `inline` defaults to `main`'s behaviour when not explicitly set (both share
+ * the same system prompt), so the effective value is what callers use.
+ */
+export function getAgentEffort(kind: AgentKind): ThinkingEffort | undefined {
+    const configured = getConfig().get<AgentEfforts>('agentEfforts');
+    const merged: AgentEfforts = { ...DEFAULT_AGENT_EFFORTS, ...(configured ?? {}) };
+    return merged[kind];
 }
 
 /**

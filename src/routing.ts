@@ -1,24 +1,26 @@
 import * as vscode from 'vscode';
-import { getHelperThinkingOff } from './config.js';
+import { getAgentEffort, AgentKind, getHelperThinkingOff, ThinkingEffort } from './config.js';
 
 /**
- * Request-kind classifier (lean re-add, v0.7.31).
+ * Request-kind classifier (lean re-add, v0.7.31, extended v0.7.67 for
+ * per-agent effort).
  *
- * Copilot fires many INTERNAL (invisible) requests against the selected
- * model: chat titles, git commit messages, branch names, rename suggestions,
- * the settings resolver, the prompt categorizer, background todo tracking,
- * etc. These produce no user-visible value, so running them at `max` thinking
- * effort is pure latency + cost with nothing to show.
+ * Copilot fires many different request shapes against the selected model:
+ * - INTERNAL (invisible) helper requests: chat titles, git commit messages,
+ *   branch names, rename suggestions, the settings resolver, the prompt
+ *   categorizer, background todo tracking, etc. These produce no user-visible
+ *   value, so deep reasoning on them is pure latency + cost.
+ * - Agent sub-requests: the Plan agent, the Explore/ASK subagent, and inline
+ *   chat. Each is detectable by its system prompt / tool signature and can
+ *   carry its own thinking effort via `nikas.agentEfforts`.
  *
  * History:
  * - v0.7.27 removed the full Vizards routing (gated behind a setting, default
  *   OFF, for Nika-parity) along with the tool machinery.
  * - v0.7.31 re-added a LEAN version, default-on, gated behind
- *   `nikas.helperThinkingOff` (v0.7.32). When ON: the user's configured
- *   thinking effort still applies to the real (executor) agent — the model
- *   that picks tools and does the actual work — but invisible helper
- *   requests are always forced to thinking `off`. When OFF: Nika parity —
- *   every request runs at the configured effort (no routing).
+ *   `nikas.helperThinkingOff` (v0.7.32).
+ * - v0.7.66 flipped `nikas.helperThinkingOff` default to false (Nika parity).
+ * - v0.7.67 added `nikas.agentEfforts` for per-agent thinking effort.
  */
 export type RequestKind =
     | 'todo-tracker'
@@ -29,6 +31,9 @@ export type RequestKind =
     | 'git-branch-name'
     | 'git-commit-message'
     | 'rename-suggestions'
+    | 'plan-agent'
+    | 'explore-agent'
+    | 'inline-agent'
     | 'main-agent'
     | 'unknown';
 
@@ -47,8 +52,10 @@ const GIT_COMMIT_MESSAGE_PREFIX =
     'You are an AI programming assistant, helping a software developer to come with the best git commit message';
 const RENAME_SUGGESTIONS_PREFIX = 'You are a distinguished software engineer';
 const MAIN_AGENT_PREFIX = 'You are an expert AI programming assistant';
+const PLAN_AGENT_PREFIX = 'You are a PLANNING AGENT';
+const EXPLORE_AGENT_PREFIX = 'You are an ASK AGENT';
 
-/** Internal helper kinds that produce no user-visible value — never burn thinking tokens on these. */
+/** Internal helper kinds that produce no user-visible value. */
 const INTERNAL_HELPER_KINDS = new Set<RequestKind>([
     'todo-tracker',
     'prompt-categorizer',
@@ -61,15 +68,50 @@ const INTERNAL_HELPER_KINDS = new Set<RequestKind>([
 ]);
 
 /**
+ * Map a RequestKind to its AgentKind for per-agent effort lookup.
+ * - Internal helpers → 'helper'
+ * - Plan agent → 'plan'
+ * - Explore/ASK subagent → 'explore'
+ * - inline → 'inline'
+ * - main / unknown → 'main'
+ */
+export function requestKindToAgentKind(kind: RequestKind): AgentKind {
+    if (INTERNAL_HELPER_KINDS.has(kind)) return 'helper';
+    if (kind === 'plan-agent') return 'plan';
+    if (kind === 'explore-agent') return 'explore';
+    if (kind === 'inline-agent') return 'inline';
+    return 'main';
+}
+
+/**
  * Whether this request kind is an invisible internal helper that should run
  * with thinking FORCED OFF — gated behind `nikas.helperThinkingOff`.
- *
- * - enabled (default): helpers always run at thinking off; the configured
- *   effort still applies to everything else (the real agent / executor).
- * - disabled: Nika parity — helpers run at the configured effort, no routing.
  */
 export function shouldForceHelperThinkingOff(requestKind: RequestKind): boolean {
     return getHelperThinkingOff() && INTERNAL_HELPER_KINDS.has(requestKind);
+}
+
+/**
+ * Resolve the final thinking effort for a request kind.
+ *
+ * Priority:
+ *  1. If helper forcing is on AND it's an internal helper → 'off'.
+ *  2. Else if the per-agent effort map (`nikas.agentEfforts`) has an override
+ *     for this request's agent kind → that effort.
+ *  3. Else → the caller's normal effort resolution (configured effort).
+ */
+export function resolveAgentEffort(
+    requestKind: RequestKind,
+    baseEffort: ThinkingEffort,
+): { effort: ThinkingEffort; source: 'helper-off' | 'agent-effort' | 'default' } {
+    if (shouldForceHelperThinkingOff(requestKind)) {
+        return { effort: 'off', source: 'helper-off' };
+    }
+    const override = getAgentEffort(requestKindToAgentKind(requestKind));
+    if (override) {
+        return { effort: override, source: 'agent-effort' };
+    }
+    return { effort: baseEffort, source: 'default' };
 }
 
 /**
@@ -107,10 +149,38 @@ export function classifyProviderRequest(input: {
     if (firstText.startsWith(RENAME_SUGGESTIONS_PREFIX)) {
         return 'rename-suggestions';
     }
+    if (firstText.startsWith(PLAN_AGENT_PREFIX)) {
+        return 'plan-agent';
+    }
+    if (firstText.startsWith(EXPLORE_AGENT_PREFIX)) {
+        return 'explore-agent';
+    }
+    // Inline chat shares the main agent's system prompt but runs with a
+    // RESTRICTED tool set — inline requests don't carry the full agent
+    // browser/terminal/search toolset. Heuristic: a "main-style" prompt with a
+    // small/empty tool list is treated as inline.
     if (firstText.startsWith(MAIN_AGENT_PREFIX) || firstText.includes('<skills>')) {
+        if (isLikelyInline(toolNames)) {
+            return 'inline-agent';
+        }
         return 'main-agent';
     }
     return 'unknown';
+}
+
+/**
+ * Heuristic: inline chat requests run with a much smaller tool set than the
+ * full agent mode. If we see the main-style prompt but only a small or empty
+ * set of (non-browser, non-terminal, non-search) tools, treat it as inline.
+ */
+function isLikelyInline(toolNames: readonly string[]): boolean {
+    if (toolNames.length === 0) return true;
+    // Full agent mode always exposes these; their absence strongly implies inline.
+    const agentHallmarks = ['open_browser_page', 'run_in_terminal', 'runInTerminal', 'browser', 'search', 'grep_search'];
+    const hasHallmark = agentHallmarks.some(t => toolNames.includes(t));
+    // Inline is still allowed a few edit/read tools, so only call it inline
+    // when the set is genuinely small AND lacks agent hallmarks.
+    return !hasHallmark && toolNames.length <= 4;
 }
 
 function findFirstText(messages: readonly vscode.LanguageModelChatRequestMessage[]): string {

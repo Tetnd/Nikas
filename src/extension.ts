@@ -338,25 +338,29 @@ async function showFirstRunWelcome(context: vscode.ExtensionContext): Promise<vo
 // ---------------------------------------------------------------------------
 
 /**
- * Trigger Copilot's conversation compaction WITHOUT requiring the user to type
- * `/compact` in the chat. Copilot's stock "Compact Conversation" button only
- * opens the chat input with `/compact` pre-typed (it never submits it), so the
- * user had to press Enter / type it manually. We instead submit the `/compact`
- * command right away; the resulting compaction request is then handled silently
- * by the provider (see isCopilotCompactRequest / handleCopilotCompactRequest in
- * provider.ts), matching "silently like the auto compact".
+ * Trigger Copilot's conversation compaction SILENTLY. In VS Code,
+ * `workbench.action.chat.open {query, preserveInput:true}` already auto-submits
+ * the query (its implementation calls the chat widget's `acceptInput(query,
+ * {preserveInput:true})`, which sends `/compact` — it does NOT merely pre-type
+ * it). So we only need the single `chat.open` call.
+ *
+ * IMPORTANT: do NOT add a `workbench.action.chat.submit` after it. That command
+ * has preconditions (`inputHasSendableContent` + no request in progress), and
+ * the `chat.open` above already started the compaction request — the second
+ * submit would double-fire or no-op and break the button. The resulting
+ * compaction request is handled silently by the provider (see
+ * isCopilotCompactRequest / handleCopilotCompactRequest in provider.ts),
+ * matching "silently like the auto compact".
  */
 async function runSilentCompact(): Promise<void> {
     try {
-        // Open the chat with the /compact command pre-typed, then submit it
-        // immediately so the user doesn't have to press Enter.
+        // chat.open with query + preserveInput:true auto-submits /compact.
         await vscode.commands.executeCommand('workbench.action.chat.open', {
             query: '/compact',
             preserveInput: true,
         });
-        await vscode.commands.executeCommand('workbench.action.chat.submit');
     } catch (err) {
-        log.warn(`Silent compact failed to auto-submit: ${err instanceof Error ? err.message : String(err)}`);
+        log.warn(`Silent compact failed to open: ${err instanceof Error ? err.message : String(err)}`);
         // Fall back to the stock behavior (open chat with /compact typed) so
         // the button still does something useful.
         await vscode.commands.executeCommand('workbench.action.chat.open', {
@@ -787,10 +791,13 @@ async function agentModelAssignments(): Promise<void> {
 /**
  * Recommended Copilot agent model assignments.
  *
- * Matches the maintainer's working configuration: Explore, Plan, and Inline
- * chat use DeepSeek V4 Flash Responses (nikas/deepseek-v4-flash-responses) —
- * agent-native tooling with server-side web search. Applies to fresh
- * installs via applyDefaultAgentModels() and to the one-click command
+ * Matches the maintainer's working configuration: the main (coding) agent,
+ * Explore, Plan, and Inline chat all use DeepSeek V4 Flash Responses
+ * (nikas/deepseek-v4-flash-responses) — agent-native tooling with server-side
+ * web search. `chat.defaultModel` is the main coding agent's default (resolved
+ * by the core chat model-selection controller, same provider path as the
+ * agent-specific `chat.*.defaultModel` settings). Applies to fresh installs
+ * via applyDefaultAgentModels() and to the one-click command
  * setFlashForAllAgents().
  *
  * NOTE: chat.utilityModel / chat.utilitySmallModel are intentionally NOT in
@@ -800,6 +807,7 @@ async function agentModelAssignments(): Promise<void> {
  * silently falling back to the default. Utility flows keep their default.
  */
 const RECOMMENDED_AGENT_MODELS = [
+    { key: 'chat.defaultModel', label: 'Main (Coding) Agent', model: 'nikas/deepseek-v4-flash-responses' },
     { key: 'chat.exploreAgent.defaultModel', label: 'Explore Agent', model: 'nikas/deepseek-v4-flash-responses' },
     { key: 'chat.planAgent.defaultModel', label: 'Plan Agent', model: 'nikas/deepseek-v4-flash-responses' },
     { key: 'inlineChat.defaultModel', label: 'Inline Chat', model: 'nikas/deepseek-v4-flash-responses' },

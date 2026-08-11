@@ -8,7 +8,7 @@ import { safeStringify } from './api/sanitize.js';
 import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } from './vision/pipeline.js';
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
-import { classifyProviderRequest, shouldForceHelperThinkingOff } from './routing.js';
+import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
 import { isAgentInstructionsActive } from './agentInstructions.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
@@ -1288,18 +1288,23 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // thinking off — they produce no user-visible value, so reasoning on
         // them is pure latency + cost. The chosen effort still applies to the
         // real agent (the executor that picks tools and does the work).
+        // Per-agent overrides (nikas.agentEfforts) let Plan/Explore/Inline/
+        // helpers carry their own effort.
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
-        const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
-        const thinkingEffort = forcedHelperOff ? 'off' : getRequestThinkingEffort(options);
+        const baseEffort = getRequestThinkingEffort(options);
+        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (forcedHelperOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+            (effortSource === 'helper-off' ? ` (internal helper: ${requestKind} — forced off)` : '') +
+            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
         );
-        if (forcedHelperOff) {
+        if (effortSource === 'helper-off') {
             log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
+        } else if (effortSource === 'agent-effort') {
+            log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
         }
 
         // When thinking mode is enabled, ensure enough headroom for reasoning
@@ -1611,10 +1616,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Thinking effort from the nikas.thinkingEffort setting. Invisible
         // internal helper requests are always forced to thinking off (see the
-        // chat-completions handler for rationale).
+        // chat-completions handler for rationale). Per-agent overrides
+        // (nikas.agentEfforts) apply too.
         const requestKind = classifyProviderRequest({ messages, tools: options.tools });
-        const forcedHelperOff = shouldForceHelperThinkingOff(requestKind);
-        const thinkingEffort = forcedHelperOff ? 'off' : getRequestThinkingEffort(options);
+        const baseEffort = getRequestThinkingEffort(options);
+        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
@@ -1633,10 +1639,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Log which effort is being used (mirrors the chat-completions handler)
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (forcedHelperOff ? ` (internal helper: ${requestKind} — forced off)` : '')
+            (effortSource === 'helper-off' ? ` (internal helper: ${requestKind} — forced off)` : '') +
+            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
         );
-        if (forcedHelperOff) {
+        if (effortSource === 'helper-off') {
             log.verbose(`Internal helper request (${requestKind}) — thinking forced off`);
+        } else if (effortSource === 'agent-effort') {
+            log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
         }
 
         const request: DeepSeekResponsesRequest = {
