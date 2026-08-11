@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
 import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge } from './config.js';
-import { augmentToolDescription, buildCopilotOperatingGuide } from './harness/copilotKnowledge.js';
+import { augmentToolDescription, buildCopilotOperatingGuide, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
 import { safeStringify } from './api/sanitize.js';
@@ -1147,6 +1147,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Add tools if provided in options
         if (options.tools && options.tools.length > 0) {
+            logKnowledgeSummary(options.tools);
             request.tools = options.tools.map(mapTool);
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'chat-completions');
@@ -1445,6 +1446,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         else if (conciseDirective) request.instructions = conciseDirective.trim();
 
         if (options.tools && options.tools.length > 0) {
+            logKnowledgeSummary(options.tools);
             request.tools = options.tools.map(mapResponsesTool);
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'responses');
@@ -1996,11 +1998,53 @@ function validateMessageSequence(messages: DeepSeekMessage[]): string[] {
  */
 const FALLBACK_SCHEMA = { type: 'object' as const, properties: {} };
 
+/**
+ * Log a one-line summary of how copilot-knowledge treated a native tool.
+ * Called from both map functions so the enrichment is visible in the log at
+ * INFO level (not just VERBOSE). Non-matching tools log once at VERBOSE only
+ * to avoid noise; matching (enriched) tools log their category at INFO.
+ */
+function logKnowledgeForTool(name: string): void {
+    if (!getCopilotKnowledge()) return;
+    const k = getToolKnowledge(name);
+    if (k) {
+        log.info(`[knowledge] tool '${name}' enriched (category: ${k.category})`);
+    } else {
+        log.verbose(`[knowledge] tool '${name}' not in catalog — passed through unchanged`);
+    }
+}
+
+/**
+ * Log a per-request summary of the copilot-knowledge pass: how many of the
+ * native tools were enriched vs passed through, and the categories covered.
+ */
+function logKnowledgeSummary(tools: readonly vscode.LanguageModelChatTool[]): void {
+    if (!getCopilotKnowledge()) {
+        log.verbose('Copilot knowledge: disabled (nikas.copilotKnowledge=false)');
+        return;
+    }
+    let enriched = 0;
+    const cats = new Set<string>();
+    for (const t of tools) {
+        const k = getToolKnowledge(t.name);
+        if (k) {
+            enriched++;
+            cats.add(k.category);
+        }
+    }
+    const catList = [...cats].sort().join(', ');
+    log.info(`Copilot knowledge: enriched ${enriched}/${tools.length} tools${catList ? ` [${catList}]` : ''}`);
+    if (enriched === 0) {
+        log.info('Copilot knowledge: ON but no tools matched the catalog — all passed through unchanged');
+    }
+}
+
 function mapTool(tool: vscode.LanguageModelChatTool): DeepSeekTool {
     const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
     const parameters = sanitizeSchema(rawSchema);
     // Optionally enrich the description with Copilot knowledge so DeepSeek
     // understands what the native tool does and when to use it.
+    logKnowledgeForTool(tool.name);
     const description = getCopilotKnowledge()
         ? augmentToolDescription(tool.name, tool.description ?? '')
         : tool.description ?? '';
@@ -2080,6 +2124,7 @@ function cleanSchemaNode(node: unknown): Record<string, unknown> {
 function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponsesTool {
     const rawSchema = tool.inputSchema as Record<string, unknown> | null | undefined;
     const parameters = sanitizeSchema(rawSchema);
+    logKnowledgeForTool(tool.name);
     const description = getCopilotKnowledge()
         ? augmentToolDescription(tool.name, tool.description ?? '')
         : tool.description ?? '';
