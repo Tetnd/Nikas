@@ -19,34 +19,35 @@ function check(name, cond, detail) {
 // ── 1. augmentToolDescription ─────────────────────────────────────────────
 console.log('\n=== 1. augmentToolDescription ===');
 {
-    const enriched = augmentToolDescription('read_file', 'Read a file');
-    check('enriches known tool', enriched.includes('Read the contents of a file'));
+    const enriched = augmentToolDescription('read', 'Read a file');
+    check('enriches known tool', enriched.includes('Read files in the workspace'));
     check('keeps when-to-use', enriched.includes('When to use:'));
     check('keeps original content folded in', enriched.length > 'Read a file'.length);
 
     const passthrough = augmentToolDescription('mystery_tool_xyz', 'Original desc');
     check('unknown tool passes through unchanged', passthrough === 'Original desc');
 
-    const terminal = augmentToolDescription('run_in_terminal', 'Run a command');
+    const terminal = augmentToolDescription('runInTerminal', 'Run a command');
     check('terminal tool includes caution', terminal.includes('Caution:'));
 }
 
 // ── 2. Catalog access ─────────────────────────────────────────────────────
 console.log('\n=== 2. Catalog access ===');
 {
-    check('browser tool known', getToolKnowledge('click_element')?.category === 'browser');
-    check('edit tool known', getToolKnowledge('replace_string_in_file')?.category === 'edit');
+    check('browser tool known', getToolKnowledge('clickElement')?.category === 'browser');
+    check('edit tool known', getToolKnowledge('edit')?.category === 'edit');
+    check('read tool known (file)', getToolKnowledge('read')?.category === 'file');
     check('unknown tool undefined', getToolKnowledge('nope_nope') === undefined);
 }
 
 // ── 3. categorizeTools ───────────────────────────────────────────────────
 console.log('\n=== 3. categorizeTools ===');
 {
-    const cats = categorizeTools(['read_file', 'grep_search', 'run_in_terminal', 'click_element', 'zzz_unknown']);
-    check('groups file', cats['file']?.includes('read_file'));
-    check('groups search', cats['search']?.includes('grep_search'));
-    check('groups terminal', cats['terminal']?.includes('run_in_terminal'));
-    check('groups browser', cats['browser']?.includes('click_element'));
+    const cats = categorizeTools(['read', 'search', 'runInTerminal', 'clickElement', 'zzz_unknown']);
+    check('groups file', cats['file']?.includes('read'));
+    check('groups search', cats['search']?.includes('search'));
+    check('groups terminal', cats['terminal']?.includes('runInTerminal'));
+    check('groups browser', cats['browser']?.includes('clickElement'));
     check('unknown to other', cats['other']?.includes('zzz_unknown'));
 }
 
@@ -74,31 +75,34 @@ console.log('\n=== 5. knownCategories ===');
 // ── 6. Expanded catalog coverage ─────────────────────────────────────────
 console.log('\n=== 6. Expanded catalog coverage ===');
 {
-    check('create_file known', getToolKnowledge('create_file')?.category === 'edit');
-    check('list_dir known (search)', getToolKnowledge('list_dir')?.category === 'search');
-    check('get_errors known (diagnostics)', getToolKnowledge('get_errors')?.category === 'diagnostics');
-    check('fetch_webpage known (web)', getToolKnowledge('fetch_webpage')?.category === 'web');
-    check('web_search known (web)', getToolKnowledge('web_search')?.category === 'web');
-    check('github_repo_search known', getToolKnowledge('github_repo_search')?.category === 'web');
-    check('notebook tool known', getToolKnowledge('create_new_jupyter_notebook')?.category === 'notebook');
-    check('git tool known', getToolKnowledge('git_commit')?.category === 'git');
-    check('manage_todo_list known (task)', getToolKnowledge('manage_todo_list')?.category === 'task');
+    check('createFile known', getToolKnowledge('createFile')?.category === 'edit');
+    check('listDirectory known (search)', getToolKnowledge('listDirectory')?.category === 'search');
+    check('problems known (diagnostics)', getToolKnowledge('problems')?.category === 'diagnostics');
+    check('fetch known (web)', getToolKnowledge('fetch')?.category === 'web');
+    check('web known (web)', getToolKnowledge('web')?.category === 'web');
+    check('githubRepo known', getToolKnowledge('githubRepo')?.category === 'web');
+    check('notebook tool known', getToolKnowledge('createJupyterNotebook')?.category === 'notebook');
+    check('vscodeAPI known (vscode)', getToolKnowledge('vscodeAPI')?.category === 'vscode');
+    check('todo known (task)', getToolKnowledge('todo')?.category === 'task');
+    check('browser umbrella known', getToolKnowledge('browser')?.category === 'browser');
+    check('containerToolsConfig known', getToolKnowledge('containerToolsConfig')?.category === 'container');
     check('unknown still undefined', getToolKnowledge('zzz_not_a_tool') === undefined);
 
     // Every expanded entry must produce an enriched description with the
     // "When to use" hint.
-    const enriched = augmentToolDescription('git_commit', 'Commit');
-    check('git_commit enrichment has when-to-use', enriched.includes('When to use:'));
-    check('git_commit enrichment has caution', enriched.includes('Caution:'));
+    const enriched = augmentToolDescription('editFiles', 'Edit');
+    check('editFiles enrichment has when-to-use', enriched.includes('When to use:'));
+    check('editFiles enrichment has caution', enriched.includes('Caution:'));
 
-    const web = augmentToolDescription('fetch_webpage', 'Fetch page');
+    const web = augmentToolDescription('fetch', 'Fetch page');
     check('web tool enrichment present', web.length > 'Fetch page'.length);
 
-    const cats = categorizeTools(['get_errors', 'git_commit', 'fetch_webpage', 'create_new_jupyter_notebook']);
-    check('categorize new categories', cats['diagnostics']?.includes('get_errors') &&
-        cats['git']?.includes('git_commit') &&
-        cats['web']?.includes('fetch_webpage') &&
-        cats['notebook']?.includes('create_new_jupyter_notebook'));
+    const cats = categorizeTools(['problems', 'editFiles', 'fetch', 'createJupyterNotebook', 'todo']);
+    check('categorize new categories', cats['diagnostics']?.includes('problems') &&
+        cats['edit']?.includes('editFiles') &&
+        cats['web']?.includes('fetch') &&
+        cats['notebook']?.includes('createJupyterNotebook') &&
+        cats['task']?.includes('todo'));
 }
 
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);

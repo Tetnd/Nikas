@@ -42,214 +42,332 @@ export interface ToolKnowledge {
  * tool names Copilot exposes via `options.tools`. Anything not in the catalog
  * is passed through unchanged — the catalog is an additive improvement.
  */
+/**
+ * Default knowledge catalog for Copilot's NATIVE tools. Keys are the EXACT
+ * tool names Copilot exposes to the default agent via `options.tools` — taken
+ * from the live "Configure Tools" list (Built-In / vscode / web / container
+ * groups). Anything not in the catalog passes through unchanged.
+ *
+ * NOTE: these are camelCase names (`edit`, `search`, `runInTerminal`), NOT
+ * the agent-harness snake_case names (`edit_file`, `grep_search`). The lookup
+ * in `mapTool` uses `tool.name`, which is the native Copilot name.
+ */
 const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
-    read_file: {
+    // ── Built-In: file read / edit ──────────────────────────────────────
+    read: {
         category: 'file',
-        enrichedDescription: 'Read the contents of a file from the workspace. Prefer targeted reads over dumping whole large files; you can read a specific line range.',
+        enrichedDescription: 'Read files in the workspace. Prefer targeted reads over dumping whole large files; you can read a specific line range.',
         whenToUse: 'Use to inspect a file before editing it, or to confirm what code exists.',
     },
-    edit_file: {
+    readFile: {
+        category: 'file',
+        enrichedDescription: 'Read the contents of a specific file from the workspace.',
+        whenToUse: 'Use to inspect a file\'s contents before editing or to confirm what code exists.',
+    },
+    viewImage: {
+        category: 'file',
+        enrichedDescription: 'View the contents of an image file directly (png/jpg/gif/webp).',
+        whenToUse: 'Use to look at a screenshot, diagram, or image asset the task references.',
+    },
+    edit: {
         category: 'edit',
-        enrichedDescription: 'Apply an edit to a file. Returns whether the change applied.',
-        whenToUse: 'Use to modify code. Prefer small, targeted edits over rewriting the whole file.',
+        enrichedDescription: 'Edit files in the workspace. Applies one or more changes to file content.',
+        whenToUse: 'Use to modify code. Prefer small, targeted edits over rewriting whole files.',
         caution: 'Changes are real and persistent — do not make edits you are not confident about.',
     },
-    replace_string_in_file: {
+    editFiles: {
         category: 'edit',
-        enrichedDescription: 'Replace an exact literal block of text in a file with new text. Requires the old text to match exactly (including whitespace).',
-        whenToUse: 'Use for surgical, exact edits. Include enough surrounding context to make the match unique.',
+        enrichedDescription: 'Edit one or more files in the workspace.',
+        whenToUse: 'Use to apply code changes to one or several files.',
+        caution: 'Changes are real and persistent — do not make edits you are not confident about.',
     },
-    multi_replace_string_in_file: {
+    createFile: {
         category: 'edit',
-        enrichedDescription: 'Apply multiple exact-block replacements across one or more files in a single call.',
-        whenToUse: 'Use when you need several related edits at once — batch them for efficiency.',
+        enrichedDescription: 'Create a new file in the workspace. Creates parent directories as needed.',
+        whenToUse: 'Use to scaffold new files, modules, or configs.',
     },
-    grep_search: {
+    createDirectory: {
+        category: 'edit',
+        enrichedDescription: 'Create a new directory (recursively if needed) in the workspace.',
+        whenToUse: 'Use to create folders for a new module or structure.',
+    },
+    rename: {
+        category: 'edit',
+        enrichedDescription: 'Rename a code symbol across the workspace, updating all references.',
+        whenToUse: 'Use to rename a function/class/variable precisely across the whole project.',
+    },
+
+    // ── Built-In: search ────────────────────────────────────────────────
+    search: {
         category: 'search',
-        enrichedDescription: 'Search the workspace for files or lines matching a regex/string. Returns file paths and matches.',
+        enrichedDescription: 'Search files in the workspace for content matching a pattern.',
         whenToUse: 'Use to locate where a symbol, string, or pattern lives before editing.',
     },
-    file_search: {
+    textSearch: {
         category: 'search',
-        enrichedDescription: 'Find files by name/glob pattern across the workspace.',
+        enrichedDescription: 'Lexically search workspace files for text or regex matches.',
+        whenToUse: 'Use to find exact strings or patterns across the codebase.',
+    },
+    fileSearch: {
+        category: 'search',
+        enrichedDescription: 'Find files by name or glob pattern across the workspace.',
         whenToUse: 'Use to discover files by path pattern.',
     },
-    run_in_terminal: {
+    codebase: {
+        category: 'search',
+        enrichedDescription: 'Semantic search across the codebase for relevant file chunks, symbols, and information.',
+        whenToUse: 'Use to understand what code exists and where, when you do not know exact names.',
+    },
+    listDirectory: {
+        category: 'search',
+        enrichedDescription: 'List the contents of a directory to see its files and subfolders.',
+        whenToUse: 'Use to understand a project structure before navigating deeper.',
+    },
+    usages: {
+        category: 'search',
+        enrichedDescription: 'Find all usages, references, and implementations of a code symbol across the workspace.',
+        whenToUse: 'Use to see everywhere a symbol is referenced before refactoring or changing it.',
+    },
+    searchSubagent: {
+        category: 'search',
+        enrichedDescription: 'Dispatch a search subagent to explore the codebase and answer questions.',
+        whenToUse: 'Use for broad exploration when you need to gather context across many files.',
+    },
+    problems: {
+        category: 'diagnostics',
+        enrichedDescription: 'Check compile or lint errors for a particular file (or the workspace).',
+        whenToUse: 'Use after edits to check for type/compile/lint errors and drive fixes.',
+    },
+
+    // ── Built-In: terminal / execute ────────────────────────────────────
+    runInTerminal: {
         category: 'terminal',
         enrichedDescription: 'Run a shell command in the workspace terminal and return its output. This is how you build, run tests, or execute scripts.',
         whenToUse: 'Use to build, run tests, run the app, or execute shell commands to verify behavior.',
         caution: 'Commands have real side effects (they run in the actual terminal). Prefer read-only commands when you only need information.',
     },
-    run_tests: {
+    execute: {
         category: 'terminal',
-        enrichedDescription: 'Run the project test suite and return the result.',
+        enrichedDescription: 'Execute code and applications on the machine.',
+        whenToUse: 'Use to run code, scripts, or applications.',
+        caution: 'Executions have real side effects — prefer read-only commands when you only need information.',
+    },
+    runCommand: {
+        category: 'terminal',
+        enrichedDescription: 'Run a command in the terminal and return its output.',
+        whenToUse: 'Use to build, run, or inspect via the shell.',
+    },
+    runTests: {
+        category: 'terminal',
+        enrichedDescription: 'Run the project test suite (optionally with coverage) and return results.',
         whenToUse: 'Use after making changes to verify you did not break anything (a verify pass).',
     },
-    open_browser_page: {
+    runTask: {
+        category: 'terminal',
+        enrichedDescription: 'Run a defined VS Code task from the workspace.',
+        whenToUse: 'Use to run an existing build/run/test task.',
+    },
+    createAndRunTask: {
+        category: 'terminal',
+        enrichedDescription: 'Create and run a build/run/custom task for the workspace.',
+        whenToUse: 'Use to build or run the app when no task exists yet.',
+    },
+    getTaskOutput: {
+        category: 'terminal',
+        enrichedDescription: 'Retrieve the output of a previously run task.',
+        whenToUse: 'Use to check the result of a background or long-running task.',
+    },
+    sendToTerminal: {
+        category: 'terminal',
+        enrichedDescription: 'Send input text (or a keystroke) to an active terminal execution.',
+        whenToUse: 'Use to answer interactive prompts or continue an in-progress command.',
+    },
+    getTerminalOutput: {
+        category: 'terminal',
+        enrichedDescription: 'Read output from a background terminal execution by its id.',
+        whenToUse: 'Use to check a running background command\'s output.',
+    },
+    terminalLastCommand: {
+        category: 'terminal',
+        enrichedDescription: 'Get the last command that was run in the active terminal.',
+        whenToUse: 'Use to see what command previously ran.',
+    },
+    terminalSelection: {
+        category: 'terminal',
+        enrichedDescription: 'Get the current selection in the active terminal.',
+        whenToUse: 'Use to read text selected in the terminal.',
+    },
+    killTerminal: {
+        category: 'terminal',
+        enrichedDescription: 'Kill/stop a terminal execution by its id.',
+        whenToUse: 'Use to clean up servers or background processes when done.',
+    },
+    testFailure: {
+        category: 'diagnostics',
+        enrichedDescription: 'Include the details of test failures from the most recent test run.',
+        whenToUse: 'Use when a test failed to understand exactly what broke and where.',
+    },
+
+    // ── Built-In: browser ───────────────────────────────────────────────
+    browser: {
         category: 'browser',
-        enrichedDescription: 'Open a browser page at a URL. Grants access to web content and (with the browser tools) interactive page control.',
+        enrichedDescription: 'Open and interact with integrated browser pages in the IDE.',
         whenToUse: 'Use when the task involves a web page, a local UI, or fetching a live site.',
     },
-    navigate_page: {
+    openBrowserPage: {
+        category: 'browser',
+        enrichedDescription: 'Open a browser page at a URL (or share an existing one).',
+        whenToUse: 'Use to open a web page or local UI for inspection.',
+    },
+    navigatePage: {
         category: 'browser',
         enrichedDescription: 'Navigate the current browser page (by URL, back, forward, or reload).',
         whenToUse: 'Use to move around a page or reload after a change.',
     },
-    click_element: {
-        category: 'browser',
-        enrichedDescription: 'Click an element on the current browser page (identified by selector or element reference).',
-        whenToUse: 'Use to interact with a live UI — buttons, links, toggles.',
-    },
-    type_in_page: {
-        category: 'browser',
-        enrichedDescription: 'Type text or press keys into the focused element / page.',
-        whenToUse: 'Use to fill inputs or send keystrokes in a live UI.',
-    },
-    read_page: {
+    readPage: {
         category: 'browser',
         enrichedDescription: 'Get an accessibility snapshot of the current browser page (better than a screenshot for understanding structure).',
         whenToUse: 'Use to understand what is on the page before acting on it.',
     },
-    screenshot_page: {
+    screenshotPage: {
         category: 'browser',
         enrichedDescription: 'Capture a screenshot of the current browser page.',
         whenToUse: 'Use to visually confirm layout or rendering.',
     },
-    open_page: {
+    clickElement: {
         category: 'browser',
-        enrichedDescription: 'Open a browser page at a URL.',
-        whenToUse: 'Use when the task involves a web page or a local UI.',
+        enrichedDescription: 'Click an element on the current browser page (by selector or element reference).',
+        whenToUse: 'Use to interact with a live UI — buttons, links, toggles.',
     },
-    read_page_state: {
+    typeInPage: {
         category: 'browser',
-        enrichedDescription: 'Get the current browser page state snapshot.',
-        whenToUse: 'Use to inspect a page before interacting.',
+        enrichedDescription: 'Type text or press keys into the focused element/page.',
+        whenToUse: 'Use to fill inputs or send keystrokes in a live UI.',
     },
-    get_task_output: {
-        category: 'terminal',
-        enrichedDescription: 'Retrieve the output of a previously run task/command.',
-        whenToUse: 'Use to check the result of a long-running background command.',
+    hoverElement: {
+        category: 'browser',
+        enrichedDescription: 'Hover over an element in the browser page to reveal tooltips/menus.',
+        whenToUse: 'Use to trigger hover states before acting.',
     },
-    create_file: {
-        category: 'edit',
-        enrichedDescription: 'Create a new file with the given content. Creates parent directories as needed.',
-        whenToUse: 'Use to scaffold new files, modules, or configs.',
+    dragElement: {
+        category: 'browser',
+        enrichedDescription: 'Drag an element from one position/target to another in the browser page.',
+        whenToUse: 'Use to move elements or test drag-and-drop interactions.',
     },
-    list_dir: {
-        category: 'search',
-        enrichedDescription: 'List the contents of a directory to see its files and subfolders.',
-        whenToUse: 'Use to understand a project structure before navigating deeper.',
+    handleDialog: {
+        category: 'browser',
+        enrichedDescription: 'Respond to a pending modal (alert/confirm/prompt) or file-chooser dialog on the page.',
+        whenToUse: 'Use when the page shows a dialog that needs accepting/dismissing.',
     },
-    get_errors: {
-        category: 'diagnostics',
-        enrichedDescription: 'Retrieve compile or lint errors for a file (or across the workspace).',
-        whenToUse: 'Use after edits to check for type/compile/lint errors and drive fixes.',
+    runPlaywrightCode: {
+        category: 'browser',
+        enrichedDescription: 'Run a Playwright code snippet to control the browser page directly.',
+        whenToUse: 'Use for advanced browser control when the higher-level browser tools are insufficient.',
     },
-    fetch_webpage: {
-        category: 'web',
-        enrichedDescription: 'Fetch and summarize the main content of a web page or URL.',
-        whenToUse: 'Use to read documentation, articles, or reference material from the web.',
-    },
-    web_search: {
-        category: 'web',
-        enrichedDescription: 'Search the web for information and return results with content.',
-        whenToUse: 'Use to find current information, docs, or solutions online.',
-    },
-    fetch: {
-        category: 'web',
-        enrichedDescription: 'Fetch the content of a URL.',
-        whenToUse: 'Use to retrieve web content or an API endpoint.',
-    },
-    github_repo_search: {
-        category: 'web',
-        enrichedDescription: 'Search a GitHub repository for relevant source code snippets.',
-        whenToUse: 'Use to find code examples or implementations in a public repo.',
-    },
-    github_text_search: {
-        category: 'web',
-        enrichedDescription: 'Lexically search a GitHub repo or org for files containing keywords or code patterns.',
-        whenToUse: 'Use to locate exact strings or identifiers in a GitHub codebase.',
-    },
-    create_new_jupyter_notebook: {
+
+    // ── Built-In: notebook ──────────────────────────────────────────────
+    createJupyterNotebook: {
         category: 'notebook',
-        enrichedDescription: 'Generate a new Jupyter Notebook (.ipynb) in the workspace.',
+        enrichedDescription: 'Create a new Jupyter Notebook (.ipynb) in the workspace.',
         whenToUse: 'Use when the task is data exploration/analysis and a notebook is appropriate.',
     },
-    run_notebook_cell: {
+    runNotebookCell: {
         category: 'notebook',
-        enrichedDescription: 'Run a code cell in a notebook file and return its output.',
-        whenToUse: 'Use to execute notebook code and inspect results.',
+        enrichedDescription: 'Execute a code cell in a notebook file and return its output.',
+        whenToUse: 'Use to run notebook code and inspect results.',
     },
-    create_new_workspace: {
-        category: 'project',
-        enrichedDescription: 'Set up a complete new project structure/workspace scaffold.',
-        whenToUse: 'Use when initializing a new project or framework.',
+    editNotebook: {
+        category: 'notebook',
+        enrichedDescription: 'Edit a cell (or insert/delete) in a notebook file.',
+        whenToUse: 'Use to modify notebook code or structure.',
     },
-    manage_todo_list: {
-        category: 'task',
-        enrichedDescription: 'Track progress on a multi-step task via a structured todo list.',
-        whenToUse: 'Use for complex multi-step work to keep the plan visible and ordered.',
+    getNotebookSummary: {
+        category: 'notebook',
+        enrichedDescription: 'Return the list of notebook cells with ids, types, line ranges, language, and execution info.',
+        whenToUse: 'Use to understand a notebook\'s structure before running or editing cells.',
     },
-    run_in_terminal_bg: {
-        category: 'terminal',
-        enrichedDescription: 'Run a long-lived process (server, watcher, daemon) in the background.',
-        whenToUse: 'Use to start servers or watch tasks that must keep running.',
-    },
-    get_terminal_output: {
-        category: 'terminal',
-        enrichedDescription: 'Read output from a background terminal execution.',
-        whenToUse: 'Use to check a running background command\'s output.',
-    },
-    kill_terminal: {
-        category: 'terminal',
-        enrichedDescription: 'Stop a running terminal/task by its id.',
-        whenToUse: 'Use to clean up servers or background processes when done.',
-    },
-    run_command: {
-        category: 'terminal',
-        enrichedDescription: 'Execute a shell command and return its output.',
-        whenToUse: 'Use to build, run, or inspect via the shell.',
-    },
-    apply_patch: {
-        category: 'edit',
-        enrichedDescription: 'Apply a patch or diff to the workspace.',
-        whenToUse: 'Use to apply a set of changes provided as a patch.',
-    },
-    git_status: {
-        category: 'git',
-        enrichedDescription: 'Show the current git working-tree status.',
-        whenToUse: 'Use to see what files changed before committing.',
-    },
-    git_diff: {
-        category: 'git',
-        enrichedDescription: 'Show the diff of changes in the working tree.',
-        whenToUse: 'Use to review changes before committing.',
-    },
-    git_commit: {
-        category: 'git',
-        enrichedDescription: 'Create a git commit with the staged changes.',
-        whenToUse: 'Use after finishing a logical unit of work.',
-        caution: 'Commits are real history — use a clear, descriptive message.',
-    },
-    git_push: {
-        category: 'git',
-        enrichedDescription: 'Push local commits to the remote branch.',
-        whenToUse: 'Use when the user asks to push or publish work.',
-    },
-    read_notebook_cell_output: {
+    readNotebookCellOutput: {
         category: 'notebook',
         enrichedDescription: 'Retrieve the output of a notebook cell from its last execution.',
         whenToUse: 'Use to inspect notebook results without re-running.',
     },
-    get_vscode_api: {
-        category: 'diagnostics',
-        enrichedDescription: 'Get VS Code API documentation/references for extension development.',
+
+    // ── Built-In: task ──────────────────────────────────────────────────
+    todo: {
+        category: 'task',
+        enrichedDescription: 'Track progress on a multi-step task via a structured todo list.',
+        whenToUse: 'Use for complex multi-step work to keep the plan visible and ordered.',
+    },
+
+    // ── vscode group ────────────────────────────────────────────────────
+    vscode: {
+        category: 'vscode',
+        enrichedDescription: 'Run a VS Code command / interact with the VS Code API surface.',
+        whenToUse: 'Use when the task involves VS Code commands or extension behavior.',
+    },
+    vscodeAPI: {
+        category: 'vscode',
+        enrichedDescription: 'Get VS Code API documentation and references for extension development.',
         whenToUse: 'Use when building or debugging VS Code extension code.',
+    },
+    askQuestions: {
+        category: 'vscode',
+        enrichedDescription: 'Ask the user a small number of clarifying questions before proceeding.',
+        whenToUse: 'Use when a task is ambiguous and a decision from the user would unblock correct work.',
+    },
+    installExtension: {
+        category: 'vscode',
+        enrichedDescription: 'Install a VS Code extension as part of a new workspace setup.',
+        whenToUse: 'Use when scaffolding a project that needs specific extensions.',
+    },
+    extensions: {
+        category: 'vscode',
+        enrichedDescription: 'Search the VS Code extension marketplace and retrieve extension information.',
+        whenToUse: 'Use to find or inspect extensions.',
+    },
+    newWorkspace: {
+        category: 'project',
+        enrichedDescription: 'Set up a complete new project structure/workspace scaffold.',
+        whenToUse: 'Use when initializing a new project or framework.',
+    },
+    resolveMemoryFileUri: {
+        category: 'vscode',
+        enrichedDescription: 'Resolve a memory-file path to its fully qualified URI.',
+        whenToUse: 'Use when you need the actual URI of a memory/note file.',
     },
     memory: {
         category: 'task',
         enrichedDescription: 'Manage persistent notes/memory across sessions (user/session/repo scopes).',
         whenToUse: 'Use to save and retrieve cross-session context and conventions.',
+    },
+
+    // ── web group ───────────────────────────────────────────────────────
+    web: {
+        category: 'web',
+        enrichedDescription: 'Fetch, search, and extract content from the web.',
+        whenToUse: 'Use to find current information, docs, or solutions online.',
+    },
+    fetch: {
+        category: 'web',
+        enrichedDescription: 'Fetch and summarize the main content of a web page or URL.',
+        whenToUse: 'Use to read documentation, articles, or reference material from the web.',
+    },
+    githubRepo: {
+        category: 'web',
+        enrichedDescription: 'Search a GitHub repository for relevant source code snippets.',
+        whenToUse: 'Use to find code examples or implementations in a public repo.',
+    },
+    githubTextSearch: {
+        category: 'web',
+        enrichedDescription: 'Lexically search a GitHub repo or org for files containing keywords or code patterns.',
+        whenToUse: 'Use to locate exact strings or identifiers in a GitHub codebase.',
+    },
+
+    // ── container group ─────────────────────────────────────────────────
+    containerToolsConfig: {
+        category: 'container',
+        enrichedDescription: 'Get the container/orchestrator CLI configuration, including the correct base commands and environment.',
+        whenToUse: 'Use before running any container or compose command, to get the right base command.',
     },
 };
 
