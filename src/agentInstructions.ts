@@ -29,6 +29,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { log } from './log.js';
 import { getAgentInstructions } from './config.js';
@@ -185,6 +186,40 @@ function ensureGitignore(root: string, target: string): void {
 }
 
 /**
+ * Best-effort run of `git rm --cached` on an absolute file path within a repo,
+ * keeping the working-tree file but removing it from git's index. This makes
+ * `.gitignore` effective for a file that was already tracked/committed, so it
+ * stops appearing as a change. Returns true if git was invoked and reported no
+ * error, false otherwise (e.g. not a git repo, or already untracked).
+ */
+function gitRmCached(root: string, absPath: string): boolean {
+    try {
+        const rel = path.relative(root, absPath).replace(/\\/g, '/');
+        if (!rel || rel.startsWith('..')) return false;
+        const res = cp.spawnSync('git', ['rm', '--cached', '--', rel], {
+            cwd: root,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 10_000,
+        });
+        if (res.status === 0) {
+            log.info(`[AgentInstructions] untracked ${rel} (git rm --cached)`);
+            return true;
+        }
+        if (res.stderr && /did not match any files|not under version control|did not match/i.test(res.stderr)) {
+            // File wasn't tracked — nothing to untrack; treat as success.
+            log.info(`[AgentInstructions] ${rel} was not tracked; no untrack needed`);
+            return true;
+        }
+        log.warn(`[AgentInstructions] git rm --cached failed for ${rel}: ${res.stderr ?? ''}`);
+        return false;
+    } catch (e) {
+        log.warn(`[AgentInstructions] git rm --cached threw for ${absPath}: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+    }
+}
+
+/**
  * Remove the managed-instruction entries from the workspace `.gitignore` we
  * added earlier. Idempotent; leaves unrelated user entries untouched.
  */
@@ -282,8 +317,14 @@ export async function applyAgentInstructions(workspaceFolder?: vscode.WorkspaceF
         fs.writeFileSync(target, buildAgentInstructionsContent(fileName), 'utf8');
         log.info(`[AgentInstructions] wrote managed ${fileName} → ${target}`);
 
-        // Keep the managed files out of the target workspace's source control.
+        // Keep the managed files out of the target workspace's source control:
+        // add them to .gitignore AND untrack them if git already tracks them
+        // (gitignore cannot hide an already-tracked file).
         ensureGitignore(root, target);
+        gitRmCached(root, target);
+        if (fs.existsSync(target + BACKUP_SUFFIX)) {
+            gitRmCached(root, target + BACKUP_SUFFIX);
+        }
         return true;
     } catch (e) {
         log.error('[AgentInstructions] apply failed', e);

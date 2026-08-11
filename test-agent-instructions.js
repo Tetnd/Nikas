@@ -4,6 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const cp = require('child_process');
 
 // ── Mock the vscode module before loading anything that imports it ───────
 const Module = require('module');
@@ -249,6 +250,52 @@ let agentsPath = path.join(tmp, 'AGENTS.md');
         // No folder → inactive.
         setSetting(true);
         check('inactive with no folder', isAgentInstructionsActive(undefined) === false);
+    }
+
+    console.log('\n=== 13. untracks an already-committed managed file ===');
+    // Requires git; skip gracefully if unavailable.
+    const gitOk = (() => { try { return cp.spawnSync('git', ['--version']).status === 0; } catch { return false; } })();
+    if (!gitOk) {
+        check('git available', false, '(skipped: git not installed)');
+    } else {
+        let tmp9 = fs.mkdtempSync(path.join(os.tmpdir(), 'nikas-ai9-'));
+        let agentsPath9 = path.join(tmp9, 'AGENTS.md');
+        try {
+            // Init a repo, commit an AGENTS.md that git already tracks.
+            cp.spawnSync('git', ['init', '-q'], { cwd: tmp9 });
+            cp.spawnSync('git', ['config', 'user.email', 't@t'], { cwd: tmp9 });
+            cp.spawnSync('git', ['config', 'user.name', 't'], { cwd: tmp9 });
+            fs.writeFileSync(agentsPath9, '# tracked agents\n', 'utf8');
+            cp.spawnSync('git', ['add', 'AGENTS.md'], { cwd: tmp9 });
+            cp.spawnSync('git', ['commit', '-q', '-m', 'init'], { cwd: tmp9 });
+            const trackedBefore = cp.spawnSync('git', ['ls-files', '--error-unmatch', 'AGENTS.md'], { cwd: tmp9 }).status === 0;
+            check('AGENTS.md tracked before apply', trackedBefore === true);
+
+            // Apply the manager — it should untrack the file.
+            setSetting(true);
+            await applyAgentInstructions(folderFor(tmp9));
+            const trackedAfter = cp.spawnSync('git', ['ls-files', '--error-unmatch', 'AGENTS.md'], { cwd: tmp9 }).status === 0;
+            check('AGENTS.md untracked after apply', trackedAfter === false);
+            check('AGENTS.md still on disk after untrack', fs.existsSync(agentsPath9));
+            const gi = fs.readFileSync(path.join(tmp9, '.gitignore'), 'utf8');
+            check('gitignored after apply', gi.includes('AGENTS.md'));
+
+            // Restore should bring back the original user content (from backup),
+            // leaving it untracked and un-managed.
+            setSetting(false);
+            await syncAgentInstructions(folderFor(tmp9));
+            const restored = fs.readFileSync(agentsPath9, 'utf8');
+            check('restored original content', restored === '# tracked agents\n');
+            check('no longer managed on restore', !restored.startsWith(header));
+            const trackedRestored = cp.spawnSync('git', ['ls-files', '--error-unmatch', 'AGENTS.md'], { cwd: tmp9 }).status === 0;
+            check('stays untracked after restore', trackedRestored === false);
+            // .gitignore only held our block → it is removed entirely.
+            check('gitignore removed (only our block)', !fs.existsSync(path.join(tmp9, '.gitignore')));
+        } catch (e) {
+            check('git test ran clean', false, String(e));
+        } finally {
+            try { fs.rmSync(tmp9, { recursive: true, force: true }); } catch {}
+        }
     }
 
     // Cleanup temp dirs
