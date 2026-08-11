@@ -69,6 +69,27 @@ const SUMMARIZE_SYSTEM_PROMPT =
     '- Be compact: prefer terse bullet lines over prose.\n' +
     '- Output ONLY the memory block. No preamble, no closing note.';
 
+/**
+ * Instruction appended when the block already contains a PRIOR session-memory
+ * block. That block is an already-lossy compression the model is relying on —
+ * re-compressing it from scratch risks compounding fact loss (the "forgetting
+ * within a session" failure mode: each recompute can drop facts the previous
+ * one preserved). Instead, treat the prior memory as an AUTHORITATIVE baseline:
+ * keep its facts, only add what's new from the surrounding turns.
+ */
+const PRESERVE_MEMORY_INSTRUCTION =
+    '\n\nIMPORTANT — the conversation already contains a PRIOR session-memory block ' +
+    '(a [Session memory] section). That block is authoritative existing memory the ' +
+    'model is currently relying on.\n' +
+    '- PRESERVE every fact, decision, identifier, and convention already in that ' +
+    'prior block — copy them forward essentially verbatim.\n' +
+    '- Do NOT re-compress, abbreviate, or drop anything already recorded there. ' +
+    'Re-compressing prior memory is the #1 cause of losing facts across repeated ' +
+    'compactions.\n' +
+    '- ADD only the genuinely new facts from the messages AFTER the prior block ' +
+    'that are not already captured.\n' +
+    '- Keep the same structured sections; extend them rather than rewriting.';
+
 interface CacheEntry {
     summary: string;
     /** Number of messages in the block this summary was computed from. */
@@ -213,17 +234,32 @@ function serializeBlock(block: DeepSeekMessage[]): string {
     return lines.join('\n');
 }
 
-/** Call DeepSeek (chat-completions, thinking off) to summarize an old block. */
+/**
+ * Detect whether a block already contains a prior [Session memory] block.
+ */
+function hasPriorMemory(block: DeepSeekMessage[]): boolean {
+    return block.some(msg => messageText(msg).includes('[Session memory'));
+}
+
+/**
+ * Call DeepSeek (chat-completions, thinking off) to summarize an old block.
+ * If the block already contains a prior session-memory block, adds the
+ * preserve-instruction so the summary EXTENDS it rather than re-compressing
+ * it from scratch (prevents compounding fact loss across recompactions).
+ */
 async function summarizeBlock(
     apiKey: string,
     block: DeepSeekMessage[],
     signal?: AbortSignal
 ): Promise<string> {
     const input = serializeBlock(block);
+    const systemPrompt = hasPriorMemory(block)
+        ? SUMMARIZE_SYSTEM_PROMPT + PRESERVE_MEMORY_INSTRUCTION
+        : SUMMARIZE_SYSTEM_PROMPT;
     const request = {
         model: SUMMARIZE_MODEL,
         messages: [
-            { role: 'system' as const, content: SUMMARIZE_SYSTEM_PROMPT },
+            { role: 'system' as const, content: systemPrompt },
             { role: 'user' as const, content: input },
         ],
         temperature: 0,
