@@ -470,17 +470,16 @@ export async function resolveSparsePdfVision(
 
 /**
  * Find the LAST user message in the conversation that contains PDF parts.
- * Mirrors findCurrentImageMessageIndex — if the most recent non-user message
- * is an assistant message, there's no "current" PDF to enrich.
+ * Mirrors findCurrentImageMessageIndex — the newest PDF-bearing user message
+ * is found regardless of trailing assistant/tool messages (see the image
+ * variant for why bailing on a trailing assistant wrongly skipped the current
+ * turn's attachment).
  */
 function findCurrentPdfMessageIndex(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
 ): number | undefined {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
-        if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
-            return undefined;
-        }
         if (message.role !== vscode.LanguageModelChatMessageRole.User) {
             continue;
         }
@@ -690,18 +689,23 @@ function logDataPartSummary(
 
 /**
  * Find the LAST user message in the conversation that contains images.
- * If the most recent non-user message is an assistant message, there's no
- * "current" image to describe — the last image turn has already been answered.
+ *
+ * We deliberately do NOT bail when a trailing assistant/tool message follows
+ * the image message: in agent mode the current user turn (with freshly
+ * attached images) is immediately followed by assistant tool-call messages,
+ * and treating that as "already answered" made the newest images silently
+ * dropped without ever being described (observed: `current=0 ... omitted=1`
+ * with `image/png` parts present in the request). Already-described image
+ * turns are handled earlier by marker replay (Case A) / cache (Case C), so
+ * returning the last image-bearing user message here is safe — the one thing
+ * it changes is that an UNRESOLVED image message finally gets described once
+ * and cached instead of being discarded.
  */
 function findCurrentImageMessageIndex(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
 ): number | undefined {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
-        // If we hit an assistant message first, there's no current user image
-        if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
-            return undefined;
-        }
         if (message.role !== vscode.LanguageModelChatMessageRole.User) {
             continue;
         }
