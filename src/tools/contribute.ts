@@ -13,6 +13,7 @@
  */
 import * as vscode from 'vscode';
 import { DEFAULT_TOOLSET, type AgentTool } from '../harness/tools/index.js';
+import { createSemanticSearchTool } from './semanticSearch.js';
 import { getConfig } from '../config.js';
 
 /** Whether the proposed registerTool-with-models API is available. */
@@ -57,9 +58,23 @@ export function contributeNikasTools(context: vscode.ExtensionContext): void {
                 definition: Record<string, unknown>,
                 tool: RegisteredLmTool,
             ) => vscode.Disposable;
+            invokeTool?: (name: string, options: { input?: unknown }, token?: vscode.CancellationToken) => Thenable<unknown>;
         };
         const disposables: vscode.Disposable[] = [];
-        for (const tool of DEFAULT_TOOLSET) {
+        // Include the vscode-backed semantic_search tool (invokes Copilot's
+        // codebase index via lm.invokeTool) alongside the pure harness tools.
+        const toolset: AgentTool[] = [
+            ...DEFAULT_TOOLSET,
+            createSemanticSearchTool({
+                invokeTool: async (name, input) => {
+                    if (typeof lm.invokeTool !== 'function') {
+                        throw new Error('vscode.lm.invokeTool is unavailable in this VS Code build');
+                    }
+                    return lm.invokeTool(name, { input });
+                },
+            }),
+        ];
+        for (const tool of toolset) {
             const definition: Record<string, unknown> = {
                 name: `nika_${tool.name}`,
                 displayName: `Nikas: ${tool.name}`,

@@ -3,9 +3,33 @@ import { SecretStore } from '../secrets.js';
 import { runAgent } from '../harness/index.js';
 import { DEFAULT_TOOLSET } from '../harness/tools/index.js';
 import { createEmbeddingsMatcher } from '../harness/embeddingMatcher.js';
+import { createSemanticSearchTool } from '../tools/semanticSearch.js';
 import { getSelectedModel, getThinkingEffort, getVirtualToolsEmbeddings, getVirtualToolsEmbeddingsThreshold } from '../config.js';
 import { log } from '../log.js';
 import { usageTracker } from '../usage/tracker.js';
+
+/**
+ * Invoker for the vscode-backed `semantic_search` harness tool: calls
+ * Copilot's contributed codebase-search tool via `vscode.lm.invokeTool`
+ * (stable API), bridging the harness's AbortSignal to a CancellationToken.
+ * Throws when the API is unavailable (caller reports it as tool output).
+ */
+async function invokeCopilotTool(name: string, input: unknown, signal?: AbortSignal): Promise<unknown> {
+    const lm = vscode.lm as unknown as {
+        invokeTool?: (n: string, o: { input?: unknown }, t?: vscode.CancellationToken) => Thenable<unknown>;
+    };
+    if (typeof lm.invokeTool !== 'function') {
+        throw new Error('vscode.lm.invokeTool is unavailable in this VS Code build');
+    }
+    const cts = new vscode.CancellationTokenSource();
+    const onAbort = signal?.addEventListener('abort', () => cts.cancel(), { once: true });
+    try {
+        return await lm.invokeTool(name, { input }, cts.token);
+    } finally {
+        (onAbort as (() => void) | undefined)?.();
+        cts.dispose();
+    }
+}
 
 /**
  * `Nikas: Run Agent` — surface the built-in agent harness as a command.
@@ -66,8 +90,8 @@ export async function runAgentCommand(context: vscode.ExtensionContext): Promise
                 const agentResult = await runAgent(task, {
                     apiKey,
                     cwd: folder.uri.fsPath,
-                    tools: DEFAULT_TOOLSET,
-                    alwaysShown: ['read_file', 'write_file', 'search_text'],
+                    tools: [...DEFAULT_TOOLSET, createSemanticSearchTool({ invokeTool: invokeCopilotTool })],
+                    alwaysShown: ['read_file', 'write_file', 'search_text', 'semantic_search'],
                     collapsible: ['run_terminal', 'run_tests'],
                     thinkingEffort: getThinkingEffort(),
                     signal: abort.signal,

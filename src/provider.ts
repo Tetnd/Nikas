@@ -2655,6 +2655,18 @@ function logKnowledgeSummary(tools: readonly vscode.LanguageModelChatTool[]): vo
     if (enriched === 0) {
         log.info('Copilot knowledge: ON but no tools matched the catalog — all passed through unchanged');
     }
+    // Semantic-index visibility (v0.7.94): when Copilot hands us the codebase
+    // search tool, DeepSeek can query the project semantic index through the
+    // agent loop — log it so a missing tool is easy to diagnose (Configure
+    // Tools / index status are Copilot-side gates, not ours).
+    const semantic = tools.find(
+        t => t.name === 'semantic_search' || t.name === 'codebase' || t.name === 'copilot_searchCodebase'
+    );
+    if (semantic) {
+        log.info(`[semantic-index] Copilot exposed '${semantic.name}' — agent can query the codebase semantic index`);
+    } else {
+        log.verbose('[semantic-index] Copilot did not expose the codebase search tool this request');
+    }
 }
 
 function mapTool(tool: vscode.LanguageModelChatTool): DeepSeekTool {
