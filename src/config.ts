@@ -541,6 +541,15 @@ export function getAutoReloadAfterPatch(): boolean {
     return getConfig().get<boolean>('autoReloadAfterPatch') ?? false;
 }
 
+/**
+ * Whether the usage & cost dashboard is active. Purely additive (observes
+ * completed requests) — disabling stops recording + the status bar item.
+ * Default true.
+ */
+export function getUsageTracking(): boolean {
+    return getConfig().get<boolean>('usageTracking') ?? true;
+}
+
 /** Number of `.bak-*` bundle backups to retain. */
 export function getPatchBackupRetention(): number {
     const v = getConfig().get<number>('patchBackupRetention');

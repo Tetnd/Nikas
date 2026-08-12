@@ -15,19 +15,33 @@ function check(name, cond, detail) {
     else { failures++; console.log(`  FAIL ${name} ${detail ?? ''}`); }
 }
 
-// ── 1. augmentToolDescription ─────────────────────────────────────────────
+// ── 1. augmentToolDescription (ADDITIVE: keeps the real description) ─────
+// v0.7.76: the catalog no longer REPLACES the description Copilot sends.
+// The real (Microsoft-authored) description is kept verbatim and only
+// DeepSeek-specific guidance (When to use / Caution / Prefer) is appended.
 console.log('\n=== 1. augmentToolDescription ===');
 {
     const enriched = augmentToolDescription('read', 'Read a file');
-    check('enriches known tool', enriched.includes('Read files in the workspace'));
-    check('keeps when-to-use', enriched.includes('When to use:'));
-    check('keeps original content folded in', enriched.length > 'Read a file'.length);
+    check('keeps the REAL original description verbatim', enriched.startsWith('Read a file'));
+    check('appends when-to-use guidance', enriched.includes('When to use:'));
+    check('original kept + guidance longer than original', enriched.length > 'Read a file'.length);
 
     const passthrough = augmentToolDescription('mystery_tool_xyz', 'Original desc');
     check('unknown tool passes through unchanged', passthrough === 'Original desc');
 
     const terminal = augmentToolDescription('runInTerminal', 'Run a command');
     check('terminal tool includes caution', terminal.includes('Caution:'));
+
+    // A real tool with a real source description keeps BOTH the source text
+    // (modelDescription) and our guidance.
+    const readFile = augmentToolDescription('read_file', 'Read the contents of a file. Line numbers are 1-indexed.');
+    check('read_file keeps the REAL source description', readFile.startsWith('Read the contents of a file. Line numbers are 1-indexed.'));
+    check('read_file appends prefer guidance', readFile.includes('Prefer:'));
+
+    // Empty original falls back to the catalog enrichedDescription (still enriched).
+    const empty = augmentToolDescription('read_file', '   ');
+    check('empty original falls back to catalog description', empty.includes('Read the contents of a file'));
+    check('empty original still gets guidance', empty.includes('When to use:'));
 }
 
 // ── 2. Catalog access ─────────────────────────────────────────────────────
@@ -77,14 +91,15 @@ console.log('\n=== 6. Expanded catalog coverage ===');
     check('container-tools_get-config known (kebab alias)', getToolKnowledge('container-tools_get-config')?.category === 'container');
     check('unknown still undefined', getToolKnowledge('zzz_not_a_tool') === undefined);
 
-    // Every expanded entry must produce an enriched description with the
-    // "When to use" hint.
-    const enriched = augmentToolDescription('editFiles', 'Edit');
-    check('editFiles enrichment has when-to-use', enriched.includes('When to use:'));
-    check('editFiles enrichment has caution', enriched.includes('Caution:'));
+    // Guidance is APPENDED to the real description (additive), so a real
+    // description must still surface with our hints attached.
+    const editFiles = augmentToolDescription('editFiles', 'Edit files');
+    check('editFiles keeps real description', editFiles.startsWith('Edit files'));
+    check('editFiles appends when-to-use', editFiles.includes('When to use:'));
+    check('editFiles appends caution', editFiles.includes('Caution:'));
 
     const web = augmentToolDescription('fetch', 'Fetch page');
-    check('web tool enrichment present', web.length > 'Fetch page'.length);
+    check('web tool keeps real description + guidance', web.startsWith('Fetch page') && web.length > 'Fetch page'.length);
 
     const cats = categorizeTools(['problems', 'editFiles', 'fetch', 'createJupyterNotebook', 'todo']);
     check('categorize new categories', cats['diagnostics']?.includes('problems') &&
@@ -120,7 +135,7 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
         'search_workspace_symbols', 'get_changed_files', 'fetch_webpage',
         'github_repo', 'github_text_search', 'test_search',
         'copilot_getNotebookSummary', 'read_notebook_cell_output',
-        'testFailure', 'run_in_terminal', 'send_to_terminal',
+        'testFailure', 'test_failure', 'run_in_terminal', 'send_to_terminal',
         'get_terminal_output', 'kill_terminal', 'terminal_selection',
         'terminal_last_command', 'get_task_output', 'open_browser_page',
         'screenshot_page', 'navigate_page', 'read_page', 'run_playwright_code',
@@ -133,9 +148,20 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
         'search_subagent', 'explore_subagent', 'tool_search', 'task_complete',
         'vscode_renameSymbol', 'vscode_listCodeUsages',
         'create_new_workspace', 'container-tools_get-config',
+        // Source-verified tools added v0.7.76 (reference/copilot-chat
+        // package.json contributes.languageModelTools + ToolName enum).
+        'execution_subagent', 'get_project_setup_info',
+        'run_vscode_command', 'get_search_view_results',
     ];
     const missing = realNames.filter(n => !getToolKnowledge(n));
     check('all real bundle snake_case names present', missing.length === 0, 'missing: ' + missing.join(', '));
+
+    // Source-verified categories for the newly added real tools.
+    check('execution_subagent categorized terminal', getToolKnowledge('execution_subagent')?.category === 'terminal');
+    check('get_project_setup_info categorized project', getToolKnowledge('get_project_setup_info')?.category === 'project');
+    check('run_vscode_command categorized vscode', getToolKnowledge('run_vscode_command')?.category === 'vscode');
+    check('get_search_view_results categorized search', getToolKnowledge('get_search_view_results')?.category === 'search');
+    check('test_failure categorized diagnostics', getToolKnowledge('test_failure')?.category === 'diagnostics');
 
     // Enrichment works for a snake_case tool too.
     const enr = augmentToolDescription('run_in_terminal', 'Run a command');

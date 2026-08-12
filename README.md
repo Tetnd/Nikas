@@ -20,6 +20,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 - **Streaming responses** — real-time token-by-token output
 - **Tool calling** — full support for VS Code's built-in tools (read files, run terminal commands, search, etc.)
 - **Secure key storage** — API keys stored in your OS keychain, never in plaintext settings
+- **📊 Usage & Cost dashboard** — per-conversation token usage and estimated cost (this session + all time, by provider, top sessions), surfaced in the status bar and a QuickPick report (`Nikas: Usage & Cost`). Purely observational — disabling `nikas.usageTracking` stops recording and hides the status bar item, never affecting chat behavior
 - **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
@@ -152,6 +153,8 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `Nikas: Copilot PDF Patch Status` | Show whether the Copilot Chat PDF patches are applied |
 | `Nikas: Re-apply Copilot PDF Patches` | Force re-apply the PDF patches to the installed Copilot Chat bundle |
 | `Nikas: Check for Updates` | Download and install the latest Nikas release from GitHub |
+| `Nikas: Usage & Cost` | Open the token/cost dashboard (total, this session, by provider, top sessions, copy markdown report) |
+| `Nikas: Reset Usage Stats` | Clear all recorded usage (with confirmation) |
 | `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
 ## Settings
@@ -174,6 +177,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.patchBackupRetention` | `5` | Number of Copilot bundle backups to keep |
 | `nikas.updateRepo` | `alive2/nika` | GitHub repo used by `Nikas: Check for Updates` — **set to your own fork** |
 | `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
+| `nikas.usageTracking` | `true` | Track per-conversation token usage + estimated cost (Usage & Cost dashboard + status bar). Disabling stops recording and hides the status bar item — never affects chat behavior |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works

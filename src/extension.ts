@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled, getUsageTracking } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -14,6 +14,8 @@ import {
     createSetupStatusBarItem,
     updateSetupStatusBar,
 } from './commands/setup.js';
+import { showUsage, resetUsage, wireUsagePersistence, updateUsageStatusBar } from './commands/usage.js';
+import { setUsageTrackingEnabled } from './usage/tracker.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -117,6 +119,19 @@ export async function activate(context: vscode.ExtensionContext) {
     // Optional self-update checks (only if nikas.autoCheckUpdates is enabled).
     context.subscriptions.push(scheduleAutoUpdateCheck(context));
 
+    // Usage & cost dashboard — additive observer over the request path.
+    // Persists per-session token/cost stats and shows a status-bar summary.
+    setUsageTrackingEnabled(getUsageTracking());
+    const usageStatusBar = wireUsagePersistence(context);
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('nikas.usageTracking')) {
+                setUsageTrackingEnabled(getUsageTracking());
+                updateUsageStatusBar(usageStatusBar);
+            }
+        })
+    );
+
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nikas.chooseProvider', () => chooseProvider()),
@@ -145,6 +160,8 @@ export async function activate(context: vscode.ExtensionContext) {
         // silently summarizes ANY /compact request that reaches the model.
         vscode.commands.registerCommand('nikas.compactConversation', () => runSilentCompact()),
         vscode.commands.registerCommand('nikas.toggleAgentEfforts', () => toggleAgentEfforts()),
+        vscode.commands.registerCommand('nikas.usage', () => showUsage()),
+        vscode.commands.registerCommand('nikas.resetUsage', () => resetUsage()),
         vscode.commands.registerCommand('nikas.manage', () => {
             const agentEffortsOn = getAgentEffortsEnabled();
             vscode.window.showQuickPick(
@@ -224,6 +241,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         label: '$(cloud-download) Check for Updates',
                         description: 'Download and install the latest version from GitHub',
                     },
+                    {
+                        label: '$(graph-line) Usage & Cost',
+                        description: 'Token and estimated-cost dashboard (this session + all time)',
+                    },
                 ],
                 { title: 'Nikas: Manage' }
             ).then(selection => {
@@ -288,6 +309,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(cloud-download) Check for Updates':
                         vscode.commands.executeCommand('nikas.checkForUpdates');
+                        break;
+                    case '$(graph-line) Usage & Cost':
+                        vscode.commands.executeCommand('nikas.usage');
                         break;
                 }
             });

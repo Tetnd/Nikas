@@ -11,6 +11,7 @@ import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } from './routing.js';
 import { assertToolsWithinLimit } from './tools/request.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
+import { usageTracker, setCurrentSessionKey } from './usage/tracker.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
 import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool, DeepSeekContentPart } from './api/types.js';
@@ -1301,6 +1302,15 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // ORIGINAL history (before compaction replaces the oldest turns with a
         // summary) so it stays stable across turns and distinct across chats.
         const sessionKey = getSessionKeyFromDeepSeek(deepseekMessages);
+        // Report the active conversation to the usage UI (status bar / dashboard).
+        setCurrentSessionKey(sessionKey);
+        // Human-readable label for the per-session view — first user turn.
+        const sessionLabel = (() => {
+            for (const m of deepseekMessages) {
+                if (m.role === 'user') return messagePreview(m, 60);
+            }
+            return undefined;
+        })();
 
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
@@ -1532,6 +1542,16 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                         );
                         // Monitor actual usage vs the configured window
                         logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens, sessionKey);
+                        // Account for usage/cost (additive observer — never blocks).
+                        usageTracker.record({
+                            provider: 'deepseek',
+                            model: modelId,
+                            promptTokens: usage.promptTokens,
+                            completionTokens: usage.completionTokens,
+                            timestamp: Date.now(),
+                            sessionKey,
+                            sessionLabel,
+                        });
                     }
 
                     // Inject replay marker if we described images this turn
@@ -1689,6 +1709,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // ORIGINAL history (before compaction) so it stays stable across turns
         // and distinct across chats.
         const sessionKey = getSessionKeyFromDeepSeek(deepseekMessages);
+        // Report the active conversation to the usage UI.
+        setCurrentSessionKey(sessionKey);
+        const sessionLabel = (() => {
+            for (const m of deepseekMessages) {
+                if (m.role === 'user') return messagePreview(m, 60);
+            }
+            return undefined;
+        })();
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
         // to the configured window as a safety net.
@@ -1855,6 +1883,16 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                         );
                         // Monitor actual usage vs the configured window
                         logUsageVsWindow(usage.promptTokens, usage.completionTokens, estimatedSentTokens, sessionKey);
+                        // Account for usage/cost (additive observer — never blocks).
+                        usageTracker.record({
+                            provider: 'deepseek-responses',
+                            model: modelId,
+                            promptTokens: usage.promptTokens,
+                            completionTokens: usage.completionTokens,
+                            timestamp: Date.now(),
+                            sessionKey,
+                            sessionLabel,
+                        });
                     }
                     if (replayMarkerMetadata.visionText) {
                         progress.report(createReplayMarkerPart(replayMarkerMetadata));
@@ -1945,6 +1983,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         }
 
+        // Estimate prompt tokens for the usage dashboard (the Gemini
+        // generateContent endpoint does not return usage).
+        const promptText = contents.map(c => (c.parts ?? []).map(p => p.text ?? '').join('\n')).join('\n');
+        const estimatedPrompt = estimateTextTokens(promptText);
+
         const request = { contents, generationConfig: { temperature: 0.7, maxOutputTokens: 4096 } };
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
@@ -1970,6 +2013,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (text) {
                 progress.report(new vscode.LanguageModelTextPart(text));
                 getOutputChannel().appendLine(`[Nikas] Gemini response: ${text.slice(0, 100)}...`);
+                // Account for usage/cost (estimated — no usage returned by API).
+                usageTracker.record({
+                    provider: 'gemini',
+                    model: modelId,
+                    promptTokens: estimatedPrompt,
+                    completionTokens: estimateTextTokens(text),
+                    timestamp: Date.now(),
+                });
             }
         } catch (err) {
             if (abortController.signal.aborted) return;
@@ -2008,6 +2059,10 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
         }
 
+        // Estimate prompt tokens for the usage dashboard (Ollama returns none).
+        const promptText = ollamaMessages.map(m => m.content).join('\n');
+        const estimatedPrompt = estimateTextTokens(promptText);
+
         const request = {
             model: modelId,
             messages: ollamaMessages,
@@ -2040,6 +2095,14 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             if (text) {
                 progress.report(new vscode.LanguageModelTextPart(text));
                 getOutputChannel().appendLine(`[Nikas] Gemma4 response: ${text.slice(0, 100)}...`);
+                // Account for usage (local model — cost is $0, tokens still counted).
+                usageTracker.record({
+                    provider: 'gemma4',
+                    model: modelId,
+                    promptTokens: estimatedPrompt,
+                    completionTokens: estimateTextTokens(text),
+                    timestamp: Date.now(),
+                });
             }
         } catch (err) {
             if (abortController.signal.aborted) return;

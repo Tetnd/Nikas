@@ -1,4 +1,5 @@
 import { safeStringify } from '../api/sanitize.js';
+import { usageTracker } from '../usage/tracker.js';
 import type { VisionResult } from './types.js';
 
 /**
@@ -130,6 +131,18 @@ export async function describeImage(
                 error: 'Gemini returned no description text',
             };
         }
+
+        // Account for the vision sub-call in the usage dashboard (additive
+        // observer — a failure here must never break the vision result).
+        try {
+            usageTracker.record({
+                provider: 'vision',
+                model: modelName,
+                promptTokens: Math.ceil(((prompt?.length ?? 0) + base64Data.length / 1.4) / 4),
+                completionTokens: Math.ceil(description.length / 4),
+                timestamp: Date.now(),
+            });
+        } catch { /* never break vision */ }
 
         return { description, success: true };
     } catch (err) {

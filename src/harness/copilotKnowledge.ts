@@ -12,10 +12,23 @@
  * (so we keep native browser control, dev tools, workspace, terminal, etc.):
  *
  *   - `ToolKnowledgeCatalog`: tool name → { category, enrichedDescription,
- *     whenToUse, caution }. Used to enrich the `description` we send, so
- *     DeepSeek understands what each Copilot tool does and when to call it.
- *   - `augmentToolDescription(name, original)`: returns a richer description
- *     when the catalog has knowledge, else the original (safe fallback).
+ *     whenToUse, caution, prefer }. Used to enrich the `description` we send.
+ *   - `augmentToolDescription(name, original)`: returns the REAL description
+ *     Copilot supplied (kept verbatim) plus our guidance, or the original
+ *     unchanged (safe fallback).
+ *
+ * SOURCE-GROUNDED (v0.7.76): tool names + descriptions are verified against
+ * the open-source Copilot reference at `reference/copilot-chat/`
+ * (package.json `contributes.languageModelTools` `modelDescription` + the
+ * `ToolName` enum in src/extension/tools/common/toolNames.ts). Providers
+ * receive the snake_case `ToolName` values (e.g. `read_file`, `grep_search`)
+ * — `toolsService.ts` maps contributed names via `getToolName()` before
+ * handing them to BYOK providers. The catalog's `enrichedDescription` is a
+ * fallback ONLY for tools Copilot ships with an empty description; it never
+ * replaces the real one. Categories come from the source `ToolCategory`
+ * grouping (Core / Jupyter Notebook / Web Interaction / VS Code Interaction /
+ * Testing), mapped to our compact labels (file, edit, search, diagnostics,
+ * terminal, browser, notebook, task, vscode, project, web, container).
  *
  * Reuses the harness vocabulary (categories, tool catalog, structured-result
  * framing) but is a pure, dependency-free module so it's testable in Node.
@@ -238,7 +251,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'browser',
         enrichedDescription: 'Capture a screenshot of the current browser page and RETURN the image directly to you for viewing. The image is shown inline in the conversation — you can see it. No file saving is needed or possible here.',
         whenToUse: 'Use whenever you want to SEE the current rendered page. This is THE tool for viewing a page visually.',
-        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you.',
+        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you; no file saving is needed or possible.',
     },
     clickElement: {
         category: 'browser',
@@ -342,18 +355,18 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     // enrichment was stuck at 47/51 because this name had no catalog entry).
     create_new_workspace: {
         category: 'project',
-        enrichedDescription: 'Set up a complete new project structure/workspace scaffold.',
-        whenToUse: 'Use when initializing a new project or framework.',
+        enrichedDescription: 'Get comprehensive setup steps to help the user create complete project structures in a VS Code workspace. Designed for full project initialization and scaffolding (TypeScript projects, React apps, Next.js, Vite, MCP servers, VS Code extensions), not for creating individual files. Provides folder structure, package.json/dependencies, config files, boilerplate, and build/run instructions.',
+        whenToUse: 'Use when initializing a new project or framework from scratch.',
+    },
+    get_project_setup_info: {
+        category: 'project',
+        enrichedDescription: 'Provides project setup information for a VS Code workspace based on a project type and programming language. Do not call this tool without first calling the tool to create a workspace.',
+        whenToUse: 'Use after create_new_workspace to get setup details for the chosen project type.',
     },
     resolveMemoryFileUri: {
         category: 'vscode',
         enrichedDescription: 'Resolve a memory-file path to its fully qualified URI.',
         whenToUse: 'Use when you need the actual URI of a memory/note file.',
-    },
-    memory: {
-        category: 'task',
-        enrichedDescription: 'Manage persistent notes/memory across sessions (user/session/repo scopes).',
-        whenToUse: 'Use to save and retrieve cross-session context and conventions.',
     },
 
     // ── web group ───────────────────────────────────────────────────────
@@ -403,12 +416,13 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     // ── file read / write ──────────────────────────────────────────────
     read_file: {
         category: 'file',
-        enrichedDescription: 'Read the contents of a file from the workspace. Prefer targeted reads over dumping whole large files; you can read a specific line range.',
+        enrichedDescription: 'Read the contents of a file. You must specify the line range you are interested in. Line numbers are 1-indexed. If the file contents returned are insufficient, call this tool again to retrieve more content. Prefer reading larger ranges over doing many small reads. Binary files use startLine/endLine as byte offsets.',
         whenToUse: 'Use to inspect a file before editing it, or to confirm what code exists.',
+        prefer: 'Prefer targeted line-range reads over dumping an entire large file.',
     },
     view_image: {
         category: 'file',
-        enrichedDescription: 'View the contents of an image file directly (png/jpg/gif/webp).',
+        enrichedDescription: 'View the contents of an image file. Use this instead of read_file for supported image files such as png, jpg, jpeg, gif, and webp. The tool returns the image directly to multimodal models and does not take line ranges or offsets.',
         whenToUse: 'Use to look at a screenshot, diagram, or image asset the task references.',
     },
     write_file: {
@@ -426,44 +440,50 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     create_file: {
         category: 'edit',
-        enrichedDescription: 'Create a new file in the workspace. Creates parent directories as needed.',
+        enrichedDescription: 'This is a tool for creating a new file in the workspace. The file will be created with the specified content. The directory will be created if it does not already exist. Never use this tool to edit a file that already exists.',
         whenToUse: 'Use to scaffold new files, modules, or configs.',
     },
     create_directory: {
         category: 'edit',
-        enrichedDescription: 'Create a new directory (recursively if needed) in the workspace.',
+        enrichedDescription: 'Create a new directory structure in the workspace. Will recursively create all directories in the path, like mkdir -p. You do not need to use this tool before using create_file, that tool will automatically create the needed directories.',
         whenToUse: 'Use to create folders for a new module or structure.',
     },
+    // ── edit tools (source-grounded V4A / replace contracts) ───────────
     apply_patch: {
         category: 'edit',
-        enrichedDescription: 'Apply a patch or diff to the workspace.',
+        enrichedDescription: 'Edit text files. Do not use this tool to edit Jupyter notebooks. apply_patch allows you to execute a diff/patch against a text file, but the format of the diff specification is unique to this task. To use the apply_patch command, pass a message of the following structure as "input": *** Begin Patch / [YOUR_PATCH] / *** End Patch, where [YOUR_PATCH] uses the V4A diff format: *** [ACTION] File: [/absolute/path/to/file] -> ACTION can be one of Add, Update, or Delete. Do not use line numbers in this diff format.',
         whenToUse: 'Use to apply a set of changes provided as a patch.',
     },
     insert_edit_into_file: {
         category: 'edit',
-        enrichedDescription: 'Insert an edit into a file at a specified location.',
+        enrichedDescription: 'Insert new code into an existing file in the workspace. Use this tool once per file that needs to be modified, even if there are multiple changes for a file. Generate the "explanation" property first. The system is very smart and can understand how to apply your edits, you just need to provide minimal hints. Avoid repeating existing code, instead use comments to represent regions of unchanged code. Be as concise as possible.',
         whenToUse: 'Use to make a targeted insertion into existing file content.',
     },
     replace_string_in_file: {
         category: 'edit',
-        enrichedDescription: 'Replace an exact literal block of text in a file with new text. Requires the old text to match exactly (including whitespace).',
+        enrichedDescription: 'This is a tool for making edits in an existing file in the workspace. For moving or renaming files, use the terminal mv command instead. For larger edits, split them into smaller edits and call the edit tool multiple times to ensure accuracy. Each use of this tool replaces exactly ONE occurrence of oldString. CRITICAL for oldString: must uniquely identify the single instance to change; include at least 3 lines of context BEFORE and AFTER the target text, matching whitespace and indentation precisely. Never use "Lines 123-456 omitted" or ...existing code... comments in the oldString or newString.',
         whenToUse: 'Use for surgical, exact edits. Include enough surrounding context to make the match unique.',
     },
     multi_replace_string_in_file: {
         category: 'edit',
-        enrichedDescription: 'Apply multiple exact-block replacements across one or more files in a single call.',
+        enrichedDescription: 'This tool allows you to apply multiple replace_string_in_file operations in a single call, which is more efficient than calling replace_string_in_file multiple times. It takes an array of replacement operations and applies them sequentially. Each replacement operation has the same parameters as replace_string_in_file: filePath, oldString, newString, and explanation. Ideal when you need to make multiple edits across different files or multiple edits in the same file. The tool will provide a summary of successful and failed operations.',
         whenToUse: 'Use when you need several related edits at once — batch them for efficiency.',
     },
 
     // ── search / inspect ───────────────────────────────────────────────
     file_search: {
         category: 'search',
-        enrichedDescription: 'Find files by name or glob pattern across the workspace.',
+        enrichedDescription: 'Search for files in the workspace by glob pattern. This only returns the paths of matching files. Use this tool when you know the exact filename pattern of the files you are searching for. Glob patterns match from the root of the workspace folder. Examples: **/*.{js,ts} to match all js/ts files in the workspace; src/** to match all files under the top-level src folder.',
         whenToUse: 'Use to discover files by path pattern.',
+    },
+    get_search_view_results: {
+        category: 'search',
+        enrichedDescription: 'The results from the search view (the workspace Search panel).',
+        whenToUse: 'Use to read results the user already has in the Search view.',
     },
     grep_search: {
         category: 'search',
-        enrichedDescription: 'Search the workspace for files or lines matching a regex/string. Returns file paths and matches.',
+        enrichedDescription: 'Do a fast text search in the workspace. Use this tool when you want to search with an exact string or regex. If you are not sure what words will appear in the workspace, prefer using regex patterns with alternation (|) or character classes to search for multiple potential words at once. Use includePattern to search within files matching a specific pattern, or in a specific file, using a relative path. Use includeIgnoredFiles to include files normally ignored by .gitignore, other ignore files, and files.exclude and search.exclude settings.',
         whenToUse: 'Use to locate where a symbol, string, or pattern lives before editing.',
     },
     text_search: {
@@ -473,36 +493,47 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     semantic_search: {
         category: 'search',
-        enrichedDescription: 'Semantic search across the codebase for relevant file chunks, symbols, and information.',
+        enrichedDescription: 'Run a natural language search for relevant code or documentation comments from the user\'s current workspace. Returns relevant code snippets from the user\'s current workspace if it is large, or the full contents of the workspace if it is small.',
         whenToUse: 'Use to understand what code exists and where, when you do not know exact names.',
     },
     list_dir: {
         category: 'search',
-        enrichedDescription: 'List the contents of a directory to see its files and subfolders.',
+        enrichedDescription: 'List the contents of a directory. Result will have the name of the child. If the name ends in /, it is a folder, otherwise a file.',
         whenToUse: 'Use to understand a project structure before navigating deeper.',
     },
     read_project_structure: {
         category: 'search',
-        enrichedDescription: 'Read/analyze the overall structure of the project (folders, modules, key files).',
+        enrichedDescription: 'Get a file tree representation of the workspace.',
         whenToUse: 'Use to get oriented in an unfamiliar codebase.',
     },
     search_workspace_symbols: {
         category: 'search',
-        enrichedDescription: 'Search the workspace for symbols (functions, classes, variables) by name.',
+        enrichedDescription: 'Search the user\'s workspace for code symbols using language services. Use this tool when the user is looking for a specific symbol in their workspace.',
         whenToUse: 'Use to jump to a definition or find where a symbol is declared.',
     },
     get_changed_files: {
         category: 'search',
-        enrichedDescription: 'List the files that have changed (e.g. in the working tree or recent edits).',
+        enrichedDescription: 'Get git diffs of current file changes in a git repository. You can also use run_in_terminal to run git commands in a terminal.',
         whenToUse: 'Use to see what was modified before reviewing or committing.',
     },
     get_errors: {
         category: 'diagnostics',
-        enrichedDescription: 'Retrieve compile or lint errors for a file (or across the workspace).',
+        enrichedDescription: 'Get any compile or lint errors in a specific file or across all files. If the user mentions errors or problems in a file, they may be referring to these. Use the tool to see the same errors that the user is seeing. Also use this tool after editing a file to validate the change.',
         whenToUse: 'Use after edits to check for type/compile/lint errors and drive fixes.',
+    },
+    test_failure: {
+        category: 'diagnostics',
+        enrichedDescription: 'Includes test failure information in the prompt (from the most recent test run).',
+        whenToUse: 'Use when a test failed to understand exactly what broke and where.',
     },
 
     // ── terminal / execute ─────────────────────────────────────────────
+    execution_subagent: {
+        category: 'terminal',
+        enrichedDescription: 'Launch an iterative execution-focused subagent that performs an execution-based task (run tests and summarize failures, install dependencies, etc.). USE THIS INSTEAD OF RUNNING INDIVIDUAL COMMANDS WITH run_in_terminal EXCEPT IN THE RARE CASES THAT YOU NEED THE FULL OUTPUT OF A COMMAND. Returns a list of commands that were run with relevant output excerpts.',
+        whenToUse: 'Use to run tests and filter failures, install dependencies, or any execution task where you want a summarized outcome rather than raw full output.',
+        prefer: 'Prefer execution_subagent over chaining individual run_in_terminal calls for execution tasks (tests, installs) unless you need the full command output.',
+    },
     run_in_terminal: {
         category: 'terminal',
         enrichedDescription: 'Run a shell command in the workspace terminal and return its output. This is how you build, run tests, or execute scripts.',
@@ -570,7 +601,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     search_subagent: {
         category: 'search',
-        enrichedDescription: 'Dispatch a search subagent to explore the codebase and answer questions.',
+        enrichedDescription: 'Launch a fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). Returns a list of relevant files/snippet locations in the workspace.',
         whenToUse: 'Use for broad exploration when you need to gather context across many files.',
         prefer: 'Give the subagent a detailed, self-contained prompt — it only receives a compacted AGENTS.md, not your full session.',
     },
@@ -601,7 +632,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         category: 'browser',
         enrichedDescription: 'Capture a screenshot of the current browser page and RETURN the image directly to you for viewing. The image is shown inline in the conversation — you can see it. No file saving is needed or possible here.',
         whenToUse: 'Use whenever you want to SEE the current rendered page. This is THE tool for viewing a page visually.',
-        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you.',
+        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you; no file saving is needed or possible.',
     },
     click_element: {
         category: 'browser',
@@ -643,12 +674,12 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     run_notebook_cell: {
         category: 'notebook',
-        enrichedDescription: 'Run a code cell in a notebook file and return its output.',
+        enrichedDescription: 'This is a tool for running a code cell in a notebook file directly in the notebook editor. The output from the execution will be returned. Code cells should be run as they are added or edited when working through a problem. Avoid executing Markdown cells or providing Markdown cell IDs, as Markdown cells cannot be executed.',
         whenToUse: 'Use to execute notebook code and inspect results.',
     },
     edit_notebook_file: {
         category: 'notebook',
-        enrichedDescription: 'Edit a cell (or insert/delete) in a notebook file.',
+        enrichedDescription: 'This is a tool for editing an existing Notebook file in the workspace. Generate the "explanation" property first. The system is very smart and can understand how to apply your edits to the notebooks. When updating the content of an existing cell, ensure newCode preserves whitespace and indentation exactly and does NOT include any code markers such as (...existing code...).',
         whenToUse: 'Use to modify notebook code or structure.',
     },
     read_notebook_cell_output: {
@@ -665,12 +696,12 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     // ── web ────────────────────────────────────────────────────────────
     fetch_webpage: {
         category: 'web',
-        enrichedDescription: 'Fetch and summarize the main content of a web page or URL.',
+        enrichedDescription: 'Fetches the main content from a web page. This tool is useful for summarizing or analyzing the content of a webpage. You should use this tool when you think the user is looking for information from a specific webpage.',
         whenToUse: 'Use to read documentation, articles, or reference material from the web.',
     },
     github_repo: {
         category: 'web',
-        enrichedDescription: 'Search a GitHub repository for relevant source code snippets.',
+        enrichedDescription: 'Searches a GitHub repository for relevant source code snippets. Only use this tool if the user is very clearly asking for code snippets from a specific GitHub repository. Do not use this tool for GitHub repos that the user has open in their workspace.',
         whenToUse: 'Use to find code examples or implementations in a public repo.',
     },
     github_text_search: {
@@ -687,7 +718,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     tool_search: {
         category: 'task',
-        enrichedDescription: 'Search/discover which tools are available for the current task.',
+        enrichedDescription: 'Search for relevant tools by describing what you need. Returns tool references for tools matching your query. Use this when you need to find a tool but are not sure of its exact name. Use broad queries to cover related tools in one search (e.g. "github" instead of separate searches for issues and PRs).',
         whenToUse: 'Use to find the right tool when unsure what is available.',
     },
     task_complete: {
@@ -737,10 +768,15 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Get VS Code API documentation and references for extension development.',
         whenToUse: 'Use when building or debugging VS Code extension code.',
     },
+    run_vscode_command: {
+        category: 'vscode',
+        enrichedDescription: 'Run a command in VS Code. Use this tool to run a command in Visual Studio Code as part of a new workspace creation process only.',
+        whenToUse: 'Use when scaffolding a new workspace that needs a VS Code command executed.',
+    },
     switch_agent: {
         category: 'vscode',
-        enrichedDescription: 'Switch to a different agent/mode for the current task.',
-        whenToUse: 'Use when the task is better handled by a specialized agent.',
+        enrichedDescription: 'Switch to the Plan agent to align on approach before implementing. Plan will explore the codebase, gather context, clarify requirements with the user, and create an actionable implementation plan. SWITCH TO PLAN when: adding new functionality, multiple valid approaches exist, modifying existing behavior, architectural decisions required, changes span multiple files, or requirements are underspecified. Do NOT switch when a detailed spec/plan is already provided, you already started editing files, the change is a single obvious fix (typo/rename), or the user gave explicit step-by-step instructions.',
+        whenToUse: 'Use when the task is better handled by a specialized agent (planning first).',
     },
     install_extension: {
         category: 'vscode',
@@ -749,9 +785,14 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
 
     // ── memory / skills ────────────────────────────────────────────────
+    memory: {
+        category: 'task',
+        enrichedDescription: 'Manage a persistent memory system with three scopes for storing notes and information across conversations: /memories/ (user memory, persistent across workspaces), /memories/session/ (session-scoped, cleared after conversation), /memories/repo/ (repository-scoped, stored locally). Commands: view, create, str_replace, insert, delete, rename. Before creating new memory files, first view the /memories/ directory to understand what already exists.',
+        whenToUse: 'Use to save and retrieve cross-session context and conventions.',
+    },
     resolve_memory_file_uri: {
         category: 'vscode',
-        enrichedDescription: 'Resolve a memory-file path to its fully qualified URI.',
+        enrichedDescription: 'Resolve a memory file path (like /memories/session/plan.md or /memories/repo/notes.md) to its fully qualified URI. Use this when you need the actual URI for a memory file, for example to pass it to setArtifacts. The path must start with /memories/.',
         whenToUse: 'Use when you need the actual URI of a memory/note file.',
     },
     skill: {
@@ -769,11 +810,22 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
 /**
  * Return an enriched description for a tool when the catalog has knowledge,
  * else the original description unchanged (safe fallback).
+ *
+ * SOURCE-GROUNDED (v0.7.76): the `original` description is the REAL one
+ * Copilot sends — authored by Microsoft in `contributes.languageModelTools`
+ * `modelDescription` (verified against the open-source reference at
+ * reference/copilot-chat/package.json). We therefore KEEP it verbatim and only
+ * APPEND our DeepSeek-specific guidance (when to use / caution / prefer).
+ * The catalog's `enrichedDescription` is used ONLY as a fallback when Copilot
+ * ships a tool with an empty description — never to replace a real one.
+ * This eliminates the previous behavior where hand-written catalog text
+ * clobbered Microsoft's authoritative tool descriptions ("tool guessing").
  */
 export function augmentToolDescription(name: string, original: string): string {
     const k = DEFAULT_CATALOG[name];
     if (!k) return original;
-    const parts = [k.enrichedDescription];
+    const base = original && original.trim() ? original : k.enrichedDescription;
+    const parts = [base];
     if (k.whenToUse) parts.push(`When to use: ${k.whenToUse}`);
     if (k.caution) parts.push(`Caution: ${k.caution}`);
     if (k.prefer) parts.push(`Prefer: ${k.prefer}`);
