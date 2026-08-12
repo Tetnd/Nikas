@@ -64,7 +64,8 @@ export interface UsageSnapshot {
 
 /** Per-1M-token USD pricing (approximate defaults — overridable via setPricing). */
 export const DEFAULT_PRICING: Record<UsageProvider, { inputPerM: number; outputPerM: number }> = {
-    // DeepSeek V4 / chat-completions + responses (approximate, cache-miss input).
+    // DeepSeek (fallback for unknown model ids — see DEFAULT_DEEPSEEK_MODEL_PRICING
+    // for the real, model-specific + cache-aware rates used for known models).
     deepseek: { inputPerM: 0.27, outputPerM: 1.1 },
     'deepseek-responses': { inputPerM: 0.27, outputPerM: 1.1 },
     // Gemini 2.5 Flash direct API.
@@ -74,6 +75,29 @@ export const DEFAULT_PRICING: Record<UsageProvider, { inputPerM: number; outputP
     // Gemini vision description sub-calls.
     vision: { inputPerM: 0.3, outputPerM: 2.5 },
     unknown: { inputPerM: 0, outputPerM: 0 },
+};
+
+/**
+ * Real DeepSeek API pricing (per 1M tokens) for the models Nikas uses —
+ * verified against DeepSeek's official docs (api-docs.deepseek.com/quick_start/pricing,
+ * checked 2026-08-12). DeepSeek bills cache-HIT input ~20x cheaper than cache-MISS,
+ * so we charge the two separately (cache-aware) rather than a flat input rate.
+ */
+export interface DeepSeekModelPricing {
+    /** Per-1M-token price for cache-MISS prompt tokens (USD). */
+    inputMissPerM: number;
+    /** Per-1M-token price for cache-HIT prompt tokens (USD). */
+    inputHitPerM: number;
+    /** Per-1M-token price for completion/output tokens (USD). */
+    outputPerM: number;
+}
+
+export const DEFAULT_DEEPSEEK_MODEL_PRICING: Record<string, DeepSeekModelPricing> = {
+    'deepseek-v4-flash': { inputMissPerM: 0.14, inputHitPerM: 0.0028, outputPerM: 0.28 },
+    'deepseek-v4-pro': { inputMissPerM: 0.435, inputHitPerM: 0.003625, outputPerM: 0.87 },
+    // The Responses API only exposes deepseek-v4-flash; alias its model id to
+    // flash pricing so cost accounting is still accurate.
+    'deepseek-v4-flash-responses': { inputMissPerM: 0.14, inputHitPerM: 0.0028, outputPerM: 0.28 },
 };
 
 const RECENT_CAP = 200;
@@ -101,12 +125,18 @@ export class UsageTracker {
     private _recent: UsageRecord[] = [];
     private _sessionLabels: Record<string, string> = {};
     private _pricing: Record<UsageProvider, { inputPerM: number; outputPerM: number }> = DEFAULT_PRICING;
+    private _deepseekModelPricing: Record<string, DeepSeekModelPricing> = { ...DEFAULT_DEEPSEEK_MODEL_PRICING };
     private _persist?: (snapshot: UsageSnapshot) => void;
     private _listeners = new Set<() => void>();
 
     /** Override per-provider pricing (used by tests; defaults are sane). */
     setPricing(p: Partial<Record<UsageProvider, { inputPerM: number; outputPerM: number }>>): void {
         this._pricing = { ...this._pricing, ...p };
+    }
+
+    /** Override per-model DeepSeek pricing (tests / future model additions). */
+    setDeepSeekModelPricing(p: Record<string, DeepSeekModelPricing>): void {
+        this._deepseekModelPricing = { ...this._deepseekModelPricing, ...p };
     }
 
     /** Persistence hook — called after every mutation with a JSON-safe snapshot. */
@@ -132,14 +162,49 @@ export class UsageTracker {
         return a;
     }
 
+    /**
+     * Cost (USD) for one DeepSeek request, using model-specific + cache-aware
+     * pricing: cache-hit input at the hit rate, cache-miss input at the miss
+     * rate, output at the output rate. Falls back to the provider-level flat
+     * rate when the model id isn't recognized.
+     */
+    private static _deepseekCost(rec: UsageRecord, mp: DeepSeekModelPricing): number {
+        let hit = typeof rec.cacheHitTokens === 'number' ? rec.cacheHitTokens : 0;
+        let miss = rec.cacheMissTokens;
+        if (typeof miss !== 'number') {
+            // No explicit miss count: derive it from hit + total prompt tokens
+            // (DeepSeek reports prompt_tokens = cache_hit + cache_miss). When we
+            // have no cache info at all, charge every prompt token at the miss
+            // rate (conservative overestimate).
+            miss = typeof rec.cacheHitTokens === 'number'
+                ? Math.max(0, rec.promptTokens - hit)
+                : rec.promptTokens;
+        }
+        const input = (hit / 1_000_000) * mp.inputHitPerM + (miss / 1_000_000) * mp.inputMissPerM;
+        const output = (rec.completionTokens / 1_000_000) * mp.outputPerM;
+        return input + output;
+    }
+
     /** Record one completed request. Safe to call from any handler; never throws. */
     record(rec: UsageRecord): void {
         if (!_trackingEnabled) return;
         try {
             const provider = rec.provider;
-            const price = this._pricing[provider] ?? this._pricing.unknown;
-            const cost = (rec.promptTokens / 1_000_000) * price.inputPerM
-                + (rec.completionTokens / 1_000_000) * price.outputPerM;
+            let cost: number;
+            if (provider === 'deepseek' || provider === 'deepseek-responses') {
+                const mp = this._deepseekModelPricing[rec.model];
+                if (mp) {
+                    cost = UsageTracker._deepseekCost(rec, mp);
+                } else {
+                    const price = this._pricing[provider] ?? this._pricing.unknown;
+                    cost = (rec.promptTokens / 1_000_000) * price.inputPerM
+                        + (rec.completionTokens / 1_000_000) * price.outputPerM;
+                }
+            } else {
+                const price = this._pricing[provider] ?? this._pricing.unknown;
+                cost = (rec.promptTokens / 1_000_000) * price.inputPerM
+                    + (rec.completionTokens / 1_000_000) * price.outputPerM;
+            }
 
             const add = (agg: UsageAggregate | undefined): UsageAggregate => {
                 const a = agg ?? emptyAggregate();

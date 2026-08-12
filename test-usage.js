@@ -38,16 +38,16 @@ assert(formatCost(1234.5) === '$1234.50', 'formatCost(1234.5)');
 // ── 2. basic aggregation + pricing ──
 {
     const t = new UsageTracker();
-    t.record({ provider: 'deepseek', model: 'deepseek-chat', promptTokens: 1000, completionTokens: 500, timestamp: 1, sessionKey: 'a' });
-    t.record({ provider: 'deepseek', model: 'deepseek-chat', promptTokens: 1000, completionTokens: 500, timestamp: 2, sessionKey: 'a' });
+    t.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1000, completionTokens: 500, timestamp: 1, sessionKey: 'a' });
+    t.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1000, completionTokens: 500, timestamp: 2, sessionKey: 'a' });
     const s = t.snapshot();
     assert(s.total.requests === 2, 'total.requests = 2');
     assert(s.total.promptTokens === 2000, 'total.promptTokens = 2000');
     assert(s.total.completionTokens === 1000, 'total.completionTokens = 1000');
     assert(s.total.totalTokens === 3000, 'total.totalTokens = 3000');
-    // deepseek pricing: $0.27 / 1M prompt, $1.10 / 1M completion
-    const expectedCost = (2000 / 1e6) * 0.27 + (1000 / 1e6) * 1.10;
-    assert(approx(s.total.estimatedCost, expectedCost), 'deepseek cost math');
+    // deepseek-v4-flash real pricing: $0.14/M cache-miss input, $0.28/M output
+    const expectedCost = (2000 / 1e6) * 0.14 + (1000 / 1e6) * 0.28;
+    assert(approx(s.total.estimatedCost, expectedCost), 'deepseek flash cost math');
     assert(s.byProvider.deepseek.requests === 2, 'byProvider.deepseek.requests');
     assert(s.bySession['a'].requests === 2, 'bySession[a].requests');
     assert(s.recent.length === 2, 'recent has 2 entries');
@@ -58,9 +58,14 @@ assert(formatCost(1234.5) === '$1234.50', 'formatCost(1234.5)');
 // ── 3. per-provider pricing (deepseek-responses / gemini / gemma4 / vision / unknown) ──
 {
     const t = new UsageTracker();
-    t.record({ provider: 'deepseek-responses', model: 'deepseek-reasoner', promptTokens: 1e6, completionTokens: 1e6, timestamp: 1 });
-    // expected: $0.27 + $1.10
-    assert(approx(t.snapshot().total.estimatedCost, 0.27 + 1.10), 'deepseek-responses cost');
+    t.record({ provider: 'deepseek-responses', model: 'deepseek-v4-flash-responses', promptTokens: 1e6, completionTokens: 1e6, timestamp: 1 });
+    // real flash: $0.14 (miss) + $0.28
+    assert(approx(t.snapshot().total.estimatedCost, 0.14 + 0.28), 'deepseek-responses cost');
+
+    const t1b = new UsageTracker();
+    t1b.record({ provider: 'deepseek', model: 'deepseek-v4-pro', promptTokens: 1e6, completionTokens: 1e6, timestamp: 1 });
+    // real pro: $0.435 (miss) + $0.87
+    assert(approx(t1b.snapshot().total.estimatedCost, 0.435 + 0.87), 'deepseek pro cost');
 
     const t2 = new UsageTracker();
     t2.record({ provider: 'gemini', model: 'gemini-2.5-flash', promptTokens: 1e6, completionTokens: 1e6, timestamp: 1 });
@@ -80,6 +85,38 @@ assert(formatCost(1234.5) === '$1234.50', 'formatCost(1234.5)');
     assert(t5.snapshot().total.estimatedCost === 0, 'unknown provider cost is 0');
     assert(t5.snapshot().byProvider.unknown.requests === 1, 'unknown provider counted');
 }
+
+// ── 3b. cache-aware DeepSeek cost (v0.7.87) ──
+{
+    const t = new UsageTracker();
+    // 1M prompt tokens total: 700K cache-hit, 300K cache-miss; 1M output.
+    // flash hit $0.0028, miss $0.14, output $0.28
+    t.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1e6, completionTokens: 1e6, timestamp: 1, cacheHitTokens: 700000, cacheMissTokens: 300000 });
+    const expected = (700000 / 1e6) * 0.0028 + (300000 / 1e6) * 0.14 + (1e6 / 1e6) * 0.28;
+    assert(approx(t.snapshot().total.estimatedCost, expected), 'cache-aware flash cost');
+
+    // pro with cache info
+    const t2 = new UsageTracker();
+    t2.record({ provider: 'deepseek', model: 'deepseek-v4-pro', promptTokens: 1e6, completionTokens: 500000, timestamp: 1, cacheHitTokens: 900000, cacheMissTokens: 100000 });
+    const expected2 = (900000 / 1e6) * 0.003625 + (100000 / 1e6) * 0.435 + (500000 / 1e6) * 0.87;
+    assert(approx(t2.snapshot().total.estimatedCost, expected2), 'cache-aware pro cost');
+
+    // only hit provided → miss derived from promptTokens - hit
+    const t3 = new UsageTracker();
+    t3.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1000, completionTokens: 0, timestamp: 1, cacheHitTokens: 600 });
+    const expected3 = (600 / 1e6) * 0.0028 + (400 / 1e6) * 0.14;
+    assert(approx(t3.snapshot().total.estimatedCost, expected3), 'cache-aware derived miss');
+
+    // cache hit cheaper than full miss → cost drops
+    const fullMiss = new UsageTracker();
+    fullMiss.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1e6, completionTokens: 0, timestamp: 1 });
+    const withHit = new UsageTracker();
+    withHit.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 1e6, completionTokens: 0, timestamp: 1, cacheHitTokens: 1e6, cacheMissTokens: 0 });
+    assert(approx(fullMiss.snapshot().total.estimatedCost, 0.14), 'full-miss flash input cost');
+    assert(withHit.snapshot().total.estimatedCost < fullMiss.snapshot().total.estimatedCost, 'cache hit lowers cost');
+    assert(approx(withHit.snapshot().total.estimatedCost, 0.0028), 'full-hit flash input cost');
+}
+
 
 // ── 4. session cap + LRU eviction (SESSION_CAP = 50) ──
 {
