@@ -561,6 +561,41 @@ export function getMemoryPersistence(): boolean {
     return getConfig().get<boolean>('memoryPersistence') ?? true;
 }
 
+/**
+ * Whether the context-budget manager is active. When on, Nikas shows live
+ * warnings as the conversation approaches the context window and (once over
+ * budget) reclaims tokens by dropping low-value tool output before discarding
+ * user context. Purely additive + conservative — disabling turns both off.
+ * Default true.
+ */
+export function getContextBudget(): boolean {
+    return getConfig().get<boolean>('contextBudget') ?? true;
+}
+
+/** Fill% at which the "warn" level fires (see context/budget.ts). */
+export function getContextWarnThreshold(): number {
+    return getConfig().get<number>('contextWarnThreshold') ?? 70;
+}
+
+/** Fill% at which the "critical" level fires. */
+export function getContextCriticalThreshold(): number {
+    return getConfig().get<number>('contextCriticalThreshold') ?? 88;
+}
+
+/** Whether the "Nikas: Run Agent" command is exposed (default true). */
+export function getAgentCommand(): boolean {
+    return getConfig().get<boolean>('agentCommand') ?? true;
+}
+
+/**
+ * Whether the DeepSeek model router is active (v0.7.84). When on, cheap
+ * internal helper requests (chat titles, git commit messages, etc.) are routed
+ * to the faster Flash chat model even when Pro is selected. Default OFF.
+ */
+export function getModelRouter(): boolean {
+    return getConfig().get<boolean>('modelRouter') ?? false;
+}
+
 /** Number of `.bak-*` bundle backups to retain. */
 export function getPatchBackupRetention(): number {
     const v = getConfig().get<number>('patchBackupRetention');

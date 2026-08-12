@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled, getUsageTracking } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled, getUsageTracking, getAgentCommand } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -18,6 +18,7 @@ import { showUsage, resetUsage, wireUsagePersistence, updateUsageStatusBar } fro
 import { setUsageTrackingEnabled } from './usage/tracker.js';
 import { wireMemoryPersistence, memoryStore, describeMemoryState } from './memory/manager.js';
 import { showMemory, resetMemory } from './commands/memory.js';
+import { runAgentCommand } from './commands/agent.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -180,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.usage', () => showUsage()),
         vscode.commands.registerCommand('nikas.resetUsage', () => resetUsage()),
         vscode.commands.registerCommand('nikas.memory', () => showMemory()),
+        getAgentCommand() ? vscode.commands.registerCommand('nikas.runAgent', () => runAgentCommand(context)) : new vscode.Disposable(() => {}),
         vscode.commands.registerCommand('nikas.manage', () => {
             const agentEffortsOn = getAgentEffortsEnabled();
             vscode.window.showQuickPick(
@@ -267,6 +269,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         label: '$(archive) Persistent Memory',
                         description: 'Inspect / clear the session memory saved to nikas.md (survives restarts)',
                     },
+                    {
+                        label: '$(run-all) Run Agent',
+                        description: 'Run the built-in Nikas agent loop on a task in the current workspace',
+                    },
                 ],
                 { title: 'Nikas: Manage' }
             ).then(selection => {
@@ -337,6 +343,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(archive) Persistent Memory':
                         showMemory();
+                        break;
+                    case '$(run-all) Run Agent':
+                        vscode.commands.executeCommand('nikas.runAgent');
                         break;
                 }
             });

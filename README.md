@@ -22,6 +22,10 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 - **Secure key storage** — API keys stored in your OS keychain, never in plaintext settings
 - **📊 Usage & Cost dashboard** — per-conversation token usage and estimated cost (this session + all time, by provider, top sessions), surfaced in the status bar and a QuickPick report (`Nikas: Usage & Cost`). Purely observational — disabling `nikas.usageTracking` stops recording and hides the status bar item, never affecting chat behavior
 - **🧠 Persistent session memory** — when a long conversation is compacted, the session-memory summary is saved to a per-workspace `nikas.md` (plus a reliable VS Code snapshot). If you reopen that conversation after a restart, Nikas re-injects the saved memory so you don't lose context. Purely additive — disabling `nikas.memoryPersistence` stops saving and injecting
+- **⏱️ Context budget** — live warnings as a conversation approaches the context window (with configurable warn/critical fill% thresholds) and, when over budget, automatic reclaim of tokens by dropping low-value tool output before discarding your actual conversation. Purely additive — disabling `nikas.contextBudget` turns both off
+- **🤖 Run Agent** — a built-in agent harness (`Nikas: Run Agent`) that runs a task through the full loop (category summarizer → tool scoping → model ↔ tools) in the current workspace, streaming to an output channel. Purely additive — disabling `nikas.agentCommand` hides the command and never affects chat
+- **🗂️ PDF-vision cache** — sparse PDF vision pre-processing results are cached (bounded, keyed by prompt + content) so re-describing the same PDFs is served from cache instead of re-calling the vision model
+- **🔀 Model router** — optionally route cheap internal helper requests (chat titles, git commit messages, todo tracking, etc.) to the faster Flash model even when Pro is selected. Off by default (`nikas.modelRouter`); never routes Responses-family model ids to `/chat/completions`
 - **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
@@ -157,6 +161,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `Nikas: Usage & Cost` | Open the token/cost dashboard (total, this session, by provider, top sessions, copy markdown report) |
 | `Nikas: Reset Usage Stats` | Clear all recorded usage (with confirmation) |
 | `Nikas: Persistent Memory` | Inspect the session memory saved to `nikas.md` (survives restarts) |
+| `Nikas: Run Agent` | Run a task through the built-in agent harness loop in the current workspace, streaming to an output channel |
 | `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
 ## Settings
@@ -181,6 +186,11 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
 | `nikas.usageTracking` | `true` | Track per-conversation token usage + estimated cost (Usage & Cost dashboard + status bar). Disabling stops recording and hides the status bar item — never affects chat behavior |
 | `nikas.memoryPersistence` | `true` | Persist session-memory summaries to a per-workspace `nikas.md` and re-inject them after a restart. Disabling stops saving and injecting — never affects chat behavior |
+| `nikas.contextBudget` | `true` | Context-budget manager: live warnings near the window + reclaim tokens by dropping low-value tool output before discarding user context. Disabling turns both off |
+| `nikas.contextWarnThreshold` | `70` | Context fill % at which the live budget warning fires |
+| `nikas.contextCriticalThreshold` | `88` | Context fill % at which truncation is flagged as imminent |
+| `nikas.agentCommand` | `true` | Expose the `Nikas: Run Agent` command (built-in agent harness). Disabling hides it — never affects chat |
+| `nikas.modelRouter` | `false` | Route cheap internal helper requests (chat titles, git commit messages, etc.) to the faster Flash model even when Pro is selected. Never routes Responses-family model ids to `/chat/completions` |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works

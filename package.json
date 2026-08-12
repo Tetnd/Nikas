@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.80",
+  "version": "0.7.84",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -146,6 +146,12 @@
         "title": "Persistent Memory",
         "category": "Nikas",
         "icon": "$(archive)"
+      },
+      {
+        "command": "nikas.runAgent",
+        "title": "Run Agent",
+        "category": "Nikas",
+        "icon": "$(run-all)"
       }
     ],
     "menus": {
@@ -444,6 +450,35 @@
           "type": "boolean",
           "default": true,
           "description": "Persist session-memory summaries to a per-workspace nikas.md and re-inject them into the matching conversation after a restart. Purely additive — disabling stops saving and injecting without affecting chat behavior."
+        },
+        "nikas.contextBudget": {
+          "type": "boolean",
+          "default": true,
+          "description": "Context-budget manager: live warnings as the conversation approaches the window, and (when over budget) reclaim tokens by dropping low-value tool output before discarding user context. Purely additive — disabling turns both off."
+        },
+        "nikas.contextWarnThreshold": {
+          "type": "number",
+          "default": 70,
+          "minimum": 10,
+          "maximum": 99,
+          "description": "Context fill % at which Nikas starts warning that the window is being approached (live budget warning)."
+        },
+        "nikas.contextCriticalThreshold": {
+          "type": "number",
+          "default": 88,
+          "minimum": 20,
+          "maximum": 100,
+          "description": "Context fill % at which Nikas warns that truncation is imminent and early facts are about to be dropped."
+        },
+        "nikas.agentCommand": {
+          "type": "boolean",
+          "default": true,
+          "description": "Expose the 'Nikas: Run Agent' command, which runs the built-in agent harness loop (category summarizer → tool scoping → model↔tools) on a task in the current workspace. Purely additive — disabling hides the command and never affects normal chat."
+        },
+        "nikas.modelRouter": {
+          "type": "boolean",
+          "default": false,
+          "description": "DeepSeek model router: when on, cheap internal helper requests (chat titles, git commit messages, todo tracking, etc.) are routed to the faster Flash chat model even when the Pro model is selected. Off by default. Never routes Responses-family model ids to /chat/completions."
         },
         "nikas.applyAgentModelsOnActivate": {
           "type": "boolean",

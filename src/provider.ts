@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter } from './config.js';
 import { augmentToolDescription, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
@@ -9,8 +9,9 @@ import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } 
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } from './routing.js';
-import { assertToolsWithinLimit } from './tools/request.js';
+import { decideDeepSeekRoute } from './modelRoute.js';import { assertToolsWithinLimit } from './tools/request.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
+import { dropLowValueToolOutput } from './context/budget.js';
 import { usageTracker, setCurrentSessionKey } from './usage/tracker.js';
 import { persistSessionMemory, injectPersistentMemory } from './memory/manager.js';
 import { log } from './log.js';
@@ -475,12 +476,21 @@ function logUsageVsWindow(
         `DeepSeek usage: prompt=${promptTokens.toLocaleString()} ` +
         `(${fillPct}% of ${windowTokens.toLocaleString()} window), ` +
         `completion=${completionTokens.toLocaleString()}`;
-    if (fillPct >= 85) {
+    const criticalPct = getContextCriticalThreshold();
+    const warnPct = getContextWarnThreshold();
+    if (fillPct >= criticalPct) {
         const msg =
             `${base}\n` +
-            `  ⚠ Prompt is ${fillPct}% of the context window. The next truncation will drop ` +
-            `the oldest messages — the model loses memory of early facts and may hallucinate ` +
-            `about them. Start a new session for fresh context.`;
+            `  ⚠ Prompt is ${fillPct}% of the context window (critical). The next truncation ` +
+            `will drop the oldest messages — the model loses memory of early facts and may ` +
+            `hallucinate about them. Start a new session for fresh context.`;
+        log.warn(msg);
+        getOutputChannel().appendLine(`[Nikas] ${msg.replace(/\n/g, '\n[Nikas] ')}`);
+    } else if (fillPct >= warnPct) {
+        const msg =
+            `${base}\n` +
+            `  ⚠ Approaching the context window (${fillPct}% ≥ warn ${warnPct}%). Consider ` +
+            `compacting or starting a new session before facts are truncated away.`;
         log.warn(msg);
         getOutputChannel().appendLine(`[Nikas] ${msg.replace(/\n/g, '\n[Nikas] ')}`);
     } else {
@@ -545,6 +555,56 @@ function truncateMessagesToContextWindow(messages: DeepSeekMessage[], sessionKey
         const finalSeq = ensureUserMessage(repaired, otherMessages);
         logContextHealth(estimatedTokens, availableInputTokens, fillPercent);
         return finalSeq;
+    }
+
+    // ── Context-budget reclaim (v0.7.81) ───────────────────────────────
+    // Before discarding the oldest USER turns (losing real intent), try to
+    // reclaim tokens by dropping LOW-VALUE tool output (empty / "No matches
+    // found" / trivial results) plus their assistant tool_calls callers. This
+    // preserves user context when possible. Purely additive + conservative,
+    // gated by nikas.contextBudget; on any failure we fall through to normal
+    // truncation unchanged.
+    if (getContextBudget()) {
+        const targetTokens = estimatedTokens - availableInputTokens + 512; // a little headroom
+        const reclaim = dropLowValueToolOutput(otherMessages, {
+            targetTokens,
+            protectNewest: 6,
+            estimate: (m) => estimateMessageTokens([m as DeepSeekMessage], sessionKey),
+        });
+        if (reclaim.dropped > 0) {
+            const afterReclaim = estimateMessageTokens(
+                [...systemMessages, ...(reclaim.messages as DeepSeekMessage[])],
+                sessionKey
+            );
+            if (afterReclaim < estimatedTokens) {
+                const reclaimedTokens = estimatedTokens - afterReclaim;
+                log.info(
+                    `Context budget: reclaimed ~${reclaimedTokens.toLocaleString()} tokens by dropping ` +
+                    `${reclaim.dropped} low-value tool result(s)` +
+                    (reclaim.droppedPreviews.length ? ` (e.g. ${reclaim.droppedPreviews[0]})` : '')
+                );
+                if (reclaim.droppedPreviews.length) {
+                    getOutputChannel().appendLine(
+                        `[Nikas] Context budget: reclaimed ~${reclaimedTokens.toLocaleString()} tokens from low-value tool output (${reclaim.dropped} result(s))`
+                    );
+                }
+                // Use the reclaimed list as the new "other messages".
+                otherMessages.length = 0;
+                otherMessages.push(...(reclaim.messages as DeepSeekMessage[]));
+                const reclaimedTotal = estimateMessageTokens(
+                    [...systemMessages, ...otherMessages],
+                    sessionKey
+                );
+                if (reclaimedTotal <= availableInputTokens) {
+                    // Reclaim got us under budget — repair + return.
+                    const repaired = repairTruncatedSequence(systemMessages, otherMessages);
+                    const finalSeq = ensureUserMessage(repaired, otherMessages);
+                    const newFill = Math.round((reclaimedTotal / availableInputTokens) * 100);
+                    logContextHealth(reclaimedTotal, availableInputTokens, newFill);
+                    return finalSeq;
+                }
+            }
+        }
     }
 
     // Hard per-request input limit (API ceiling minus output + safety). A
@@ -1368,7 +1428,24 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Build the API request
         const config = getConfig();
-        const modelId = getSelectedModel();
+
+        // Read thinking effort from the model-picker dropdown first (set by
+        // Copilot Chat's Thinking Effort dropdown, matching upstream Nika),
+        // falling back to the saved nikas.thinkingEffort setting. Per-agent
+        // overrides (nikas.agentEfforts) let Plan/Explore/Inline/helpers carry
+        // their own effort.
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+
+        let modelId = getSelectedModel();
+
+        // v0.7.84 model router: optionally route cheap internal helpers to the
+        // cheaper Flash model when Pro is selected (nikas.modelRouter, OFF by
+        // default). Never routes the Responses model id to /chat/completions.
+        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter());
+        if (route.modelId && route.modelId !== modelId) {
+            getOutputChannel().appendLine(`[Nikas] Model router: ${modelId} → ${route.modelId} (${route.reason})`);
+            modelId = route.modelId;
+        }
 
         // Log which model is being used — detect agent type from modelOptions
         const agentName = options.modelOptions?.['agent']
@@ -1388,12 +1465,6 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const ctxWindowTokens = getContextWindowTokens();
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
-        // Read thinking effort from the model-picker dropdown first (set by
-        // Copilot Chat's Thinking Effort dropdown, matching upstream Nika),
-        // falling back to the saved nikas.thinkingEffort setting. Per-agent
-        // overrides (nikas.agentEfforts) let Plan/Explore/Inline/helpers carry
-        // their own effort.
-        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
         const baseEffort = getRequestThinkingEffort(options);
         const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
         const thinkingParams = buildThinkingParams(thinkingEffort);

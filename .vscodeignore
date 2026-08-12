@@ -44,3 +44,6 @@ test-tool-mode.js
 test-tool-results.js
 test-usage.js
 test-memory.js
+test-budget.js
+test-pdf-vision-cache.js
+test-model-route.js

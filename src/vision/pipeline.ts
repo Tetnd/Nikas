@@ -24,6 +24,35 @@ import { VSCodeLanguageModelVisionDescriber, findVisionModelByKey, getVisionProm
 import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/api-endpoint.js';
 import { getPdfVisionFallback, getPdfVisionFallbackMinChars, getPdfMaxPages } from '../config.js';
 import { extractPdfTextWithPdfjs, isPdfMime } from '../pdf/extract.js';
+import {
+    pdfDescribeCacheKey,
+    pdfDescribeCacheGet,
+    pdfDescribeCacheSet,
+    clearPdfDescribeCache,
+} from './pdfCache.js';
+
+/**
+ * Richer, PDF-specific vision prompt (v0.7.83). Unlike the generic image
+ * prompt, it asks the vision model to transcribe structure, tables, and
+ * figures that text extraction misses — which is exactly what a sparse PDF
+ * needs.
+ */
+const SPARSE_PDF_VISION_PROMPT =
+    'You are reading an attached PDF document that yielded almost no extractable text ' +
+    '(it is likely scanned, a drawing, a floor plan, a diagram, or an image-heavy page). ' +
+    'Describe the VISUAL content as completely and faithfully as possible, in a way that ' +
+    'lets a coding assistant reason about it without seeing the original:\n' +
+    '- Transcribe any visible text, labels, numbers, or headings verbatim.\n' +
+    '- Describe the layout: tables (transcribe cells), diagrams, charts, figures, arrows.\n' +
+    '- For drawings/plans: list dimensions, rooms/parts, connections, and annotations.\n' +
+    '- Do NOT invent content that is not visible. If a region is unreadable, say so.\n' +
+    '- Be concrete and structured (short bullets).';
+
+/** Export the sparse-PDF prompt (used by tests). */
+export function getSparsePdfVisionPrompt(): string {
+    return SPARSE_PDF_VISION_PROMPT;
+}
+
 
 /**
  * Vision preprocessing pipeline using replay markers.
@@ -428,17 +457,28 @@ export async function resolveSparsePdfVision(
         return messages;
     }
 
-    // Describe the sparse PDFs via the vision model.
+    // Describe the sparse PDFs via the vision model. Uses a bounded content-keyed
+    // cache so an unchanged PDF is described once, not on every request turn.
     const newContent = [...content];
     let describedCount = 0;
     for (const { partIndex, pdf, text } of sparse) {
         if (token.isCancellationRequested) break;
         try {
-            const description = await describer.describe({
-                prompt: getVisionPrompt(),
-                images: [{ mimeType: pdf.mimeType, data: pdf.data }],
-                token,
-            });
+            const prompt = getSparsePdfVisionPrompt();
+            const cacheKey = pdfDescribeCacheKey(prompt, pdf.mimeType, pdf.data);
+            let description = pdfDescribeCacheGet(cacheKey);
+            if (description === undefined) {
+                description = await describer.describe({
+                    prompt,
+                    images: [{ mimeType: pdf.mimeType, data: pdf.data }],
+                    token,
+                });
+                if (description.length > 0) {
+                    pdfDescribeCacheSet(cacheKey, description);
+                }
+            } else {
+                visionLog.info(`Sparse PDF vision: served from cache (${pdf.mimeType})`);
+            }
             if (description.length === 0) {
                 visionLog.info(`Sparse PDF vision returned empty — keeping local text`);
                 continue;
