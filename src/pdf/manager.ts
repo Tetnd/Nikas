@@ -31,6 +31,24 @@ import {
     getCopilotMaxFileSizeMB,
     getPatchBackupRetention,
 } from '../config.js';
+// The pure, vscode-free engine (health check + apply + alias-safety net).
+// Lives in its own module so test-patch-drift.js can run the EXACT production
+// logic from plain Node (no vscode available outside the extension host).
+import {
+    healthCheck,
+    applyMissing,
+    extractDiagnosticContext,
+    setEngineLogger,
+    type PatchHealth,
+    type ApplyOutcome,
+} from './engine.js';
+
+// Wire the engine's injectable logger to this manager's output channel.
+setEngineLogger({ info, warn, err });
+
+// Re-export for existing consumers (extension.ts / future callers).
+export { healthCheck, applyMissing, extractDiagnosticContext };
+export type { PatchHealth, ApplyOutcome };
 
 /** globalState keys — detect "Copilot updated since we last patched". */
 const STATE_BUNDLE_HASH = 'nikas.copilotBundleHash';
@@ -121,169 +139,12 @@ function findBundleUnder(root: string, prefixes: string[]): string[] {
 
 // ---------------------------------------------------------------------------
 // Health check / applying
+//
+// The pure engine (healthCheck, applyMissing, applyOne, extractDiagnosticContext,
+// introducedAliases) now lives in ./engine.ts — a vscode-free module so the
+// exact production logic is unit-testable from plain Node (test-patch-drift.js).
+// This manager re-imports + re-exports it above; the cycle driver below uses it.
 // ---------------------------------------------------------------------------
-
-export interface PatchHealth {
-    id: string;
-    description: string;
-    applied: boolean;
-}
-
-export function healthCheck(content: string, patches: PatchDefinition[]): PatchHealth[] {
-    return patches.map(p => {
-        const stringApplied = p.appliedMarkers.some(m => content.includes(m));
-        const regexApplied = (p.appliedRegexes ?? []).some(re => re.test(content));
-        return {
-            id: p.id,
-            description: p.description,
-            applied: stringApplied || regexApplied,
-        };
-    });
-}
-
-export interface ApplyOutcome {
-    content: string;
-    appliedIds: string[];
-    failedIds: string[];
-    failedReasons: Record<string, string>;
-}
-
-/** Apply all missing patches to `content`. Returns new content + outcomes. */
-export function applyMissing(content: string, missing: PatchDefinition[]): ApplyOutcome {
-    let working = content;
-    const appliedIds: string[] = [];
-    const failedIds: string[] = [];
-    const failedReasons: Record<string, string> = {};
-
-    for (const patch of missing) {
-        const res = applyOne(working, patch);
-        if (res.success) {
-            working = res.content;
-            appliedIds.push(patch.id);
-            info(`Applied ${patch.id} — ${patch.description}`);
-        } else {
-            failedIds.push(patch.id);
-            failedReasons[patch.id] = res.reason;
-            warn(`Could NOT auto-apply ${patch.id} (${patch.description}): ${res.reason}`);
-            // Dump the surrounding bundle context so a maintainer can see the
-            // new structure without needing the whole (multi-MB) bundle file.
-            const ctx = extractDiagnosticContext(working, patch);
-            if (ctx) {
-                warn(`  Diagnostic context for ${patch.id} (around "${ctx.probe}"):`);
-                warn(`  --- START (${ctx.before.length} chars before / ${ctx.after.length} chars after) ---`);
-                warn(`  ${ctx.snippet}`);
-                warn(`  --- END ${patch.id} diagnostic ---`);
-            }
-        }
-    }
-
-    return { content: working, appliedIds, failedIds, failedReasons };
-}
-
-/**
- * Extract a short context window from the bundle around the first diagnostic
- * probe that survives version drift, so a failed patch can be diagnosed from
- * the log alone. Returns undefined if no probe is found.
- */
-export function extractDiagnosticContext(
-    content: string,
-    patch: PatchDefinition,
-    windowChars = 220
-): { probe: string; before: string; after: string; snippet: string } | undefined {
-    const probes = patch.diagnosticProbes ?? [];
-    // Fall back to the first replacement's `find` prefix if no probes defined —
-    // still better than nothing.
-    const candidates = probes.length > 0
-        ? probes
-        : (patch.replacements[0]?.find ?? []).length > 0
-            ? [patch.replacements[0].find.slice(0, 40)]
-            : [];
-
-    for (const probe of candidates) {
-        const idx = content.indexOf(probe);
-        if (idx === -1) continue;
-        const start = Math.max(0, idx - windowChars);
-        const end = Math.min(content.length, idx + probe.length + windowChars);
-        return {
-            probe,
-            before: content.slice(start, idx),
-            after: content.slice(idx + probe.length, end),
-            snippet: content.slice(start, end),
-        };
-    }
-    return undefined;
-}
-
-/**
- * Module-scope identifiers that are safe to introduce into a minified bundle
- * (Node/JS globals). Everything else must already appear in the bundle or the
- * injected code will throw at runtime (undefined symbol).
- */
-const SAFE_GLOBALS = new Set([
-    'Buffer.', 'TextEncoder.', 'TextDecoder.', 'JSON.', 'Math.', 'console.',
-    'Promise.', 'Object.', 'Array.', 'String.', 'Number.', 'Date.', 'Error.',
-    'URL.', 'setTimeout.', 'clearTimeout.', 'setInterval.', 'clearInterval.',
-    'globalThis.', 'process.', 'Symbol.', 'Reflect.', 'RegExp.', 'Boolean.',
-    'BigInt.', 'Map.', 'Set.', 'WeakMap.', 'WeakSet.', 'parseInt.', 'parseFloat.',
-    'isNaN.', 'isFinite.', 'undefined.', 'NaN.', 'Infinity.',
-]);
-
-/**
- * Return `Ident.` tokens present in `patched` but never in `original` (and not
- * safe globals). Regex fallbacks may inject code referencing minified module
- * aliases that a drifted bundle renamed; such injections throw at runtime
- * (e.g. "Cannot read properties of undefined (reading '...')"). We refuse to
- * apply them instead of corrupting the bundle.
- */
-function introducedAliases(original: string, patched: string): string[] {
-    const originalTokens = new Set<string>();
-    const re = /[A-Za-z_$][\w$]*\./g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(original))) originalTokens.add(m[0]);
-
-    const added = new Set<string>();
-    while ((m = re.exec(patched))) {
-        const tok = m[0];
-        if (!originalTokens.has(tok) && !SAFE_GLOBALS.has(tok)) added.add(tok);
-    }
-    return [...added];
-}
-
-function applyOne(content: string, patch: PatchDefinition): { success: boolean; content: string; reason: string } {
-    // 1) Exact replacements (preferred — minified files must be edited surgically).
-    for (const r of patch.replacements) {
-        if (content.includes(r.find)) {
-            return { success: true, content: content.replace(r.find, r.replace), reason: '' };
-        }
-    }
-
-    // 2) Regex fallbacks (for version drift in minified symbol names).
-    for (const fb of patch.regexFallbacks ?? []) {
-        const re = new RegExp(fb.pattern.source, fb.pattern.flags);
-        if (re.test(content)) {
-            const replaced = typeof fb.replacement === 'function'
-                ? content.replace(re, fb.replacement)
-                : content.replace(re, fb.replacement);
-            if (replaced !== content) {
-                // Safety net: a fallback that introduces unknown module aliases
-                // would crash at runtime. Refuse it (the patch then reports as
-                // "needs manual review" instead of corrupting the bundle).
-                const bad = introducedAliases(content, replaced);
-                if (bad.length > 0) {
-                    warn(`Refusing regex fallback for ${patch.id}: injected code references aliases never present in this bundle (${bad.join(', ')}). The bundle drifted too far — skipping instead of risking a crash.`);
-                    continue;
-                }
-                return { success: true, content: replaced, reason: '' };
-            }
-        }
-    }
-
-    return {
-        success: false,
-        content,
-        reason: 'No matching snippet found. The Copilot bundle structure likely changed — this patch needs a manual update (see README re-patch recipe).',
-    };
-}
 
 // ---------------------------------------------------------------------------
 // Backup helpers

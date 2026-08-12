@@ -212,18 +212,52 @@ VS Code starts / Copilot Chat updates / 15-min timer
 │  (resources/app/extensions/copilot/dist/) │
 └──────────────┬────────────────────────────┘
                ▼
-┌──────────────────────────────┐   unchanged
-│  Health check (8 markers)    │──────────────► nothing to do
+┌──────────────────────────────┐   all applied
+│  Health check — markers +    │──────────────► nothing to do
+│  applied-regexes + OUTCOME-  │
+│  based verify()              │
 └──────────────┬───────────────┘
                ▼  missing
 ┌──────────────────────────────┐
 │  Backup bundle (.bak-*)      │
-│  Apply missing patches       │
-│  Write + verify              │
+│  Apply each patch:           │
+│    1. exact find/replace     │
+│    2. regex fallback         │
+│    3. ADAPTIVE (self-heal)   │
+│  Write + re-verify           │
 └──────────────┬───────────────┘
                ▼
    Notify "Re-applied N patches" → Reload Now
 ```
+
+**Why this survives Copilot updates (v0.7.77+):** Copilot Chat minifies its bundle
+and renames symbols on every update (`kkn`→`Fyn`, `RCt`→`Jht`, `VD`→`mB`, `v`→`_`,
+`Lu`→`iu`, …). The patch engine therefore has three layers:
+
+1. **Exact find/replace** — fastest path when the anchor text is unchanged.
+2. **Regex fallback** — tolerates renamed minified identifiers by capturing them
+   (e.g. matches the 3-predicate allowlist shape whatever its name).
+3. **Adaptive (self-healing)** — locates the target region via *stable content
+   anchors* (error strings like `"does not support PDF documents."`, property
+   names like `chatVariables.filter`, and API constants like `1024*1024*`), then
+   **extracts the real minified names from the bundle at apply time** and rebuilds
+   the exact edit using only those names. It never depends on a symbol that can
+   drift.
+
+Patches are also detected by **outcome** (`verify()`) — e.g. P8 is "applied" when
+the forwarded chat-variables filter ORs in the binary check, whatever the
+predicate names are — so a bundle is never falsely reported broken. A runtime
+**alias-safety net** refuses any injection that would reference a module
+identifier the bundle never had, so a drifted bundle can never be corrupted —
+worst case it reports "needs manual review" instead of crashing.
+
+**Regression tests:** `test-patch-drift.js` simulates multiple Copilot bundle
+generations with different minified names (including an "extreme-drift" bundle
+that forces the adaptive tier) and asserts the engine self-heals every one.
+`test-patch-real-drift.js` takes the actual installed bundle, reverts the five
+drift-prone patches to their unpatched forms, and proves the engine re-applies
+them with valid syntax. Run both after any patch-definition change:
+`node test-patch-drift.js` and `node test-patch-real-drift.js <bundle>`.
 
 ## Requirements
 
