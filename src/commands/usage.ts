@@ -181,9 +181,21 @@ export function createUsageStatusBarItem(): vscode.StatusBarItem {
     return item;
 }
 
-/** Refresh the status bar text from the current session aggregate. */
+/**
+ * Refresh the status bar text from the current session aggregate.
+ *
+ * Robustness (v0.7.90): the status bar must never disappear just because the
+ * current session is empty. `getCurrentSessionKey()` is a runtime-only module
+ * variable that resets to `undefined` on every VS Code reload (and on a brand
+ * new conversation), which previously hid the item until the first request —
+ * users reported "I don't see the usage anymore" right after an update. Now we
+ * fall back to the all-time total whenever the current session has no requests,
+ * and only hide when there is NO recorded usage at all.
+ */
 export function updateUsageStatusBar(item: vscode.StatusBarItem): void {
-    const a = usageTracker.session(getCurrentSessionKey());
+    const current = usageTracker.session(getCurrentSessionKey());
+    const hasCurrent = current.requests > 0;
+    const a = hasCurrent ? current : usageTracker.total;
     if (a.requests === 0) {
         item.hide();
         return;
@@ -192,7 +204,7 @@ export function updateUsageStatusBar(item: vscode.StatusBarItem): void {
     const fresh = !!last && Date.now() - last.timestamp < 2 * 60_000;
     const latency = fresh && last?.latencyMs ? ` ⏱ ${formatLatency(last.latencyMs)}` : '';
     item.text = `$(graph-line) ${formatTokens(a.totalTokens)} · ${formatCost(a.estimatedCost)}${latency}`;
-    item.tooltip = `Nikas usage (this session)\n${fmtAgg(a)}\n` +
+    item.tooltip = `Nikas usage (${hasCurrent ? 'this session' : 'all time'})\n${fmtAgg(a)}\n` +
         (last ? `Last request: ${last.model} · ${formatLatency(last.latencyMs)}\n` : '') +
         `Click for the full dashboard.`;
     item.show();

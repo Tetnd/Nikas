@@ -53,3 +53,6 @@ test-tool-budget.js
 test-pdf-extract-cache.js
 test-health.js
 test-tool-result-vision.js
+test-patch-drift.js
+test-patch-real-drift.js
+test-current-image-index.js

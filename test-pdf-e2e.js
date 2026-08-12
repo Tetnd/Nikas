@@ -23,7 +23,18 @@ const Module = require('module');
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
     if (request === 'vscode') {
-        return { /* stub — the tested code never touches it */ };
+        return {
+            // The extraction/content-part code reads a few `nikas.*` settings via
+            // workspace.getConfiguration. Return undefined for any key so each
+            // getter falls back to its documented default (pdfMaxPages→60,
+            // pdfPageNotice→true, etc.) — the logic under test only needs the
+            // defaults to make structural decisions.
+            workspace: {
+                getConfiguration: () => ({
+                    get: () => undefined,
+                }),
+            },
+        };
     }
     return originalLoad.apply(this, arguments);
 };
