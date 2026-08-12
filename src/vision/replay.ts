@@ -279,6 +279,90 @@ export function getNonVisionParts(
     );
 }
 
+// ---------------------------------------------------------------------------
+// Tool-result images (screenshots / view_image)
+// ---------------------------------------------------------------------------
+// In agent mode the model captures pictures via tools (screenshot_page,
+// view_image, ...). Copilot returns those images as `LanguageModelDataPart`s
+// nested inside a `LanguageModelToolResultPart`'s `content` array — NOT as
+// user-attached image parts. The direct-image loop only inspects top-level
+// parts, so tool-result images would otherwise be flattened to a bare
+// "[image: png, N bytes]" placeholder by the transform and the model never
+// sees the picture. These helpers locate and rebuild such images.
+
+/** A reference to one image nested inside a tool-result part's content. */
+export interface ToolResultImageRef {
+    /** Index of the LanguageModelToolResultPart within the message content. */
+    toolIndex: number;
+    /** Index of the image part inside the tool result's `content` array. */
+    partIndex: number;
+    /** The normalized image part (`{ data, mimeType }`). */
+    image: DataPartLike;
+}
+
+/**
+ * Structural tool-result check — deliberately NO `instanceof` (patched-bundle
+ * parts cross an extension-host realm; see normalizeDataPart). A tool result
+ * has a string `callId` plus an array `content` (or `output`) — unlike a tool
+ * CALL part (callId + `input` object).
+ */
+export function isToolResultPart(part: unknown): boolean {
+    if (typeof part !== 'object' || part === null) return false;
+    const p = part as { callId?: unknown; content?: unknown; output?: unknown };
+    if (typeof p.callId !== 'string') return false;
+    return Array.isArray(p.content) || Array.isArray(p.output);
+}
+
+/** Read a tool result's inner content array (`.content`, fallback `.output`). */
+export function getToolResultContent(part: unknown): readonly unknown[] {
+    const p = part as { content?: unknown; output?: unknown };
+    if (Array.isArray(p.content)) return p.content;
+    if (Array.isArray(p.output)) return p.output;
+    return [];
+}
+
+/**
+ * Rebuild a tool result part whose content has been edited, preserving its
+ * `callId` and `isError`. Always produced as a real `LanguageModelToolResultPart`
+ * so the transform's `instanceof` checks keep working.
+ */
+export function rebuildToolResultPart(
+    part: unknown,
+    newContent: readonly unknown[],
+): vscode.LanguageModelToolResultPart {
+    const p = part as { callId?: unknown; isError?: unknown };
+    const rebuilt = new vscode.LanguageModelToolResultPart(
+        typeof p.callId === 'string' ? p.callId : '',
+        [...newContent],
+    );
+    if (p.isError === true) {
+        (rebuilt as { isError?: boolean }).isError = true;
+    }
+    return rebuilt;
+}
+
+/**
+ * Extract all image data parts nested inside tool-result parts in a message,
+ * returning their locations so they can be replaced with descriptions.
+ */
+export function getToolResultImageParts(
+    message: vscode.LanguageModelChatRequestMessage,
+): ToolResultImageRef[] {
+    const refs: ToolResultImageRef[] = [];
+    const content = message.content as readonly vscode.LanguageModelInputPart[];
+    for (const [toolIndex, part] of content.entries()) {
+        if (!isToolResultPart(part)) continue;
+        const inner = getToolResultContent(part);
+        for (const [partIndex, innerPart] of inner.entries()) {
+            const norm = normalizeDataPart(innerPart);
+            if (norm && norm.mimeType.toLowerCase().startsWith('image/')) {
+                refs.push({ toolIndex, partIndex, image: norm });
+            }
+        }
+    }
+    return refs;
+}
+
 /**
  * Extract text from a message's text parts.
  */

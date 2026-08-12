@@ -11,6 +11,10 @@ import {
     getImageParts,
     getNonImageParts,
     getPdfParts,
+    getToolResultImageParts,
+    getToolResultContent,
+    isToolResultPart,
+    rebuildToolResultPart,
     normalizeDataPart,
     type DataPartLike,
 } from './replay.js';
@@ -370,8 +374,24 @@ export async function resolveImageMessages(
         result.push(createResolvedMessage(message, nonImageParts));
     }
 
+    // Tool-result images (screenshots / view_image / tool-returned pictures)
+    // arrive NESTED inside LanguageModelToolResultPart.content — not as
+    // user-attached image parts — so the direct-image loop above never sees
+    // them. Without this they'd be flattened to a bare
+    // "[image: png, N bytes]" placeholder in the transform and DeepSeek would
+    // never see the picture. Describe them here (bytes-keyed cache) and swap
+    // each nested image for its text description.
+    const toolResultResolved = await resolveToolResultImages(
+        result,
+        sessionKey,
+        stats,
+        token,
+        visionDescriber,
+        getDescriber,
+    );
+
     return {
-        messages: result,
+        messages: toolResultResolved,
         stats,
         replayMarkerMetadata: { visionText: markerVisionText },
         visionModelId: visionDescriber?.id,
@@ -688,10 +708,130 @@ function collectInputImageStats(
 ): void {
     for (const message of messages) {
         const imageParts = getImageParts(message).length;
-        if (imageParts === 0) continue;
+        const toolImageParts = getToolResultImageParts(message).length;
+        if (imageParts === 0 && toolImageParts === 0) continue;
         stats.inputImageMessages += 1;
-        stats.inputImageParts += imageParts;
+        stats.inputImageParts += imageParts + toolImageParts;
     }
+}
+
+/**
+ * Describe images that arrive nested inside tool-result parts (screenshots
+ * captured via screenshot_page, view_image results, etc.) and replace each
+ * with a text description so the model can actually see the picture.
+ *
+ * Without this, the transform's toolResultPartToText flattens tool-result
+ * images to a bare "[image: png, N bytes]" placeholder — the model sees a
+ * byte count, never the content. The same bytes-keyed session cache used for
+ * direct images prevents re-describing the same screenshot across turns.
+ *
+ * `existingDescriber` is the describer already created for direct images (if
+ * any), so a request that has both kinds only builds one describer. Returns
+ * the messages (possibly with nested images replaced by text descriptions).
+ */
+async function resolveToolResultImages(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    sessionKey: string,
+    stats: VisionResolutionStats,
+    token: vscode.CancellationToken,
+    existingDescriber: VisionDescriber | undefined,
+    getDescriber: () => Promise<VisionDescriber | undefined>,
+): Promise<readonly vscode.LanguageModelChatRequestMessage[]> {
+    const out: vscode.LanguageModelChatRequestMessage[] = [];
+    let describer = existingDescriber;
+
+    for (const message of messages) {
+        const refs = getToolResultImageParts(message);
+        if (refs.length === 0) {
+            out.push(message);
+            continue;
+        }
+
+        const content = [...(message.content as vscode.LanguageModelInputPart[])];
+        let described = 0;
+        let replayed = 0;
+        let failed = 0;
+        let unavailable = false;
+
+        for (const ref of refs) {
+            if (token.isCancellationRequested) break;
+            const cached = getCachedVisionByImage(sessionKey, [ref.image]);
+            let text: string | undefined;
+            if (cached === '') {
+                // previously failed — leave the placeholder, don't retry
+                failed += 1;
+                continue;
+            }
+            if (cached) {
+                text = cached;
+                replayed += 1;
+            } else {
+                if (!describer) {
+                    describer = await getDescriber();
+                    if (!describer) {
+                        unavailable = true;
+                        break;
+                    }
+                }
+                try {
+                    const prompt = getVisionStructured()
+                        ? getStructuredImageVisionPrompt()
+                        : getVisionPrompt();
+                    const r = await describer.describe({
+                        prompt,
+                        images: [toVisionImagePart(ref.image)],
+                        token,
+                    });
+                    if (r.length === 0) {
+                        markFailedImage(sessionKey, [ref.image]);
+                        failed += 1;
+                        continue;
+                    }
+                    text = r;
+                    setCachedVisionByImage(sessionKey, [ref.image], r);
+                } catch (err) {
+                    visionLog.error('Tool-result image describe failed', err);
+                    markFailedImage(sessionKey, [ref.image]);
+                    failed += 1;
+                    continue;
+                }
+            }
+
+            // Swap the nested image for its text description.
+            const part = content[ref.toolIndex];
+            const inner = [...getToolResultContent(part)];
+            inner[ref.partIndex] = new vscode.LanguageModelTextPart(
+                createImageDescriptionText(text),
+            );
+            content[ref.toolIndex] = rebuildToolResultPart(part, inner);
+            described += 1;
+        }
+
+        if (described === 0) {
+            if (unavailable) {
+                stats.unavailableImageMessages += 1;
+                visionLog.info('Tool-result image(s) present but no vision describer available — kept as placeholders');
+            } else if (replayed > 0) {
+                stats.replayedImageMessages += 1;
+            } else if (failed > 0) {
+                stats.failedImageMessages += 1;
+            }
+            out.push(message);
+            continue;
+        }
+
+        visionLog.info(
+            `Tool-result vision: described=${described} replayed=${replayed} failed=${failed} image(s) in message`
+        );
+        if (replayed > described) {
+            stats.replayedImageMessages += 1;
+        } else {
+            stats.generatedImageMessages += 1;
+        }
+        out.push(createResolvedMessage(message, content));
+    }
+
+    return out;
 }
 
 /**
@@ -738,6 +878,19 @@ function logDataPartSummary(
                 const ctor = (part as object).constructor?.name ?? '?';
                 const sig = `${ctor}{${keys}}`;
                 if (!unknownShapes.includes(sig)) unknownShapes.push(sig);
+            }
+        }
+        // Images nested inside tool-result parts (screenshots / view_image) are
+        // attachments too — surface them in the same summary so a picture that
+        // reaches the model is visible in the log.
+        for (const part of content) {
+            if (!isToolResultPart(part)) continue;
+            for (const innerPart of getToolResultContent(part)) {
+                const inn = normalizeDataPart(innerPart);
+                if (inn) {
+                    byMime.set(inn.mimeType, (byMime.get(inn.mimeType) ?? 0) + 1);
+                    total += 1;
+                }
             }
         }
     }
