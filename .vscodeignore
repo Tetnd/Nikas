@@ -56,3 +56,4 @@ test-tool-result-vision.js
 test-patch-drift.js
 test-patch-real-drift.js
 test-current-image-index.js
+screenshots/**

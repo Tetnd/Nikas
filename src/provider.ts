@@ -1676,12 +1676,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                         });
                     }
 
-                    // Inject replay marker if we described images this turn
-                    // This allows the next turn to replay descriptions without
-                    // calling the vision model again.
-                    if (replayMarkerMetadata.visionText) {
-                        progress.report(createReplayMarkerPart(replayMarkerMetadata));
-                    }
+                    // NOTE: the vision replay marker is NOT emitted here. It is
+                    // emitted ONCE below (combined with any thinking reasoning)
+                    // so a turn with both vision + thinking never produces two
+                    // stateful_marker data parts — VS Code renders each unknown
+                    // data part as a placeholder row, which looked like the
+                    // agent's screenshot appearing twice (v0.7.92 fix).
                 }
             );
 
@@ -1703,13 +1703,22 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 // Show the CoT natively in the chat UI (collapsed thinking
                 // block, like Copilot's own models) where the API supports it.
                 reportThinkingPart(progress, streamResult.reasoningText);
+                log.verbose(
+                    `Captured thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
+                );
+            }
+
+            // Inject a SINGLE replay marker when this turn described images
+            // and/or captured thinking reasoning. Combining both in one part
+            // prevents the "doubled image/attachment row" render bug (two
+            // stateful_marker data parts → two placeholder rows in the chat
+            // transcript). The marker carries vision text, reasoning text, or
+            // both; replay/pipeline merge them on the next turn.
+            if (replayMarkerMetadata.visionText || streamResult.reasoningText) {
                 progress.report(createReplayMarkerPart({
                     ...replayMarkerMetadata,
                     reasoningText: streamResult.reasoningText,
                 }));
-                log.verbose(
-                    `Captured thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
-                );
             }
         } catch (err) {
             if (abortController.signal.aborted) {
@@ -2057,9 +2066,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             sessionLabel,
                         });
                     }
-                    if (replayMarkerMetadata.visionText) {
-                        progress.report(createReplayMarkerPart(replayMarkerMetadata));
-                    }
+                    // NOTE: the vision replay marker is NOT emitted here — it is
+                    // emitted ONCE below (combined with any thinking reasoning)
+                    // so a turn with both vision + thinking never produces two
+                    // stateful_marker data parts (the "doubled image" render bug,
+                    // fixed in v0.7.92).
                 }
             );
 
@@ -2077,13 +2088,19 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 // Show the CoT natively in the chat UI (collapsed thinking
                 // block, like Copilot's own models) where the API supports it.
                 reportThinkingPart(progress, streamResult.reasoningText);
+                log.verbose(
+                    `Captured Responses thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
+                );
+            }
+
+            // Inject a SINGLE replay marker when this turn described images
+            // and/or captured thinking reasoning (see chat handler for the
+            // doubled-attachment rationale).
+            if (replayMarkerMetadata.visionText || streamResult.reasoningText) {
                 progress.report(createReplayMarkerPart({
                     ...replayMarkerMetadata,
                     reasoningText: streamResult.reasoningText,
                 }));
-                log.verbose(
-                    `Captured Responses thinking reasoning (${streamResult.reasoningText.length} chars) for round-trip`
-                );
             }
         } catch (err) {
             if (abortController.signal.aborted) {
