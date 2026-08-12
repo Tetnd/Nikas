@@ -89,6 +89,10 @@ export interface AgentRunOptions extends Omit<AgentLoopOptions, 'tools'> {
     maxTools?: number;
     /** Optional logger (category selection + agent loop). */
     onLog?: (msg: string) => void;
+    /** D-10 (v0.7.88): optional relevance matcher (e.g. embeddings). */
+    matcher?: import('./virtualTools.js').VirtualToolMatcher;
+    /** D-10: relevance threshold above which matched tools are kept (0 = disabled). */
+    embeddingsThreshold?: number;
 }
 
 /**
@@ -108,6 +112,7 @@ export async function runAgent(task: string, options: AgentRunOptions): Promise<
         options.maxTools ?? 128,
         options.signal,
         options.onLog,
+        { matcher: options.matcher, embeddingsThreshold: options.embeddingsThreshold },
     );
 
     // Filter the real toolset down to what the model is allowed to call.

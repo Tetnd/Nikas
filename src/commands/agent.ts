@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import { SecretStore } from '../secrets.js';
 import { runAgent } from '../harness/index.js';
 import { DEFAULT_TOOLSET } from '../harness/tools/index.js';
-import { getSelectedModel, getThinkingEffort } from '../config.js';
+import { createEmbeddingsMatcher } from '../harness/embeddingMatcher.js';
+import { getSelectedModel, getThinkingEffort, getVirtualToolsEmbeddings, getVirtualToolsEmbeddingsThreshold } from '../config.js';
 import { log } from '../log.js';
+import { usageTracker } from '../usage/tracker.js';
 
 /**
  * `Nikas: Run Agent` — surface the built-in agent harness as a command.
@@ -54,7 +56,13 @@ export async function runAgentCommand(context: vscode.ExtensionContext): Promise
         },
         async (_progress, token) => {
             token.onCancellationRequested(() => abort.abort());
+            const startedAt = Date.now();
             try {
+                // D-10 (v0.7.88): optionally filter tools by embeddings relevance
+                // (guarded — no-ops when the proposed API is unavailable).
+                const matcher = getVirtualToolsEmbeddings()
+                    ? createEmbeddingsMatcher()
+                    : undefined;
                 const agentResult = await runAgent(task, {
                     apiKey,
                     cwd: folder.uri.fsPath,
@@ -65,9 +73,25 @@ export async function runAgentCommand(context: vscode.ExtensionContext): Promise
                     signal: abort.signal,
                     maxIterations: 12,
                     maxParallel: 2,
+                    matcher,
+                    embeddingsThreshold: getVirtualToolsEmbeddingsThreshold(),
                     onText: (t) => channel.append(t),
                     onLog: (m) => channel.appendLine(`\n[agent] ${m}`),
                 });
+                // D-12 (v0.7.88): record the harness run in the usage tracker
+                // (provider 'unknown', model = selected chat model) so agent runs
+                // show up in the cost dashboard alongside chat requests.
+                try {
+                    usageTracker.record({
+                        provider: 'unknown',
+                        model: getSelectedModel(),
+                        promptTokens: 0,
+                        completionTokens: 0,
+                        timestamp: Date.now(),
+                        latencyMs: Date.now() - startedAt,
+                        requestKind: 'harness-agent',
+                    });
+                } catch { /* additive */ }
                 return agentResult;
             } catch (err) {
                 channel.appendLine(

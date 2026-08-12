@@ -55,6 +55,16 @@ export async function showUsage(): Promise<void> {
             };
         });
 
+    const kindItems: vscode.QuickPickItem[] = Object.keys(s.byKind)
+        .sort((a, b) => (s.byKind[b]?.estimatedCost ?? 0) - (s.byKind[a]?.estimatedCost ?? 0))
+        .slice(0, 8)
+        .map(k => ({ label: `$(tag) ${k}`, description: fmtAgg(s.byKind[k]) }));
+
+    const initiatorItems: vscode.QuickPickItem[] = Object.keys(s.byInitiator)
+        .sort((a, b) => (s.byInitiator[b]?.estimatedCost ?? 0) - (s.byInitiator[a]?.estimatedCost ?? 0))
+        .slice(0, 8)
+        .map(k => ({ label: `$(extensions) ${k}`, description: fmtAgg(s.byInitiator[k]) }));
+
     const current = usageTracker.session(getCurrentSessionKey());
     const last = s.recent[0];
     const items: vscode.QuickPickItem[] = [
@@ -76,6 +86,12 @@ export async function showUsage(): Promise<void> {
         { label: '', kind: vscode.QuickPickItemKind.Separator },
         { label: '$(circuit-board) By provider', kind: vscode.QuickPickItemKind.Separator },
         ...(providerItems.length ? providerItems : [line('  — no requests recorded yet —')]),
+        { label: '', kind: vscode.QuickPickItemKind.Separator },
+        { label: '$(tag) By request kind', kind: vscode.QuickPickItemKind.Separator },
+        ...(kindItems.length ? kindItems : [line('  — no kind breakdown yet —')]),
+        { label: '', kind: vscode.QuickPickItemKind.Separator },
+        { label: '$(extensions) By initiator', kind: vscode.QuickPickItemKind.Separator },
+        ...(initiatorItems.length ? initiatorItems : [line('  — no initiator breakdown yet —')]),
         { label: '', kind: vscode.QuickPickItemKind.Separator },
         { label: '$(comment-discussion) Top sessions', kind: vscode.QuickPickItemKind.Separator },
         ...(sessionItems.length ? sessionItems : [line('  — no sessions recorded yet —')]),
@@ -187,8 +203,10 @@ function lastRequestDetail(last: UsageRecord): string {
     return [
         last.model,
         `${formatTokens(last.promptTokens)} in · ${formatTokens(last.completionTokens)} out`,
+        ...(typeof last.reasoningTokens === 'number' ? [`${formatTokens(last.reasoningTokens)} reasoning`] : []),
         `TTFT ${formatLatency(last.ttftMs)} · total ${formatLatency(last.latencyMs)}`,
         ...(cache !== '—' ? [`cache ${cache}`] : []),
+        last.requestKind ? `kind ${last.requestKind}` : '',
         last.sessionLabel ? truncate(last.sessionLabel, 40) : '',
     ].filter(Boolean).join(' · ');
 }
@@ -216,6 +234,9 @@ export function buildMarkdownReport(s: UsageSnapshot): string {
     if (cache !== '—') {
         rows.push(`- **Prompt-cache hit rate:** ${cache} (${(s.total.cacheHitTokens ?? 0).toLocaleString()} hit / ${(s.total.cacheMissTokens ?? 0).toLocaleString()} miss tokens)`);
     }
+    if (typeof s.total.reasoningTokens === 'number' && s.total.reasoningTokens > 0) {
+        rows.push(`- **Reasoning tokens:** ${s.total.reasoningTokens.toLocaleString()}`);
+    }
     const last = s.recent[0];
     if (last) {
         rows.push(`- **Last request:** ${last.model} · ${formatTokens(last.promptTokens)} in / ${formatTokens(last.completionTokens)} out · TTFT ${formatLatency(last.ttftMs)} · total ${formatLatency(last.latencyMs)}`);
@@ -230,6 +251,33 @@ export function buildMarkdownReport(s: UsageSnapshot): string {
         rows.push(`| ${p} | ${a.requests} | ${a.promptTokens.toLocaleString()} | ${a.completionTokens.toLocaleString()} | ${a.totalTokens.toLocaleString()} | ~${formatCost(a.estimatedCost)} |`);
     }
     rows.push('');
+
+    const kindKeys = Object.keys(s.byKind).sort((a, b) => (s.byKind[b]?.estimatedCost ?? 0) - (s.byKind[a]?.estimatedCost ?? 0));
+    if (kindKeys.length) {
+        rows.push('## By request kind');
+        rows.push('');
+        rows.push('| Kind | Requests | Total tokens | Est. cost |');
+        rows.push('|---|---|---|---|');
+        for (const k of kindKeys) {
+            const a = s.byKind[k];
+            rows.push(`| ${k} | ${a.requests} | ${a.totalTokens.toLocaleString()} | ~${formatCost(a.estimatedCost)} |`);
+        }
+        rows.push('');
+    }
+
+    const initiatorKeys = Object.keys(s.byInitiator).sort((a, b) => (s.byInitiator[b]?.estimatedCost ?? 0) - (s.byInitiator[a]?.estimatedCost ?? 0));
+    if (initiatorKeys.length) {
+        rows.push('## By initiator');
+        rows.push('');
+        rows.push('| Initiator | Requests | Total tokens | Est. cost |');
+        rows.push('|---|---|---|---|');
+        for (const k of initiatorKeys) {
+            const a = s.byInitiator[k];
+            rows.push(`| ${k} | ${a.requests} | ${a.totalTokens.toLocaleString()} | ~${formatCost(a.estimatedCost)} |`);
+        }
+        rows.push('');
+    }
+
     rows.push('## Top sessions');
     rows.push('');
     rows.push('| Session | Requests | Total tokens | Est. cost |');

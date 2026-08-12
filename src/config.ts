@@ -328,8 +328,26 @@ export function getThinkingEffort(): ThinkingEffort {
     // (OpenAI reasoning guide: 'none' is for no-tool latency tasks like voice /
     // retrieval / classification; 'low' is for tool-use, planning, and
     // execution-oriented coding). 'off' stays available for max speed / exact
-    // upstream Nika behavior.
     return 'low';
+}
+
+/**
+ * Per-model thinking-effort default (v0.7.88, C-9). Reads a settings map like
+ * `{ "deepseek-v4-flash": "low", "deepseek-v4-pro": "max" }` that overrides the
+ * global `nikas.thinkingEffort` for a specific model. Returns `undefined` when
+ * unset/unknown — the caller then uses the configured effort. Lets users run
+ * different models at different reasoning depth (e.g. flash low, pro max).
+ */
+export function getModelThinkingDefault(modelId: string): ThinkingEffort | undefined {
+    try {
+        const raw = getConfig().get<Record<string, string>>('modelThinkingDefaults');
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+        const v = raw[modelId];
+        if (v === 'off' || v === 'low' || v === 'high' || v === 'max') return v;
+        return undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 /**
@@ -514,6 +532,22 @@ export function getVirtualToolsThreshold(): number {
     return DEFAULT_VIRTUAL_TOOL_THRESHOLD;
 }
 
+/**
+ * D-10 (v0.7.88): whether the harness uses VS Code embeddings
+ * (`lm.computeEmbeddings`, when available) to filter tools by relevance to the
+ * task, instead of including every selected-category tool. Default OFF.
+ */
+export function getVirtualToolsEmbeddings(): boolean {
+    return getConfig().get<boolean>('virtualToolsEmbeddings') ?? false;
+}
+
+/** D-10: embeddings cosine-similarity threshold (default 0.25; higher = fewer, more-confident matches). */
+export function getVirtualToolsEmbeddingsThreshold(): number {
+    const v = getConfig().get<number>('virtualToolsEmbeddingsThreshold');
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+    return 0.25;
+}
+
 // --- Copilot Chat PDF patcher ---
 
 /**
@@ -603,22 +637,53 @@ export function getModelRouterMode(): 'helpers-only' | 'auto' {
 }
 
 /**
+ * E-13 (v0.7.88): when enabled, heavy agent requests through the Responses API
+ * are sent to `deepseek-v4-pro` instead of `deepseek-v4-flash`. DeepSeek's
+ * docs said Pro Responses support was arriving in early Aug 2026 — this gates
+ * behind an explicit opt-in (default OFF) so it never changes behavior until
+ * the user verifies Pro works on their endpoint. Purely additive.
+ */
+export function getResponsesHeavyPro(): boolean {
+    return getConfig().get<boolean>('responsesHeavyPro') ?? false;
+}
+
+/**
  * Per-kind model overrides for the router (v0.7.86): a settings map like
  * `{ "git-commit-message": "deepseek-v4-flash" }`. Keys are request kinds;
  * values are validated against the chat-completions family at decision time
- * (never the Responses model). Returns {} when unset or malformed.
+ * (never the Responses model).
+ *
+ * v0.7.88: when no overrides are configured, a recommended default is used
+ * (F-15) that keeps every internal-helper kind pinned to Flash — consistent
+ * with the "cheap helpers, strong real work" policy and with the default
+ * preference of running everything on Flash. It never promotes main/plan/
+ * explore to Pro (that stays opt-in via `nikas.modelRouterMode: "auto"`), so
+ * it fits a "flash everywhere" setup like the shipped default. User-configured
+ * keys always win over the default.
  */
+export const DEFAULT_MODEL_ROUTER_KINDS: Record<string, string> = {
+    'git-commit-message': 'deepseek-v4-flash',
+    'git-branch-name': 'deepseek-v4-flash',
+    'rename-suggestions': 'deepseek-v4-flash',
+    'chat-title': 'deepseek-v4-flash',
+    'inline-progress-message': 'deepseek-v4-flash',
+    'prompt-categorizer': 'deepseek-v4-flash',
+    'settings-resolver': 'deepseek-v4-flash',
+    'todo-tracker': 'deepseek-v4-flash',
+};
+
 export function getModelRouterKinds(): Record<string, string> {
     try {
         const raw = getConfig().get<Record<string, string>>('modelRouterKinds');
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-        const out: Record<string, string> = {};
-        for (const [k, v] of Object.entries(raw)) {
-            if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+        const merged = { ...DEFAULT_MODEL_ROUTER_KINDS };
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            for (const [k, v] of Object.entries(raw)) {
+                if (typeof v === 'string' && v.trim()) merged[k] = v.trim();
+            }
         }
-        return out;
+        return merged;
     } catch {
-        return {};
+        return { ...DEFAULT_MODEL_ROUTER_KINDS };
     }
 }
 

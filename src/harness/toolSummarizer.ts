@@ -16,7 +16,7 @@
  * hides tools the user might need.
  */
 import type { DeepSeekRequest } from '../api/types.js';
-import { EMBEDDINGS_GROUP, type VirtualToolGroup } from './virtualTools.js';
+import { EMBEDDINGS_GROUP, type VirtualToolGroup, type VirtualToolMatcher } from './virtualTools.js';
 import { getToolKnowledge } from './copilotKnowledge.js';
 
 /** Lazy transport import — avoids loading the vscode-dependent api client at module load (keeps this testable in plain Node). */
@@ -133,12 +133,15 @@ export async function selectToolsForTask(
     maxTools = 128,
     signal?: AbortSignal,
     onLog?: (msg: string) => void,
+    opts?: { matcher?: VirtualToolMatcher; embeddingsThreshold?: number },
 ): Promise<VirtualToolGroup['tools']> {
     const out: VirtualToolGroup['tools'] = [];
     const seen = new Set<string>();
-    const push = (name: string, description: string): void => {
+    const alwaysShownNames = new Set<string>();
+    const push = (name: string, description: string, always = false): void => {
         if (seen.has(name)) return;
         seen.add(name);
+        if (always) alwaysShownNames.add(name);
         out.push({ name, description });
     };
 
@@ -146,7 +149,7 @@ export async function selectToolsForTask(
     const collapsible: VirtualToolGroup[] = [];
     for (const g of groups) {
         if (!g.metadata.canBeCollapsed || g.name === EMBEDDINGS_GROUP) {
-            for (const t of g.tools) push(t.name, t.description);
+            for (const t of g.tools) push(t.name, t.description, true);
         } else {
             collapsible.push(g);
         }
@@ -170,6 +173,26 @@ export async function selectToolsForTask(
     for (const g of collapsible) {
         if (chosen.has(g.name)) {
             for (const t of g.tools) push(t.name, t.description);
+        }
+    }
+
+    // D-10 (v0.7.88): optional relevance filter — when a matcher (e.g. a real
+    // embeddings scorer) is provided and a threshold is set, keep only tools
+    // whose relevance to the task meets the threshold. Always-shown tools are
+    // never hidden (they're required for the loop). Default-off / opt-in.
+    const threshold = opts?.embeddingsThreshold ?? 0;
+    if (opts?.matcher && threshold > 0) {
+        const scored = opts.matcher.score(out.map(t => ({ name: t.name, description: t.description })), task);
+        const keep = new Set<string>();
+        for (const m of scored) {
+            if (m.score >= threshold) keep.add(m.candidate.name);
+        }
+        const filtered = out.filter(t => keep.has(t.name) || alwaysShownNames.has(t.name));
+        if (filtered.length < out.length) {
+            if (onLog) {
+                onLog(`[embeddings] relevance filter: kept ${filtered.length}/${out.length} tools (threshold ${threshold})`);
+            }
+            return filtered.slice(0, maxTools);
         }
     }
 

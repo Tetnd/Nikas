@@ -62,6 +62,8 @@ export interface StreamUsage {
     completionTokens: number;
     cacheHitTokens?: number;
     cacheMissTokens?: number;
+    /** DeepSeek reasoning/thinking tokens (v0.7.88, B-6). */
+    reasoningTokens?: number;
 }
 
 /**
@@ -371,6 +373,7 @@ async function streamDeepSeekChatOnce(
                             completionTokens: parsed.usage.completion_tokens,
                             cacheHitTokens: parsed.usage.prompt_cache_hit_tokens,
                             cacheMissTokens: parsed.usage.prompt_cache_miss_tokens,
+                            reasoningTokens: parsed.usage.completion_tokens_details?.reasoning_tokens,
                         };
                     }
                 } catch {
@@ -417,6 +420,7 @@ async function streamDeepSeekChatOnce(
                                 completionTokens: parsed.usage.completion_tokens,
                                 cacheHitTokens: parsed.usage.prompt_cache_hit_tokens,
                                 cacheMissTokens: parsed.usage.prompt_cache_miss_tokens,
+                                reasoningTokens: parsed.usage.completion_tokens_details?.reasoning_tokens,
                             };
                         }
                     } catch {
@@ -654,6 +658,7 @@ async function streamDeepSeekResponsesOnce(
                         completionTokens: usage.output_tokens,
                         cacheHitTokens: cached,
                         cacheMissTokens: typeof cached === 'number' ? Math.max(0, usage.input_tokens - cached) : undefined,
+                        reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
                     };
                 }
                 break;

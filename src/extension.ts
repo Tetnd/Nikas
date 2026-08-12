@@ -21,6 +21,8 @@ import { wireMemoryPersistence, memoryStore, describeMemoryState } from './memor
 import { showMemory, resetMemory } from './commands/memory.js';
 import { runAgentCommand } from './commands/agent.js';
 import { runHealthCheck } from './commands/health.js';
+import { runLogReport } from './commands/logReportCommand.js';
+import { contributeNikasTools } from './tools/contribute.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -67,6 +69,10 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.lm.registerLanguageModelChatProvider('nikas', provider)
     );
+
+    // D-11 (v0.7.88): best-effort contribution of Nikas-scoped harness tools
+    // (gated by nikas.contributeTools; no-op when the proposed API is missing).
+    contributeNikasTools(context);
 
     // ── First-run setup onboarding ─────────────────────────────────────
     // Create the status bar item that reflects whether Nikas is configured.
@@ -190,6 +196,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.usage', () => showUsage()),
         vscode.commands.registerCommand('nikas.resetUsage', () => resetUsage()),
         vscode.commands.registerCommand('nikas.health', () => runHealthCheck(context)),
+        vscode.commands.registerCommand('nikas.logReport', () => runLogReport()),
         vscode.commands.registerCommand('nikas.memory', () => showMemory()),
         getAgentCommand() ? vscode.commands.registerCommand('nikas.runAgent', () => runAgentCommand(context)) : new vscode.Disposable(() => {}),
         vscode.commands.registerCommand('nikas.manage', () => {
@@ -280,6 +287,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'One-shot diagnostics: keys, model/router, patches, usage, log',
                     },
                     {
+                        label: '$(notebook) Log Report',
+                        description: 'Aggregate real usage from the current nikas.log (tokens, compaction, tool-budget)',
+                    },
+                    {
                         label: '$(archive) Persistent Memory',
                         description: 'Inspect / clear the session memory saved to nikas.md (survives restarts)',
                     },
@@ -357,6 +368,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(heart) Health Check':
                         vscode.commands.executeCommand('nikas.health');
+                        break;
+                    case '$(notebook) Log Report':
+                        vscode.commands.executeCommand('nikas.logReport');
                         break;
                     case '$(archive) Persistent Memory':
                         showMemory();

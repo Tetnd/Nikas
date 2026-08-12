@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter, getModelRouterMode, getModelRouterKinds, getToolBudget, getToolBudgetTokens } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter, getModelRouterMode, getModelRouterKinds, getToolBudget, getToolBudgetTokens, getModelThinkingDefault, getResponsesHeavyPro } from './config.js';
 import { augmentToolDescription, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
@@ -1196,13 +1196,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     version: m.version,
                     maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
                     maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
-                    capabilities: m.capabilities,
+                    capabilities: withEditTools(m.capabilities) as vscode.LanguageModelChatInformation['capabilities'],
                     detail: m.detail,
                 };
 
                 // Both Flash and Pro support thinking — add the per-model
-                // Thinking Effort dropdown in Copilot Chat's model picker
-                // (matches upstream Nika).
+                // Thinking Effort + temperature dropdown in the model picker
+                // (matches upstream Nika + C-8 v0.7.88).
                 modelInfo.configurationSchema = buildThinkingEffortSchema();
 
                 models.push(modelInfo);
@@ -1218,7 +1218,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 version: DEEPSEEK_RESPONSES_MODEL.version,
                 maxInputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxInputTokens, effectiveInputTokens),
                 maxOutputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxOutputTokens, effectiveOutputTokens),
-                capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities,
+                capabilities: withEditTools(DEEPSEEK_RESPONSES_MODEL.capabilities) as vscode.LanguageModelChatInformation['capabilities'],
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
             };
             responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
@@ -1437,7 +1437,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // falling back to the saved nikas.thinkingEffort setting. Per-agent
         // overrides (nikas.agentEfforts) let Plan/Explore/Inline/helpers carry
         // their own effort.
-        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools, initiator: getRequestInitiator(options) });
+        const kindId = requestKind.kind;
 
         let modelId = getSelectedModel();
 
@@ -1446,7 +1447,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // by default). Auto mode (nikas.modelRouterMode) additionally routes
         // heavy agent tasks to Pro and quick chats to Flash. Never routes the
         // Responses model id to /chat/completions.
-        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter(), getModelRouterMode(), options.tools?.length ?? 0, getModelRouterKinds());
+        const route = decideDeepSeekRoute(kindId, modelId, getModelRouter(), getModelRouterMode(), options.tools?.length ?? 0, getModelRouterKinds());
         if (route.modelId && route.modelId !== modelId) {
             getOutputChannel().appendLine(`[Nikas] Model router: ${modelId} → ${route.modelId} (${route.reason})`);
             modelId = route.modelId;
@@ -1471,16 +1472,20 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         getOutputChannel().appendLine(`[Nikas] Context window: ${ctxWindowTokens.toLocaleString()} tokens (setting: ${getContextWindowPreset()})`);
 
         const baseEffort = getRequestThinkingEffort(options);
-        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
+        // C-9 (v0.7.88): a per-model thinking default (nikas.modelThinkingDefaults)
+        // overrides the global effort for this model. Agent-effort overrides
+        // (resolveAgentEffort) still take precedence via the kind.
+        const modelEffort = getModelThinkingDefault(modelId) ?? baseEffort;
+        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(kindId, modelEffort);
         const thinkingParams = buildThinkingParams(thinkingEffort);
 
         // Log which effort is being used
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
+            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(kindId)} — per-agent effort)` : '')
         );
         if (effortSource === 'agent-effort') {
-            log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
+            log.verbose(`Per-agent effort for ${requestKindToAgentKind(kindId)} (${kindId}) — ${thinkingEffort}`);
         }
 
         // When thinking mode is enabled, ensure enough headroom for reasoning
@@ -1501,7 +1506,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const request: DeepSeekRequest = {
             model: modelId,
             messages: deepseekMessages,
-            temperature: getTemperature(),
+            temperature: getRequestTemperature(options),
             max_tokens: boostedTokens,
             stream: true,
             ...thinkingParams,
@@ -1663,6 +1668,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             ttftMs: firstChunkAt ? firstChunkAt - startedAt : undefined,
                             cacheHitTokens: usage.cacheHitTokens,
                             cacheMissTokens: usage.cacheMissTokens,
+                            reasoningTokens: usage.reasoningTokens,
+                            requestKind: kindId,
+                            initiator: getRequestInitiator(options),
                             sessionKey,
                             sessionLabel,
                         });
@@ -1855,9 +1863,13 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // internal helper requests are always forced to thinking off (see the
         // chat-completions handler for rationale). Per-agent overrides
         // (nikas.agentEfforts) apply too.
-        const requestKind = classifyProviderRequest({ messages, tools: options.tools });
+        const requestKind = classifyProviderRequest({ messages, tools: options.tools, initiator: getRequestInitiator(options) });
+        const kindId = requestKind.kind;
         const baseEffort = getRequestThinkingEffort(options);
-        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(requestKind, baseEffort);
+        // C-9: per-model thinking default (nikas.modelThinkingDefaults) overrides
+        // the global effort; agent-effort overrides still take precedence via kind.
+        const modelEffort = getModelThinkingDefault(modelId) ?? getModelThinkingDefault('deepseek-v4-flash') ?? baseEffort;
+        const { effort: thinkingEffort, source: effortSource } = resolveAgentEffort(kindId, modelEffort);
         const reasoningParams = buildResponsesThinkingParams(thinkingEffort);
         const thinkingEnabled = thinkingEffort !== 'off';
 
@@ -1876,17 +1888,28 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // Log which effort is being used (mirrors the chat-completions handler)
         getOutputChannel().appendLine(
             `[Nikas] Thinking effort: ${thinkingEffort}` +
-            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(requestKind)} — per-agent effort)` : '')
+            (effortSource === 'agent-effort' ? ` (agent: ${requestKindToAgentKind(kindId)} — per-agent effort)` : '')
         );
         if (effortSource === 'agent-effort') {
-            log.verbose(`Per-agent effort for ${requestKindToAgentKind(requestKind)} (${requestKind}) — ${thinkingEffort}`);
+            log.verbose(`Per-agent effort for ${requestKindToAgentKind(kindId)} (${kindId}) — ${thinkingEffort}`);
+        }
+
+        // E-13 (v0.7.88): optional heavy-agent promotion on the Responses API.
+        // DeepSeek's Responses endpoint only officially supports flash, but docs
+        // flagged Pro support arriving early Aug 2026. Gated behind
+        // nikas.responsesHeavyPro (default OFF) so behavior is unchanged until
+        // the user opts in and verifies Pro works on their endpoint.
+        const heavyKinds = kindId === 'main-agent' || kindId === 'plan-agent' || kindId === 'explore-agent';
+        const responsesApiModel =
+            getResponsesHeavyPro() && heavyKinds ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+        if (responsesApiModel === 'deepseek-v4-pro') {
+            getOutputChannel().appendLine(`[Nikas] Responses API: heavy ${kindId} → routed to deepseek-v4-pro (nikas.responsesHeavyPro)`);
         }
 
         const request: DeepSeekResponsesRequest = {
-            // The Responses API only supports deepseek-v4-flash (not Pro).
-            model: 'deepseek-v4-flash',
+            model: responsesApiModel,
             input,
-            temperature: getTemperature(),
+            temperature: getRequestTemperature(options),
             max_output_tokens: boostedTokens,
             stream: true,
             ...reasoningParams,
@@ -2027,6 +2050,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             ttftMs: firstChunkAt ? firstChunkAt - startedAt : undefined,
                             cacheHitTokens: usage.cacheHitTokens,
                             cacheMissTokens: usage.cacheMissTokens,
+                            reasoningTokens: usage.reasoningTokens,
+                            requestKind: kindId,
+                            initiator: getRequestInitiator(options),
                             sessionKey,
                             sessionLabel,
                         });
@@ -2714,11 +2740,13 @@ function mapResponsesTool(tool: vscode.LanguageModelChatTool): DeepSeekResponses
 
 /**
  * Schema for the per-model "Thinking Effort" dropdown in Copilot Chat's model
- * picker. Matches upstream Nika exactly (values `none`/`low`/`high`/`max`).
+ * picker. Matches upstream Nika exactly (values `none`/`low`/`high`/`max`),
+ * plus (C-8, v0.7.88) a per-model temperature slider.
  *
- * The dropdown's selected value is delivered to the request via
- * `options.modelConfiguration.reasoningEffort`, which `getRequestThinkingEffort`
- * reads first (falling back to the saved `nikas.thinkingEffort` setting).
+ * The dropdown's selected values are delivered to the request via
+ * `options.modelConfiguration.{reasoningEffort,temperature}`, which
+ * `getRequestThinkingEffort` / `getRequestTemperature` read first (falling
+ * back to the saved `nikas.thinkingEffort` / `nikas.temperature` settings).
  */
 function buildThinkingEffortSchema() {
     return {
@@ -2737,8 +2765,59 @@ function buildThinkingEffortSchema() {
                 default: 'high',
                 group: 'navigation',
             },
+            temperature: {
+                type: 'number',
+                title: 'Temperature',
+                minimum: 0,
+                maximum: 2,
+                default: getTemperature(),
+                description: 'Sampling temperature for this model (0 = deterministic). Per-model override of nikas.temperature.',
+            },
         },
     };
+}
+
+/**
+ * A-4 (v0.7.88): advertise the edit tools DeepSeek prefers so Copilot Chat
+ * matches the model's strengths. See LanguageModelChatCapabilities.editTools.
+ * Cast through a loose type because the `editTools` field is a proposed API
+ * that may not be in the compiled vscode.d.ts.
+ */
+function withEditTools(capabilities: unknown): unknown {
+    return {
+        ...(capabilities as Record<string, unknown>),
+        editTools: ['find-replace', 'multi-find-replace'],
+    };
+}
+
+/**
+ * F-17 (v0.7.88): read the proposed `requestInitiator` from the response
+ * options through a loose cast (it may not be present in every VS Code build).
+ * Returns `undefined` when unavailable — callers must treat it as optional.
+ */
+function getRequestInitiator(options: unknown): string | undefined {
+    try {
+        const v = (options as Record<string, unknown>)['requestInitiator'];
+        return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * C-8 (v0.7.88): read the per-model temperature from the model-picker dropdown
+ * (`options.modelConfiguration.temperature`) or fall back to the saved
+ * `nikas.temperature` setting.
+ */
+function getRequestTemperature(options: unknown): number {
+    const extOptions = (options ?? {}) as Record<string, unknown>;
+    const modelConfig = (extOptions.modelConfiguration ?? {}) as Record<string, unknown>;
+    const cfg = (extOptions.configuration ?? {}) as Record<string, unknown>;
+    const configured = (modelConfig.temperature ?? cfg.temperature) as number | undefined;
+    if (typeof configured === 'number' && Number.isFinite(configured)) {
+        return Math.min(2, Math.max(0, configured));
+    }
+    return getTemperature();
 }
 
 /**

@@ -32,6 +32,12 @@ export interface UsageRecord {
     cacheHitTokens?: number;
     /** DeepSeek prompt-cache miss tokens (v0.7.86 cache telemetry). */
     cacheMissTokens?: number;
+    /** DeepSeek reasoning/thinking tokens (v0.7.88, B-6). */
+    reasoningTokens?: number;
+    /** Request-kind classification (v0.7.88, B-5). */
+    requestKind?: string;
+    /** requestInitiator extension id (v0.7.88, B-5). */
+    initiator?: string;
     /** Content-derived per-conversation key (optional — empty for unkeyed calls). */
     sessionKey?: string;
     /** Human-readable first-user-message preview, for the per-session view. */
@@ -50,12 +56,18 @@ export interface UsageAggregate {
     cacheHitTokens?: number;
     /** DeepSeek prompt-cache miss tokens (v0.7.86). */
     cacheMissTokens?: number;
+    /** DeepSeek reasoning/thinking tokens (v0.7.88, B-6). */
+    reasoningTokens?: number;
 }
 
 export interface UsageSnapshot {
     total: UsageAggregate;
     byProvider: Record<string, UsageAggregate>;
     bySession: Record<string, UsageAggregate>;
+    /** Cost/token totals keyed by request kind (v0.7.88, B-5). */
+    byKind: Record<string, UsageAggregate>;
+    /** Cost/token totals keyed by request initiator (v0.7.88, B-5). */
+    byInitiator: Record<string, UsageAggregate>;
     /** Most recent records, newest first, capped. */
     recent: UsageRecord[];
     /** First-seen human label per session key. */
@@ -122,6 +134,8 @@ export class UsageTracker {
     private _total = emptyAggregate();
     private _byProvider: Record<string, UsageAggregate> = {};
     private _bySession: Record<string, UsageAggregate> = {};
+    private _byKind: Record<string, UsageAggregate> = {};
+    private _byInitiator: Record<string, UsageAggregate> = {};
     private _recent: UsageRecord[] = [];
     private _sessionLabels: Record<string, string> = {};
     private _pricing: Record<UsageProvider, { inputPerM: number; outputPerM: number }> = DEFAULT_PRICING;
@@ -220,11 +234,16 @@ export class UsageTracker {
                 if (typeof rec.cacheMissTokens === 'number') {
                     a.cacheMissTokens = (a.cacheMissTokens ?? 0) + rec.cacheMissTokens;
                 }
+                if (typeof rec.reasoningTokens === 'number') {
+                    a.reasoningTokens = (a.reasoningTokens ?? 0) + rec.reasoningTokens;
+                }
                 return a;
             };
 
             this._total = add(this._total);
             this._byProvider[provider] = add(this._byProvider[provider]);
+            if (rec.requestKind) this._byKind[rec.requestKind] = add(this._byKind[rec.requestKind]);
+            if (rec.initiator) this._byInitiator[rec.initiator] = add(this._byInitiator[rec.initiator]);
 
             if (rec.sessionKey) {
                 this._bySession[rec.sessionKey] = add(this._bySession[rec.sessionKey]);
@@ -259,6 +278,8 @@ export class UsageTracker {
             this._total = UsageTracker._agg(snapshot.total);
             this._byProvider = snapshot.byProvider ?? {};
             this._bySession = snapshot.bySession ?? {};
+            this._byKind = snapshot.byKind ?? {};
+            this._byInitiator = snapshot.byInitiator ?? {};
             this._sessionLabels = snapshot.sessionLabels ?? {};
             this._recent = Array.isArray(snapshot.recent) ? snapshot.recent.slice(0, RECENT_CAP) : [];
         } catch {
@@ -272,6 +293,8 @@ export class UsageTracker {
             total: { ...this._total },
             byProvider: { ...this._byProvider },
             bySession: { ...this._bySession },
+            byKind: { ...this._byKind },
+            byInitiator: { ...this._byInitiator },
             recent: this._recent.map(r => ({ ...r })),
             sessionLabels: { ...this._sessionLabels },
         };
@@ -287,6 +310,8 @@ export class UsageTracker {
         this._total = emptyAggregate();
         this._byProvider = {};
         this._bySession = {};
+        this._byKind = {};
+        this._byInitiator = {};
         this._recent = [];
         this._sessionLabels = {};
         this._fire();
@@ -295,6 +320,8 @@ export class UsageTracker {
     get total(): UsageAggregate { return this._total; }
     get byProvider(): Record<string, UsageAggregate> { return this._byProvider; }
     get bySession(): Record<string, UsageAggregate> { return this._bySession; }
+    get byKind(): Record<string, UsageAggregate> { return this._byKind; }
+    get byInitiator(): Record<string, UsageAggregate> { return this._byInitiator; }
     get recent(): UsageRecord[] { return this._recent; }
     get sessionLabels(): Record<string, string> { return this._sessionLabels; }
 

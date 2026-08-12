@@ -107,43 +107,81 @@ export function resolveAgentEffort(
 /**
  * Classify a provider request by inspecting the first text part of the input
  * messages and the available tool names.
+ *
+ * `initiator` (v0.7.88, A-1) is the authoritative `requestInitiator` from the
+ * response options — which extension fired the request. When it maps to a
+ * known agent/extension, it refines classification (an agent-initiated
+ * request is never a pure helper) and is returned on the result so callers can
+ * log/attribute it.
  */
+export interface ClassifiedRequest {
+    kind: RequestKind;
+    initiator?: string;
+    /** True when the initiator hint, rather than the message heuristic, decided the kind. */
+    initiatorDriven?: boolean;
+}
+
+/** Known initiators → request-kind hints (v0.7.88, A-1). */
+const INITIATOR_KIND_HINTS: Record<string, RequestKind> = {
+    'github.copilot.editsAgent': 'main-agent',
+    'github.copilot.chat.editsAgent': 'main-agent',
+    'github.copilot.codeReview': 'main-agent',
+    'github.copilot.chat': 'main-agent',
+    'github.copilot.inlineChat': 'inline-agent',
+};
+
 export function classifyProviderRequest(input: {
     messages: readonly vscode.LanguageModelChatRequestMessage[];
     tools?: readonly vscode.LanguageModelChatTool[];
-}): RequestKind {
+    initiator?: string;
+}): ClassifiedRequest {
     const toolNames = (input.tools ?? []).map(t => t.name);
     const firstText = findFirstText(input.messages);
+    const initiator = input.initiator?.trim();
+
+    // A known agent initiator drives the kind authoritatively (it's more
+    // reliable than prompt prefixes). Only used as a fallback signal when the
+    // message heuristic would otherwise say "unknown" or a pure helper — the
+    // user-facing system prompts still win for internal helpers.
+    if (initiator && INITIATOR_KIND_HINTS[initiator]) {
+        const hinted = INITIATOR_KIND_HINTS[initiator];
+        if (firstText && (firstText.startsWith(MAIN_AGENT_PREFIX) || firstText.includes('<skills>'))) {
+            // Main-style prompt + an agent initiator → agent work (not inline).
+            const kind: RequestKind = hinted === 'inline-agent' && !isLikelyInline(toolNames) ? 'main-agent' : hinted;
+            return { kind, initiator, initiatorDriven: true };
+        }
+        return { kind: hinted, initiator, initiatorDriven: true };
+    }
 
     if (isOnlyTool(toolNames, 'categorize_prompt') || firstText.startsWith(PROMPT_CATEGORIZER_PREFIX)) {
-        return 'prompt-categorizer';
+        return { kind: 'prompt-categorizer', initiator };
     }
     if (firstText.startsWith(TODO_TRACKER_PREFIX)) {
-        return 'todo-tracker';
+        return { kind: 'todo-tracker', initiator };
     }
     if (firstText.startsWith(SETTINGS_RESOLVER_PREFIX)) {
-        return 'settings-resolver';
+        return { kind: 'settings-resolver', initiator };
     }
     if (startsWithAny(firstText, CHAT_TITLE_PREFIXES)) {
-        return 'chat-title';
+        return { kind: 'chat-title', initiator };
     }
     if (firstText.startsWith(INLINE_PROGRESS_MESSAGE_PREFIX)) {
-        return 'inline-progress-message';
+        return { kind: 'inline-progress-message', initiator };
     }
     if (firstText.startsWith(GIT_BRANCH_NAME_PREFIX)) {
-        return 'git-branch-name';
+        return { kind: 'git-branch-name', initiator };
     }
     if (firstText.startsWith(GIT_COMMIT_MESSAGE_PREFIX)) {
-        return 'git-commit-message';
+        return { kind: 'git-commit-message', initiator };
     }
     if (firstText.startsWith(RENAME_SUGGESTIONS_PREFIX)) {
-        return 'rename-suggestions';
+        return { kind: 'rename-suggestions', initiator };
     }
     if (firstText.startsWith(PLAN_AGENT_PREFIX)) {
-        return 'plan-agent';
+        return { kind: 'plan-agent', initiator };
     }
     if (firstText.startsWith(EXPLORE_AGENT_PREFIX)) {
-        return 'explore-agent';
+        return { kind: 'explore-agent', initiator };
     }
     // Inline chat shares the main agent's system prompt but runs with a
     // RESTRICTED tool set — inline requests don't carry the full agent
@@ -151,11 +189,11 @@ export function classifyProviderRequest(input: {
     // small/empty tool list is treated as inline.
     if (firstText.startsWith(MAIN_AGENT_PREFIX) || firstText.includes('<skills>')) {
         if (isLikelyInline(toolNames)) {
-            return 'inline-agent';
+            return { kind: 'inline-agent', initiator };
         }
-        return 'main-agent';
+        return { kind: 'main-agent', initiator };
     }
-    return 'unknown';
+    return { kind: 'unknown', initiator };
 }
 
 /**

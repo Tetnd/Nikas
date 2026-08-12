@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.87",
+  "version": "0.7.88",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -23,7 +23,9 @@
   ],
   "main": "./out/extension.js",
   "enabledApiProposals": [
-    "languageModelThinkingPart"
+    "languageModelThinkingPart",
+    "languageModelToolSupportsModel",
+    "embeddings"
   ],
   "contributes": {
     "languageModelChatProviders": [
@@ -540,6 +542,33 @@
           "type": "boolean",
           "default": true,
           "description": "On activation, apply the recommended Copilot agent model assignments (Explore, Plan, Inline Chat → DeepSeek V4 Flash Responses) for any agent the user hasn't configured yet. Idempotent — never overrides an existing choice. Disable to keep agent models untouched on fresh installs."
+        },
+        "nikas.modelThinkingDefaults": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Per-model thinking-effort defaults (v0.7.88): a map like { \"deepseek-v4-flash\": \"low\", \"deepseek-v4-pro\": \"max\" } that overrides the global nikas.thinkingEffort for a specific model. Agent-effort overrides (nikas.agentEfforts) still take precedence. Valid values: off / low / high / max."
+        },
+        "nikas.responsesHeavyPro": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled (v0.7.88), heavy agent requests (main/plan/explore) through the Responses API are sent to deepseek-v4-pro instead of deepseek-v4-flash. DeepSeek flagged Pro Responses support arriving early Aug 2026 — default OFF so behavior is unchanged until you verify Pro works on your endpoint."
+        },
+        "nikas.virtualToolsEmbeddings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use VS Code embeddings (lm.computeEmbeddings, when available) to filter harness tools by relevance to the task instead of including every selected-category tool (v0.7.88). Default OFF."
+        },
+        "nikas.virtualToolsEmbeddingsThreshold": {
+          "type": "number",
+          "default": 0.25,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Embeddings cosine-similarity threshold for the harness relevance filter (v0.7.88). Higher = fewer, more-confident tool matches; 0 disables filtering."
+        },
+        "nikas.contributeTools": {
+          "type": "boolean",
+          "default": false,
+          "description": "Best-effort contribution of Nikas harness tools as VS Code language-model tools scoped to Nikas models only (v0.7.88). No-op when the proposed registerTool API is unavailable. Default OFF."
         }
       }
     }

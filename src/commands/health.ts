@@ -30,6 +30,7 @@ import { usageTracker, formatTokens, formatCost } from '../usage/tracker.js';
 import { locateCopilotBundle, healthCheck } from '../pdf/manager.js';
 import { buildPatches } from '../pdf/patches.js';
 import { buildHealthReport, formatCacheRate } from './healthReport.js';
+import { collectLogReport } from './logReportCommand.js';
 
 /** Run the health check and surface it (output channel + QuickPick). */
 export async function runHealthCheck(context: vscode.ExtensionContext): Promise<void> {
@@ -61,10 +62,14 @@ export async function runHealthCheck(context: vscode.ExtensionContext): Promise<
 
     let logPath = '';
     let logSizeBytes = 0;
+    let logDiag: ReturnType<typeof collectLogReport> | undefined;
     try {
         logPath = getLogFilePath();
         logSizeBytes = fs.statSync(logPath).size;
     } catch { /* log may not exist yet */ }
+    try {
+        logDiag = collectLogReport();
+    } catch { /* non-fatal */ }
 
     const report = buildHealthReport({
         version: String(context.extension.packageJSON?.version ?? '?'),
@@ -91,6 +96,13 @@ export async function runHealthCheck(context: vscode.ExtensionContext): Promise<
         patches: { found: patchesFound, applied: appliedCount, missing, bundlePath },
         logPath,
         logSizeBytes,
+        log: logDiag ? {
+            compactionCount: logDiag.compactionCount,
+            toolBudgetTrimCount: logDiag.toolBudgetTrimCount,
+            toolBudgetSavedTokens: logDiag.toolBudgetSavedTokens,
+            routingEvents: logDiag.routingEvents,
+            models: logDiag.models,
+        } : undefined,
     });
 
     const channel = vscode.window.createOutputChannel('Nikas Health');

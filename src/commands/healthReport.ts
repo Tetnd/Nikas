@@ -31,6 +31,14 @@ export interface HealthReportInput {
     patches: { found: boolean; applied: number; missing: string[]; bundlePath?: string };
     logPath: string;
     logSizeBytes: number;
+    /** Diagnostics parsed from nikas.log (v0.7.88, F-16 / B-7). Optional. */
+    log?: {
+        compactionCount: number;
+        toolBudgetTrimCount: number;
+        toolBudgetSavedTokens: number;
+        routingEvents: number;
+        models: string[];
+    };
 }
 
 /** Build the markdown health report (pure — unit-testable). */
@@ -81,6 +89,24 @@ export function buildHealthReport(input: HealthReportInput): string {
     rows.push(`- **Log file:** \`${input.logPath}\``);
     rows.push(`- **Log size:** ${(input.logSizeBytes / 1024).toFixed(1)} KB`);
     rows.push('');
+
+    if (input.log && (input.log.compactionCount > 0 || input.log.toolBudgetTrimCount > 0 || input.log.routingEvents > 0 || input.log.models.length > 0)) {
+        rows.push('## Diagnostics (from nikas.log)');
+        if (input.log.compactionCount > 0) {
+            rows.push(`- **Context compaction events:** ${input.log.compactionCount}`);
+        }
+        if (input.log.toolBudgetTrimCount > 0) {
+            rows.push(`- **Tool-description budget:** ${input.log.toolBudgetTrimCount} trim(s) · ~${(input.log.toolBudgetSavedTokens / 1000).toFixed(1)}K tokens freed`);
+        }
+        if (input.log.routingEvents > 0) {
+            rows.push(`- **Model-routing events:** ${input.log.routingEvents}`);
+        }
+        if (input.log.models.length) {
+            rows.push(`- **Models seen:** ${input.log.models.join(', ')}`);
+        }
+        rows.push('');
+    }
+
     rows.push('_Health check is read-only — nothing was modified._');
     return rows.join('\n');
 }
