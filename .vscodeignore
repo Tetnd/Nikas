@@ -42,3 +42,5 @@ test-stream-retry.js
 test-compact-silent.js
 test-tool-mode.js
 test-tool-results.js
+test-usage.js
+test-memory.js

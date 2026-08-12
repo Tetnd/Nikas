@@ -12,6 +12,7 @@ import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } f
 import { assertToolsWithinLimit } from './tools/request.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
 import { usageTracker, setCurrentSessionKey } from './usage/tracker.js';
+import { persistSessionMemory, injectPersistentMemory } from './memory/manager.js';
 import { log } from './log.js';
 import { visionLog } from './vision/log.js';
 import type { DeepSeekRequest, DeepSeekTool, DeepSeekMessage, DeepSeekResponsesRequest, DeepSeekResponsesTool, DeepSeekContentPart } from './api/types.js';
@@ -779,6 +780,12 @@ async function maybeCompactContext(
         `The active task is in the newest messages below.]\n\n` +
         summary;
 
+    // Persist this summary so a reopened conversation (after restart) can regain
+    // context. Additive + best-effort; never affects the request.
+    if (sessionKey) {
+        try { void persistSessionMemory(sessionKey, summary, 'compaction'); } catch { /* additive */ }
+    }
+
     // Merge the summary into the first kept user message when possible (keeps
     // the sequence valid — no consecutive user messages, leading user intact).
     let head: DeepSeekMessage[] = [{ role: 'user', content: summaryText }];
@@ -1075,6 +1082,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         const cancel = token?.onCancellationRequested(() => abort.abort());
         try {
             const summary = await getOrCreateSummary(apiKey, deepseekMessages, abort.signal);
+            // Persist so a reopened conversation regains context after a restart.
+            try {
+                const sessionKey = getSessionKeyFromDeepSeek(deepseekMessages);
+                if (sessionKey) void persistSessionMemory(sessionKey, summary, 'compact-command');
+            } catch { /* additive */ }
             log.info(
                 `Copilot "Compact Conversation" handled silently via session-memory summarizer ` +
                 `(${deepseekMessages.length} messages → summary)`
@@ -1311,6 +1323,11 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
             return undefined;
         })();
+
+        // Re-inject persisted session memory (from a prior session of this same
+        // conversation) so a reopened chat regains context after a restart.
+        // Additive + best-effort; no-op when there's nothing saved or already present.
+        deepseekMessages = injectPersistentMemory(deepseekMessages, sessionKey);
 
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
@@ -1717,6 +1734,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             }
             return undefined;
         })();
+        // Re-inject persisted session memory from a prior session of this
+        // conversation (survives restarts). Additive + best-effort.
+        deepseekMessages = injectPersistentMemory(deepseekMessages, sessionKey);
         // Compact the oldest messages into session memory when the conversation
         // crosses the reliability limit (see maybeCompactContext), THEN truncate
         // to the configured window as a safety net.

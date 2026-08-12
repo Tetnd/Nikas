@@ -550,6 +550,17 @@ export function getUsageTracking(): boolean {
     return getConfig().get<boolean>('usageTracking') ?? true;
 }
 
+/**
+ * Whether persistent session memory is active. When on, compaction summaries
+ * are saved to a per-workspace `nikas.md` and re-injected into the matching
+ * conversation after a restart. Purely additive + best-effort — disabling
+ * stops saving + injecting and never affects the request path.
+ * Default true.
+ */
+export function getMemoryPersistence(): boolean {
+    return getConfig().get<boolean>('memoryPersistence') ?? true;
+}
+
 /** Number of `.bak-*` bundle backups to retain. */
 export function getPatchBackupRetention(): number {
     const v = getConfig().get<number>('patchBackupRetention');

@@ -16,6 +16,8 @@ import {
 } from './commands/setup.js';
 import { showUsage, resetUsage, wireUsagePersistence, updateUsageStatusBar } from './commands/usage.js';
 import { setUsageTrackingEnabled } from './usage/tracker.js';
+import { wireMemoryPersistence, memoryStore, describeMemoryState } from './memory/manager.js';
+import { showMemory, resetMemory } from './commands/memory.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -132,6 +134,21 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Persistent session memory — compaction summaries survive restarts via a
+    // per-workspace nikas.md + globalState. Additive; never affects requests.
+    await wireMemoryPersistence(context);
+    const memoryStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 49);
+    memoryStatusBar.command = 'nikas.memory';
+    memoryStatusBar.text = memoryStore.size > 0 ? '$(archive) Memory' : '$(archive)';
+    memoryStatusBar.tooltip = 'Persistent session memory — click to inspect';
+    memoryStatusBar.show();
+    context.subscriptions.push(memoryStatusBar);
+    const refreshMemoryBar = () => {
+        memoryStatusBar.text = memoryStore.size > 0 ? '$(archive) Memory' : '$(archive)';
+    };
+    const unsubscribeMemory = memoryStore.onDidChange(refreshMemoryBar);
+    context.subscriptions.push(new vscode.Disposable(() => unsubscribeMemory()));
+
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('nikas.chooseProvider', () => chooseProvider()),
@@ -162,6 +179,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.toggleAgentEfforts', () => toggleAgentEfforts()),
         vscode.commands.registerCommand('nikas.usage', () => showUsage()),
         vscode.commands.registerCommand('nikas.resetUsage', () => resetUsage()),
+        vscode.commands.registerCommand('nikas.memory', () => showMemory()),
         vscode.commands.registerCommand('nikas.manage', () => {
             const agentEffortsOn = getAgentEffortsEnabled();
             vscode.window.showQuickPick(
@@ -245,6 +263,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         label: '$(graph-line) Usage & Cost',
                         description: 'Token and estimated-cost dashboard (this session + all time)',
                     },
+                    {
+                        label: '$(archive) Persistent Memory',
+                        description: 'Inspect / clear the session memory saved to nikas.md (survives restarts)',
+                    },
                 ],
                 { title: 'Nikas: Manage' }
             ).then(selection => {
@@ -312,6 +334,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(graph-line) Usage & Cost':
                         vscode.commands.executeCommand('nikas.usage');
+                        break;
+                    case '$(archive) Persistent Memory':
+                        showMemory();
                         break;
                 }
             });

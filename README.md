@@ -21,6 +21,7 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 - **Tool calling** — full support for VS Code's built-in tools (read files, run terminal commands, search, etc.)
 - **Secure key storage** — API keys stored in your OS keychain, never in plaintext settings
 - **📊 Usage & Cost dashboard** — per-conversation token usage and estimated cost (this session + all time, by provider, top sessions), surfaced in the status bar and a QuickPick report (`Nikas: Usage & Cost`). Purely observational — disabling `nikas.usageTracking` stops recording and hides the status bar item, never affecting chat behavior
+- **🧠 Persistent session memory** — when a long conversation is compacted, the session-memory summary is saved to a per-workspace `nikas.md` (plus a reliable VS Code snapshot). If you reopen that conversation after a restart, Nikas re-injects the saved memory so you don't lose context. Purely additive — disabling `nikas.memoryPersistence` stops saving and injecting
 - **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
@@ -155,6 +156,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `Nikas: Check for Updates` | Download and install the latest Nikas release from GitHub |
 | `Nikas: Usage & Cost` | Open the token/cost dashboard (total, this session, by provider, top sessions, copy markdown report) |
 | `Nikas: Reset Usage Stats` | Clear all recorded usage (with confirmation) |
+| `Nikas: Persistent Memory` | Inspect the session memory saved to `nikas.md` (survives restarts) |
 | `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
 ## Settings
@@ -178,6 +180,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.updateRepo` | `alive2/nika` | GitHub repo used by `Nikas: Check for Updates` — **set to your own fork** |
 | `nikas.autoCheckUpdates` | `false` | Periodically check for Nikas updates (silent when up-to-date) |
 | `nikas.usageTracking` | `true` | Track per-conversation token usage + estimated cost (Usage & Cost dashboard + status bar). Disabling stops recording and hides the status bar item — never affects chat behavior |
+| `nikas.memoryPersistence` | `true` | Persist session-memory summaries to a per-workspace `nikas.md` and re-inject them after a restart. Disabling stops saving and injecting — never affects chat behavior |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works

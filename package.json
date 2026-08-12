@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.78",
+  "version": "0.7.80",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -140,6 +140,12 @@
         "title": "Reset Usage Stats",
         "category": "Nikas",
         "icon": "$(trash)"
+      },
+      {
+        "command": "nikas.memory",
+        "title": "Persistent Memory",
+        "category": "Nikas",
+        "icon": "$(archive)"
       }
     ],
     "menus": {
@@ -433,6 +439,11 @@
           "type": "boolean",
           "default": true,
           "description": "Track token usage and estimated cost per conversation (Nikas: Usage & Cost dashboard + status bar). Purely observational — disabling stops recording and hides the status bar item."
+        },
+        "nikas.memoryPersistence": {
+          "type": "boolean",
+          "default": true,
+          "description": "Persist session-memory summaries to a per-workspace nikas.md and re-inject them into the matching conversation after a restart. Purely additive — disabling stops saving and injecting without affecting chat behavior."
         },
         "nikas.applyAgentModelsOnActivate": {
           "type": "boolean",
