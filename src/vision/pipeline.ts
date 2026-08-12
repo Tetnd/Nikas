@@ -22,7 +22,7 @@ import type {
 } from './types.js';
 import { VSCodeLanguageModelVisionDescriber, findVisionModelByKey, getVisionPrompt } from './sources/vscode-lm.js';
 import { ApiEndpointVisionDescriber, type ApiEndpointConfig } from './sources/api-endpoint.js';
-import { getPdfVisionFallback, getPdfVisionFallbackMinChars, getPdfMaxPages } from '../config.js';
+import { getPdfVisionFallback, getPdfVisionFallbackMinChars, getPdfMaxPages, getVisionStructured, getMaxImagesPerVisionCall } from '../config.js';
 import { extractPdfTextWithPdfjs, isPdfMime } from '../pdf/extract.js';
 import {
     pdfDescribeCacheKey,
@@ -30,6 +30,11 @@ import {
     pdfDescribeCacheSet,
     clearPdfDescribeCache,
 } from './pdfCache.js';
+import {
+    getStructuredImageVisionPrompt,
+    chunkImages,
+    combineImageDescriptions,
+} from './imageBatch.js';
 
 /**
  * Richer, PDF-specific vision prompt (v0.7.83). Unlike the generic image
@@ -595,13 +600,29 @@ async function resolveCurrentVisionText(
         };
     }
 
-    // Describe the image(s) via the chosen vision model
+    // Describe the image(s) via the chosen vision model.
+    // v0.7.85: structured OCR/layout extraction prompt (opt-out via
+    // nikas.visionStructured) + chunked batching so large image sets stay
+    // under the vision model's per-request image cap.
     try {
-        const description = await visionDescriber.describe({
-            prompt: getVisionPrompt(),
-            images: imageParts.map(toVisionImagePart),
-            token,
-        });
+        const prompt = getVisionStructured()
+            ? getStructuredImageVisionPrompt()
+            : getVisionPrompt();
+        const visionImages = imageParts.map(toVisionImagePart);
+        const chunks = chunkImages(visionImages, getMaxImagesPerVisionCall());
+        let description: string;
+        if (chunks.length <= 1) {
+            description = await visionDescriber.describe({ prompt, images: visionImages, token });
+        } else {
+            visionLog.info(`Vision: ${visionImages.length} images in ${chunks.length} batches (max ${getMaxImagesPerVisionCall()} per call)`);
+            const parts: string[] = [];
+            for (const chunk of chunks) {
+                if (token.isCancellationRequested) break;
+                const chunkDesc = await visionDescriber.describe({ prompt, images: chunk, token });
+                if (chunkDesc.length > 0) parts.push(chunkDesc);
+            }
+            description = combineImageDescriptions(parts);
+        }
 
         if (description.length === 0) {
             stats.failedImageMessages += 1;

@@ -25,7 +25,12 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 - **⏱️ Context budget** — live warnings as a conversation approaches the context window (with configurable warn/critical fill% thresholds) and, when over budget, automatic reclaim of tokens by dropping low-value tool output before discarding your actual conversation. Purely additive — disabling `nikas.contextBudget` turns both off
 - **🤖 Run Agent** — a built-in agent harness (`Nikas: Run Agent`) that runs a task through the full loop (category summarizer → tool scoping → model ↔ tools) in the current workspace, streaming to an output channel. Purely additive — disabling `nikas.agentCommand` hides the command and never affects chat
 - **🗂️ PDF-vision cache** — sparse PDF vision pre-processing results are cached (bounded, keyed by prompt + content) so re-describing the same PDFs is served from cache instead of re-calling the vision model
-- **🔀 Model router** — optionally route cheap internal helper requests (chat titles, git commit messages, todo tracking, etc.) to the faster Flash model even when Pro is selected. Off by default (`nikas.modelRouter`); never routes Responses-family model ids to `/chat/completions`
+- **🔀 Model router** — optionally route cheap internal helper requests (chat titles, git commit messages, todo tracking, etc.) to the faster Flash model even when Pro is selected. Off by default (`nikas.modelRouter`); never routes Responses-family model ids to `/chat/completions`. Auto mode (`nikas.modelRouterMode=auto`) additionally routes heavy agent tasks to Pro and quick chats to Flash
+- **🛡️ Harness permission gate** — the built-in agent (`Nikas: Run Agent`) fail-closes terminal commands: dangerous patterns (root deletes, disk formatting, env injection, remote launchers, hostile intent) and unrecognized commands are blocked before they execute. Never affects Copilot's own permission flow
+- **⚡ Harness tool cache** — read-only tool results (`read_file`/`search_text`) are deduped within a single agent run, so identical calls (including same-batch duplicates) execute once and are served from cache
+- **⏹️ Cancellation propagation** — the agent harness now stops cleanly on abort: abort-aware retries, no new tool calls after cancel, and an `aborted` result instead of a thrown error
+- **🔍 Structured image extraction** — image attachments are described with a structured OCR/layout prompt (verbatim text, tables as markdown, no invented content), and large image sets are described in sequential batches under the vision model's per-call image cap
+- **⏱️ Latency telemetry** — per-request wall-clock latency is recorded and surfaced: the usage status bar shows the last request's latency, and the dashboard/report include a “Last request” breakdown
 - **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
@@ -191,6 +196,11 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.contextCriticalThreshold` | `88` | Context fill % at which truncation is flagged as imminent |
 | `nikas.agentCommand` | `true` | Expose the `Nikas: Run Agent` command (built-in agent harness). Disabling hides it — never affects chat |
 | `nikas.modelRouter` | `false` | Route cheap internal helper requests (chat titles, git commit messages, etc.) to the faster Flash model even when Pro is selected. Never routes Responses-family model ids to `/chat/completions` |
+| `nikas.modelRouterMode` | `helpers-only` | Router mode: `helpers-only` routes internal helpers to Flash; `auto` additionally routes heavy agent tasks (10+ tools) to Pro and quick chats (no tools) to Flash |
+| `nikas.harnessPermissionGate` | `true` | Fail-closed permission gate for terminal commands run by the built-in agent harness. Never affects Copilot's own permission flow |
+| `nikas.harnessToolCache` | `true` | Cache read-only tool results within a single harness run (identical calls execute once) |
+| `nikas.visionStructured` | `true` | Use the structured image-extraction prompt (OCR, tables as markdown, layout — no invented content) |
+| `nikas.maxImagesPerVisionCall` | `8` | Max images per vision-model call; larger sets are described in sequential batches and combined |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works

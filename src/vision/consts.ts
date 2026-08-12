@@ -37,3 +37,25 @@ export const IMAGE_DESCRIPTION_PROMPT =
     'Return one concise factual description suitable for inserting into a ' +
     'text-only chat prompt. Include visible text, objects, UI elements, people, ' +
     'and relevant context. Do not invent details.';
+
+/**
+ * Structured image-extraction prompt (v0.7.85). Richer than the generic
+ * prompt: asks the vision model to OCR text verbatim, transcribe tables in
+ * markdown, and report layout/dimensions — the details DeepSeek actually
+ * needs when it can't see the original image. Kept stable and English.
+ */
+export const IMAGE_DESCRIPTION_PROMPT_STRUCTURED =
+    'Extract the VISUAL content of the attached image(s) as faithfully as possible, ' +
+    'in a way that lets a coding assistant reason about them without seeing the original.\n\n' +
+    'For each image, in order:\n' +
+    '- OCR: transcribe ALL visible text verbatim (labels, headings, numbers, error messages, code).\n' +
+    '- Tables: transcribe every cell, row by row, as a markdown table.\n' +
+    '- Layout: describe the structure — sections, panels, diagrams, charts, arrows, flow.\n' +
+    '- UI: list elements (buttons, inputs, menus) with their visible labels.\n' +
+    '- For drawings/diagrams/plans: note dimensions, parts, connections, and annotations.\n\n' +
+    'Rules:\n' +
+    '- Do NOT invent content that is not visible. If a region is unreadable or blurry, say so.\n' +
+    '- Be concrete and structured (short bullets, markdown tables).\n' +
+    '- If there are multiple images, describe each one separately preserving their order, ' +
+    'then give one combined paragraph on how they relate.';
+

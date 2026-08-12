@@ -47,3 +47,5 @@ test-memory.js
 test-budget.js
 test-pdf-vision-cache.js
 test-model-route.js
+test-permission.js
+test-image-vision.js

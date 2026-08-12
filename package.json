@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.84",
+  "version": "0.7.85",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -479,6 +479,34 @@
           "type": "boolean",
           "default": false,
           "description": "DeepSeek model router: when on, cheap internal helper requests (chat titles, git commit messages, todo tracking, etc.) are routed to the faster Flash chat model even when the Pro model is selected. Off by default. Never routes Responses-family model ids to /chat/completions."
+        },
+        "nikas.modelRouterMode": {
+          "type": "string",
+          "enum": ["helpers-only", "auto"],
+          "default": "helpers-only",
+          "description": "Model-router mode (only applies when nikas.modelRouter is on): 'helpers-only' routes internal helpers to Flash; 'auto' additionally routes heavy agent tasks (main/plan/explore with 10+ tools) to Pro and quick chats (inline/unknown, no tools) to Flash."
+        },
+        "nikas.harnessPermissionGate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fail-closed permission gate for terminal commands run by the built-in agent harness (Nikas: Run Agent): blocks dangerous patterns (root deletes, disk/formatting, env injection, remote launchers, hostile intent) and unrecognized commands before they execute. Never affects Copilot's own permission flow."
+        },
+        "nikas.harnessToolCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Cache read-only tool results (read_file / search_text) within a single harness run so identical calls are served from cache instead of re-executed. Disabling restores re-execution of every call."
+        },
+        "nikas.visionStructured": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the structured image-extraction prompt (OCR of visible text, tables as markdown, layout, UI elements — no invented content) when describing images via the vision model. Disabling falls back to the generic description prompt."
+        },
+        "nikas.maxImagesPerVisionCall": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Max images per vision-model call. Larger image sets are described in sequential batches and combined, keeping requests under the vision model's per-request image cap."
         },
         "nikas.applyAgentModelsOnActivate": {
           "type": "boolean",

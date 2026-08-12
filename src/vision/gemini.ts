@@ -66,6 +66,7 @@ export async function describeImage(
     modelName: string = 'gemini-2.5-flash',
     prompt?: string
 ): Promise<VisionResult> {
+    const startedAt = Date.now();
     const base64Data = Buffer.from(imageData).toString('base64');
 
     const request: GeminiRequest = {
@@ -141,6 +142,7 @@ export async function describeImage(
                 promptTokens: Math.ceil(((prompt?.length ?? 0) + base64Data.length / 1.4) / 4),
                 completionTokens: Math.ceil(description.length / 4),
                 timestamp: Date.now(),
+                latencyMs: Date.now() - startedAt,
             });
         } catch { /* never break vision */ }
 

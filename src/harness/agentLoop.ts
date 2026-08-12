@@ -22,6 +22,7 @@ import type { DeepSeekMessage, DeepSeekTool, DeepSeekToolCall } from '../api/typ
 import type { AgentTool } from './tools/index.js';
 import { guardToolHistory } from './estimate.js';
 import type { GoalEvaluator, GoalVerdict } from './goalEvaluator.js';
+import { defaultPermissionGate, isTerminalTool, type CommandVerdict } from './permission.js';
 
 /** Lazy transport import — avoids loading the vscode-dependent api client at module load (keeps this testable in plain Node). */
 async function loadTransport() {
@@ -52,7 +53,7 @@ export type ChatTransport = (
 ) => Promise<StreamResult>;
 
 /** How a tool call is executed (injectable; default uses the AgentTool executors). */
-export type ToolExecutor = (tool: AgentTool, args: Record<string, unknown>, cwd: string) => Promise<string>;
+export type ToolExecutor = (tool: AgentTool, args: Record<string, unknown>, cwd: string, signal?: AbortSignal) => Promise<string>;
 
 /** A structured tool result fed back to the model. */
 export interface ToolResult {
@@ -93,6 +94,23 @@ export interface AgentLoopOptions {
     maxParallel?: number;
     /** Retry count for transient tool errors. Default 2. */
     toolRetries?: number;
+    /**
+     * Fail-closed permission gate for terminal commands (v0.7.85). Defaults to
+     * the built-in classifier (see permission.ts). Return a non-allowed verdict
+     * to block the command without executing it.
+     */
+    permissionGate?: (command: string, transcript: string) => CommandVerdict;
+    /**
+     * Whether read-only tool results (read_file / search_text) are cached per
+     * run so identical calls are served from cache (v0.7.85). Default true.
+     */
+    toolResultCache?: boolean;
+    /**
+     * When true, transient retries apply ONLY to read-only tools — terminal
+     * commands with side effects are never auto-retried (v0.7.85). Default
+     * false (behavior preserved).
+     */
+    retryTransientOnlyReadonly?: boolean;
     /** Retry count for transient API failures. Default 2. */
     apiRetries?: number;
     /** Soft token budget for accumulated tool-result history. Default 120_000. */
@@ -129,13 +147,17 @@ export interface AgentLoopResult {
     goalVerdict?: GoalVerdict;
     /** Verify-pass result, when a verify command was provided and run. */
     verify?: ToolResult;
+    /** True if the loop stopped because the abort signal fired. */
+    aborted?: boolean;
+    /** Number of terminal commands blocked by the permission gate. */
+    permissionDenied?: number;
 }
 
 function toDeepSeekTool(tool: AgentTool): DeepSeekTool {
     return { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } };
 }
 
-const defaultExecutor: ToolExecutor = async (tool, args, cwd) => tool.execute(args, cwd);
+const defaultExecutor: ToolExecutor = async (tool, args, cwd, signal) => tool.execute(args, cwd, signal);
 
 /**
  * Build a bounded, chronological transcript for the goal evaluator.
@@ -162,9 +184,34 @@ function buildGoalTranscript(messages: DeepSeekMessage[], maxChars = 8_000): str
     return rows.join('\n\n');
 }
 
-/** Sleep helper for backoff. */
-function sleep(ms: number): Promise<void> {
-    return new Promise(r => setTimeout(r, ms));
+/** Abort error with a recognizable name (used across the loop). */
+function abortError(): Error {
+    const e = new Error('aborted');
+    e.name = 'AbortError';
+    return e;
+}
+
+/** Sleep helper for backoff — abort-aware (resolves immediately on abort by throwing). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(abortError());
+            return;
+        }
+        const t = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, ms);
+        const onAbort = (): void => {
+            cleanup();
+            reject(abortError());
+        };
+        const cleanup = (): void => {
+            clearTimeout(t);
+            signal?.removeEventListener('abort', onAbort);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
 }
 
 /** Parse a ToolResult from raw executor output using our framing conventions. */
@@ -199,7 +246,7 @@ function formatToolResult(name: string, r: ToolResult): string {
     return `[tool ${name}: ${meta}]\n${r.output}`;
 }
 
-/** Retry a transient tool call with exponential backoff. */
+/** Retry a transient tool call with exponential backoff (abort-aware). */
 async function executeWithRetry(
     tool: AgentTool,
     args: Record<string, unknown>,
@@ -207,15 +254,17 @@ async function executeWithRetry(
     executor: ToolExecutor,
     retries: number,
     maxOutputChars: number,
+    signal?: AbortSignal,
 ): Promise<ToolResult> {
     let attempt = 0;
     for (;;) {
-        const raw = await executor(tool, args, cwd);
+        if (signal?.aborted) throw abortError();
+        const raw = await executor(tool, args, cwd, signal);
         const result = parseToolResult(raw, maxOutputChars);
         const isTransient = result.tag === 'transient';
         if (!isTransient || attempt >= retries) return result;
         attempt++;
-        await sleep(10 * Math.pow(2, attempt - 1)); // short backoff (tests)
+        await sleep(10 * Math.pow(2, attempt - 1), signal); // short backoff (tests)
         result.output += `\n[retry ${attempt}/${retries} after transient failure]`;
     }
 }
@@ -239,7 +288,7 @@ async function transportWithRetry(
             const msg = err instanceof Error ? err.message : String(err);
             if (attempt >= retries || /abort/i.test(msg)) throw err;
             attempt++;
-            await sleep(10 * Math.pow(2, attempt - 1));
+            await sleep(10 * Math.pow(2, attempt - 1), signal);
         }
     }
 }
@@ -293,11 +342,161 @@ async function runTurn(
     return { text, toolCalls };
 }
 
+/**
+ * Run one agent turn, translating abort signals into a clean `{aborted:true}`
+ * result instead of a thrown rejection (v0.7.85 cancellation propagation).
+ */
+async function runTurnGuarded(
+    options: AgentLoopOptions,
+    messages: DeepSeekMessage[],
+    toolSet: DeepSeekTool[],
+): Promise<{ turn?: { text: string; toolCalls: CompletedLoopCall[] }; aborted: boolean }> {
+    try {
+        const turn = await runTurn(options, messages, toolSet);
+        return { turn, aborted: false };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (options.signal?.aborted || /abort/i.test(msg)) {
+            return { aborted: true };
+        }
+        throw err;
+    }
+}
+
 /** A completed tool call from the transport (name + parsed args + id). */
 interface CompletedLoopCall {
     id: string;
     name: string;
     arguments: Record<string, unknown>;
+}
+
+// ── v0.7.85 tool-execution hardening ───────────────────────────────────────
+
+/** Deterministic tools whose results are safe to cache within a run. */
+function isReadOnlyTool(name: string): boolean {
+    return name === 'read_file' || name === 'search_text';
+}
+
+/** Canonical JSON of tool args (keys sorted) so equal calls hash identically. */
+function canonicalArgs(args: Record<string, unknown>): string {
+    try {
+        const sort = (v: unknown): unknown => {
+            if (Array.isArray(v)) return v.map(sort);
+            if (v && typeof v === 'object') {
+                const o: Record<string, unknown> = {};
+                for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+                    o[k] = sort((v as Record<string, unknown>)[k]);
+                }
+                return o;
+            }
+            return v;
+        };
+        return JSON.stringify(sort(args ?? {}));
+    } catch {
+        return JSON.stringify(args ?? {});
+    }
+}
+
+/** Shared state for tool execution (built once per run). */
+interface ToolExecContext {
+    toolById: Map<string, AgentTool>;
+    executor: ToolExecutor;
+    maxOutputChars: number;
+    maxParallel: number;
+    signal: AbortSignal;
+    permissionGate: (command: string, transcript: string) => CommandVerdict;
+    transcript: () => string;
+    /** In-flight dedup map for read-only calls (key → shared execution promise). */
+    inflight: Map<string, Promise<ToolResult>>;
+    cacheEnabled: boolean;
+    retryOnlyReadonly: boolean;
+    toolRetries: number;
+    counters: { toolCalls: number; permissionDenied: number };
+    sequence: string[];
+    onLog?: (msg: string) => void;
+    cwd: string;
+}
+
+/** Execute ONE tool call with permission gating, read-only caching, and retry. */
+async function executeToolCall(ctx: ToolExecContext, call: CompletedLoopCall): Promise<ToolResult> {
+    const tool = ctx.toolById.get(call.name);
+    ctx.counters.toolCalls++;
+    ctx.sequence.push(call.name);
+    ctx.onLog?.(`[agent] exec ${call.name}`);
+    if (!tool) {
+        return { output: `[unknown tool: ${call.name}]`, ok: false, tag: 'tool-error' };
+    }
+
+    // Fail-closed permission gate for terminal commands (v0.7.85).
+    if (isTerminalTool(call.name)) {
+        const command = String((call.arguments as Record<string, unknown>)?.command ?? '');
+        const verdict = ctx.permissionGate(command, ctx.transcript());
+        if (!verdict.allowed) {
+            ctx.counters.permissionDenied++;
+            ctx.onLog?.(`[agent] DENIED ${call.name}: ${verdict.reason}`);
+            return {
+                output: `[permission denied: ${verdict.reason} — command was NOT executed]`,
+                ok: false,
+                tag: 'permission',
+            };
+        }
+    }
+
+    // Read-only result cache: identical deterministic calls are served from
+    // cache — including duplicates running in the SAME batch (they share one
+    // in-flight promise so the tool executes only once per run).
+    const cacheKey = `${call.name}:${canonicalArgs(call.arguments ?? {})}`;
+    const isReadonly = isReadOnlyTool(call.name);
+    if (ctx.cacheEnabled && isReadonly) {
+        const inFlight = ctx.inflight.get(cacheKey);
+        if (inFlight) {
+            ctx.onLog?.(`[agent] cached ${call.name}`);
+            const base = await inFlight;
+            return {
+                ...base,
+                output: base.output + '\n[served from cache — identical call earlier in this run]',
+            };
+        }
+        const p = (async (): Promise<ToolResult> => {
+            const result = await executeWithRetry(
+                tool,
+                call.arguments ?? {},
+                ctx.cwd,
+                ctx.executor,
+                ctx.toolRetries,
+                ctx.maxOutputChars,
+                ctx.signal,
+            );
+            if (result.ok) ctx.inflight.set(cacheKey, Promise.resolve(result));
+            return result;
+        })();
+        ctx.inflight.set(cacheKey, p);
+        return p;
+    }
+
+    // Terminal commands with side effects are never auto-retried when the safe
+    // mode is on (retryTransientOnlyReadonly).
+    const retries = ctx.retryOnlyReadonly && !isReadonly ? 0 : ctx.toolRetries;
+    return executeWithRetry(
+        tool,
+        call.arguments ?? {},
+        ctx.cwd,
+        ctx.executor,
+        retries,
+        ctx.maxOutputChars,
+        ctx.signal,
+    );
+}
+
+/** Execute tool calls in bounded-concurrency batches (shared by main + judge loops). */
+async function executeCallsInBatches(ctx: ToolExecContext, calls: CompletedLoopCall[]): Promise<ToolResult[]> {
+    const results: ToolResult[] = [];
+    for (let i = 0; i < calls.length; i += ctx.maxParallel) {
+        const batch = calls.slice(i, i + ctx.maxParallel);
+        const batchResults = await Promise.all(batch.map((call) => executeToolCall(ctx, call)));
+        results.push(...batchResults);
+    }
+    return results;
 }
 
 /**
@@ -325,11 +524,51 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
 
     let text = '';
     let iterations = 0;
-    let toolCalls = 0;
     const sequence: string[] = [];
 
+    // v0.7.85: cancellation + safety wiring.
+    const signal = options.signal ?? new AbortController().signal;
+    options = { ...options, signal };
+    const counters = { toolCalls: 0, permissionDenied: 0 };
+    const ctx: ToolExecContext = {
+        toolById,
+        executor,
+        maxOutputChars,
+        maxParallel,
+        signal,
+        permissionGate: options.permissionGate ?? defaultPermissionGate,
+        transcript: () => messages
+            .slice(-12)
+            .map((m) => (typeof m.content === 'string' ? m.content : ''))
+            .join('\n')
+            .slice(-4000),
+        inflight: new Map<string, Promise<ToolResult>>(),
+        cacheEnabled: options.toolResultCache ?? true,
+        retryOnlyReadonly: options.retryTransientOnlyReadonly ?? false,
+        toolRetries: options.toolRetries ?? 2,
+        counters,
+        sequence,
+        onLog: options.onLog,
+        cwd: options.cwd,
+    };
+
     for (; iterations < maxIterations; iterations++) {
-        const turn = await runTurn(options, messages, toolSet);
+        if (signal.aborted) {
+            options.onLog?.(`[agent] aborted (signal)`);
+            return {
+                text: text.trim(), iterations, toolCalls: ctx.counters.toolCalls, sequence,
+                completed: false, truncated: false, aborted: true, permissionDenied: ctx.counters.permissionDenied,
+            };
+        }
+        const guarded = await runTurnGuarded(options, messages, toolSet);
+        if (guarded.aborted) {
+            options.onLog?.(`[agent] aborted (transport)`);
+            return {
+                text: text.trim(), iterations, toolCalls: ctx.counters.toolCalls, sequence,
+                completed: false, truncated: false, aborted: true, permissionDenied: ctx.counters.permissionDenied,
+            };
+        }
+        const turn = guarded.turn!;
         text += turn.text;
 
         if (turn.toolCalls.length === 0) {
@@ -344,19 +583,33 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
                 const cap = options.goalEvaluatorMaxExtraIterations ?? 5;
                 const judgeCap = Math.min(iterations + cap, maxIterations);
                 for (; iterations < judgeCap; iterations++) {
+                    if (signal.aborted) {
+                        return {
+                            text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
+                            completed: false, truncated: false, aborted: true, permissionDenied: ctx.counters.permissionDenied,
+                        };
+                    }
                     const transcript = buildGoalTranscript(messages);
                     const verdict = await options.goalEvaluator.evaluate(task, transcript);
                     options.onLog?.(`[goal-eval] verdict=${verdict?.decision ?? 'no-opinion'} (${verdict?.evidence ?? ''})`);
                     if (!verdict || verdict.decision !== 'continue') {
                         return {
-                            text: text.trim(), iterations: iterations + 1, toolCalls, sequence,
+                            text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
                             completed: true, truncated: false, verify, goalVerdict: verdict,
+                            permissionDenied: ctx.counters.permissionDenied,
                         };
                     }
                     // Judge wants more work: feed its next-step as a user nudge.
                     options.onLog?.(`[goal-eval] continue → next: ${verdict.nextStep}`);
                     messages.push({ role: 'user', content: `The completion evaluator says the task is not done yet. Next step: ${verdict.nextStep}. Keep going until it is complete.` });
-                    const next = await runTurn(options, messages, toolSet);
+                    const guardedNext = await runTurnGuarded(options, messages, toolSet);
+                    if (guardedNext.aborted) {
+                        return {
+                            text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
+                            completed: false, truncated: false, aborted: true, permissionDenied: ctx.counters.permissionDenied,
+                        };
+                    }
+                    const next = guardedNext.turn!;
                     text += next.text;
                     if (next.toolCalls.length === 0) {
                         // Judge said continue but the model still declines to act —
@@ -365,9 +618,10 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
                         const re = await options.goalEvaluator.evaluate(task, transcript);
                         options.onLog?.(`[goal-eval] re-verdict=${re?.decision ?? 'no-opinion'} (${re?.evidence ?? ''})`);
                         return {
-                            text: text.trim(), iterations: iterations + 1, toolCalls, sequence,
+                            text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
                             completed: !re || re.decision !== 'continue', truncated: false, verify,
                             goalVerdict: re ?? verdict, goalEvaluatorTruncated: !!(re && re.decision === 'continue'),
+                            permissionDenied: ctx.counters.permissionDenied,
                         };
                     }
                     // Execute the follow-up tool calls (reuse the same batch logic below).
@@ -379,23 +633,7 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
                         })),
                     };
                     messages.push(assistantMsg);
-                    const results: ToolResult[] = [];
-                    for (let i = 0; i < next.toolCalls.length; i += maxParallel) {
-                        const batch = next.toolCalls.slice(i, i + maxParallel);
-                        const batchResults = await Promise.all(
-                            batch.map(async (call) => {
-                                const tool = toolById.get(call.name);
-                                toolCalls++;
-                                sequence.push(call.name);
-                                options.onLog?.(`[agent] exec ${call.name}`);
-                                if (!tool) {
-                                    return { output: `[unknown tool: ${call.name}]`, ok: false, tag: 'tool-error' } as ToolResult;
-                                }
-                                return executeWithRetry(tool, call.arguments ?? {}, options.cwd, executor, options.toolRetries ?? 2, maxOutputChars);
-                            })
-                        );
-                        results.push(...batchResults);
-                    }
+                    const results = await executeCallsInBatches(ctx, next.toolCalls);
                     for (let i = 0; i < next.toolCalls.length; i++) {
                         messages.push({ role: 'tool', tool_call_id: next.toolCalls[i].id, content: formatToolResult(next.toolCalls[i].name, results[i]) });
                     }
@@ -404,12 +642,16 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
                 // Hit the judge's extra-iteration cap.
                 options.onLog?.(`[goal-eval] truncated after extra-iteration cap`);
                 return {
-                    text: text.trim(), iterations, toolCalls, sequence,
+                    text: text.trim(), iterations, toolCalls: ctx.counters.toolCalls, sequence,
                     completed: false, truncated: true, goalEvaluatorTruncated: true, verify,
+                    permissionDenied: ctx.counters.permissionDenied,
                 };
             }
-            options.onLog?.(`[agent] done after ${iterations + 1} iterations, ${toolCalls} tool calls`);
-            return { text: text.trim(), iterations: iterations + 1, toolCalls, sequence, completed: true, truncated: false, verify };
+            options.onLog?.(`[agent] done after ${iterations + 1} iterations, ${ctx.counters.toolCalls} tool calls`);
+            return {
+                text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
+                completed: true, truncated: false, verify, permissionDenied: ctx.counters.permissionDenied,
+            };
         }
 
         options.onLog?.(`[agent] turn ${iterations + 1}: ${turn.toolCalls.map(c => c.name).join(', ')}`);
@@ -426,23 +668,14 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
         };
         messages.push(assistantMsg);
 
-        // Execute tool calls in parallel (bounded concurrency), with retry.
-        const results: ToolResult[] = [];
-        for (let i = 0; i < turn.toolCalls.length; i += maxParallel) {
-            const batch = turn.toolCalls.slice(i, i + maxParallel);
-            const batchResults = await Promise.all(
-                batch.map(async (call) => {
-                    const tool = toolById.get(call.name);
-                    toolCalls++;
-                    sequence.push(call.name);
-                    options.onLog?.(`[agent] exec ${call.name}`);
-                    if (!tool) {
-                        return { output: `[unknown tool: ${call.name}]`, ok: false, tag: 'tool-error' } as ToolResult;
-                    }
-                    return executeWithRetry(tool, call.arguments ?? {}, options.cwd, executor, options.toolRetries ?? 2, maxOutputChars);
-                })
-            );
-            results.push(...batchResults);
+        // Execute tool calls in parallel (bounded concurrency), with permission
+        // gating, read-only caching, and abort-aware retry (v0.7.85).
+        const results = await executeCallsInBatches(ctx, turn.toolCalls);
+        if (signal.aborted) {
+            return {
+                text: text.trim(), iterations: iterations + 1, toolCalls: ctx.counters.toolCalls, sequence,
+                completed: false, truncated: false, aborted: true, permissionDenied: ctx.counters.permissionDenied,
+            };
         }
 
         // Feed each result back, keyed by its call id.
@@ -453,25 +686,35 @@ export async function runAgentLoop(task: string, options: AgentLoopOptions): Pro
         }
 
         // Keep the accumulated history within budget (drop oldest tool pairs).
-        const guarded = guardToolHistory(
+        const guardedHistory = guardToolHistory(
             messages as never[] as Array<{ role: string; content?: string | Array<{ type: string; text?: string }> | null; tool_call_id?: string }>,
             { maxHistoryTokens: options.maxHistoryTokens ?? 120_000 },
         );
         messages.length = 0;
-        messages.push(...(guarded as DeepSeekMessage[]));
+        messages.push(...(guardedHistory as DeepSeekMessage[]));
     }
 
-    options.onLog?.(`[agent] truncated after ${iterations} iterations, ${toolCalls} tool calls; sequence: ${sequence.join(' → ') || '(none)'}`);
-    return { text: text.trim(), iterations, toolCalls, sequence, completed: false, truncated: true };
+    options.onLog?.(`[agent] truncated after ${iterations} iterations, ${ctx.counters.toolCalls} tool calls; sequence: ${sequence.join(' → ') || '(none)'}`);
+    return {
+        text: text.trim(), iterations, toolCalls: ctx.counters.toolCalls, sequence,
+        completed: false, truncated: true, permissionDenied: ctx.counters.permissionDenied,
+    };
 }
 
 /** Run the optional verify command (e.g. `npm test`) and return a ToolResult. */
 async function runVerify(options: AgentLoopOptions, executor: ToolExecutor): Promise<ToolResult> {
     const cmd = options.verifyCommand ?? 'true';
+    // The verify command is a shell command — gate it like any terminal tool (v0.7.85).
+    const gate = options.permissionGate ?? defaultPermissionGate;
+    const verdict = gate(cmd, '');
+    if (!verdict.allowed) {
+        return { output: `[permission denied: ${verdict.reason} — verify command was NOT executed]`, ok: false, tag: 'permission' };
+    }
     const raw = await executor(
         { name: 'run_verify', description: 'Run the verify command.', parameters: { type: 'object', properties: {}, required: [] }, execute: async () => '' },
         { command: cmd },
         options.cwd,
+        options.signal,
     );
     return parseToolResult(raw, options.maxOutputChars ?? 8_000);
 }

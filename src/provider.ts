@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter, getModelRouterMode } from './config.js';
 import { augmentToolDescription, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
@@ -1325,6 +1325,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Check for cancellation
         if (token.isCancellationRequested) return;
+        const startedAt = Date.now();
 
         // Resolve images to text descriptions (replay markers / vision model)
         // This operates on raw VS Code messages BEFORE conversion to DeepSeek format.
@@ -1438,10 +1439,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         let modelId = getSelectedModel();
 
-        // v0.7.84 model router: optionally route cheap internal helpers to the
-        // cheaper Flash model when Pro is selected (nikas.modelRouter, OFF by
-        // default). Never routes the Responses model id to /chat/completions.
-        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter());
+        // v0.7.84/85 model router: optionally route cheap internal helpers to
+        // the cheaper Flash model when Pro is selected (nikas.modelRouter, OFF
+        // by default). Auto mode (nikas.modelRouterMode) additionally routes
+        // heavy agent tasks to Pro and quick chats to Flash. Never routes the
+        // Responses model id to /chat/completions.
+        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter(), getModelRouterMode(), options.tools?.length ?? 0);
         if (route.modelId && route.modelId !== modelId) {
             getOutputChannel().appendLine(`[Nikas] Model router: ${modelId} → ${route.modelId} (${route.reason})`);
             modelId = route.modelId;
@@ -1637,6 +1640,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             promptTokens: usage.promptTokens,
                             completionTokens: usage.completionTokens,
                             timestamp: Date.now(),
+                            latencyMs: Date.now() - startedAt,
                             sessionKey,
                             sessionLabel,
                         });
@@ -1754,6 +1758,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         }
 
         if (token.isCancellationRequested) return;
+        const startedAt = Date.now();
 
         // Resolve images to text descriptions (same pipeline as chat completions)
         const getDescriber = async () => {
@@ -1981,6 +1986,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             promptTokens: usage.promptTokens,
                             completionTokens: usage.completionTokens,
                             timestamp: Date.now(),
+                            latencyMs: Date.now() - startedAt,
                             sessionKey,
                             sessionLabel,
                         });
@@ -2058,6 +2064,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         }
 
         if (token.isCancellationRequested) return;
+        const startedAt = Date.now();
 
         // Convert VS Code messages to Gemini format
         const contents: { role?: string; parts: { text: string }[] }[] = [];
@@ -2111,6 +2118,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     promptTokens: estimatedPrompt,
                     completionTokens: estimateTextTokens(text),
                     timestamp: Date.now(),
+                    latencyMs: Date.now() - startedAt,
                 });
             }
         } catch (err) {
@@ -2134,6 +2142,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         token: vscode.CancellationToken
     ): Promise<void> {
         if (token.isCancellationRequested) return;
+        const startedAt = Date.now();
 
         // Convert VS Code messages to Ollama format
         const ollamaMessages: { role: string; content: string }[] = [];
@@ -2193,6 +2202,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     promptTokens: estimatedPrompt,
                     completionTokens: estimateTextTokens(text),
                     timestamp: Date.now(),
+                    latencyMs: Date.now() - startedAt,
                 });
             }
         } catch (err) {

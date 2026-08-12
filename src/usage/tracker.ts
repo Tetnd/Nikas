@@ -24,6 +24,8 @@ export interface UsageRecord {
     completionTokens: number;
     /** Epoch ms when the request completed. */
     timestamp: number;
+    /** Wall-clock duration of the request in ms (v0.7.85 latency telemetry). */
+    latencyMs?: number;
     /** Content-derived per-conversation key (optional — empty for unkeyed calls). */
     sessionKey?: string;
     /** Human-readable first-user-message preview, for the per-session view. */
@@ -214,6 +216,11 @@ export class UsageTracker {
     get bySession(): Record<string, UsageAggregate> { return this._bySession; }
     get recent(): UsageRecord[] { return this._recent; }
     get sessionLabels(): Record<string, string> { return this._sessionLabels; }
+
+    /** Most recent recorded request (or undefined when nothing recorded yet). */
+    lastRequest(): UsageRecord | undefined {
+        return this._recent.length > 0 ? this._recent[0] : undefined;
+    }
 }
 
 /** Format a token count compactly: 12345 → "12.3k". */
@@ -228,6 +235,16 @@ export function formatCost(cost: number): string {
     if (cost >= 1) return `$${cost.toFixed(2)}`;
     if (cost >= 0.01) return `$${cost.toFixed(3)}`;
     return `$${cost.toFixed(4)}`;
+}
+
+/** Format a wall-clock duration: 812 → "0.8s", 3200 → "3.2s", 65_000 → "1m 5s". */
+export function formatLatency(ms: number | undefined): string {
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '—';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+    const m = Math.floor(ms / 60_000);
+    const s = Math.round((ms % 60_000) / 1000);
+    return `${m}m ${s}s`;
 }
 
 // ---------------------------------------------------------------------------

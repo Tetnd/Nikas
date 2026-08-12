@@ -596,6 +596,40 @@ export function getModelRouter(): boolean {
     return getConfig().get<boolean>('modelRouter') ?? false;
 }
 
+/** Router mode (v0.7.85): 'helpers-only' (default) or 'auto' (heavy tasks → Pro, quick chats → Flash). */
+export function getModelRouterMode(): 'helpers-only' | 'auto' {
+    const v = getConfig().get<string>('modelRouterMode');
+    return v === 'auto' ? 'auto' : 'helpers-only';
+}
+
+/**
+ * Whether the harness (Nikas: Run Agent) gates terminal commands with the
+ * fail-closed permission classifier (v0.7.85). Default true.
+ */
+export function getHarnessPermissionGate(): boolean {
+    return getConfig().get<boolean>('harnessPermissionGate') ?? true;
+}
+
+/**
+ * Whether the harness caches results of read-only tool calls (read_file,
+ * search_text) so identical calls within one run are served from cache
+ * instead of re-executed (v0.7.85). Default true.
+ */
+export function getHarnessToolCache(): boolean {
+    return getConfig().get<boolean>('harnessToolCache') ?? true;
+}
+
+/** Max images per vision-model call (v0.7.85). Default 8. */
+export function getMaxImagesPerVisionCall(): number {
+    const v = getConfig().get<number>('maxImagesPerVisionCall');
+    return typeof v === 'number' && v >= 1 ? Math.floor(v) : 8;
+}
+
+/** Whether image describes use the structured OCR/layout extraction prompt (v0.7.85). Default true. */
+export function getVisionStructured(): boolean {
+    return getConfig().get<boolean>('visionStructured') ?? true;
+}
+
 /** Number of `.bak-*` bundle backups to retain. */
 export function getPatchBackupRetention(): number {
     const v = getConfig().get<number>('patchBackupRetention');

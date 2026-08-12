@@ -7,7 +7,7 @@
 // formatTokens / formatCost, the enabled flag, and the "record() never throws"
 // guarantee that keeps the request path safe.
 
-const { UsageTracker, formatTokens, formatCost, setUsageTrackingEnabled, isUsageTrackingEnabled } =
+const { UsageTracker, formatTokens, formatCost, formatLatency, setUsageTrackingEnabled, isUsageTrackingEnabled } =
     require('./out/usage/tracker.js');
 
 let passed = 0;
@@ -209,6 +209,33 @@ assert(formatCost(1234.5) === '$1234.50', 'formatCost(1234.5)');
     const provs = Object.keys(s.byProvider);
     assert(provs.length === 1 && provs[0] === 'vision', 'byProvider only contains seen providers');
 }
+
+// ── 13. latency telemetry + lastRequest (v0.7.85) ──
+{
+    const t = new UsageTracker();
+    assert(t.lastRequest() === undefined, 'lastRequest undefined before any record');
+    t.record({ provider: 'deepseek', model: 'deepseek-v4-flash', promptTokens: 10, completionTokens: 5, timestamp: 100, latencyMs: 812 });
+    t.record({ provider: 'deepseek', model: 'deepseek-v4-pro', promptTokens: 20, completionTokens: 10, timestamp: 200, latencyMs: 3200 });
+    const last = t.lastRequest();
+    assert(last && last.model === 'deepseek-v4-pro', 'lastRequest returns newest record');
+    assert(last && last.latencyMs === 3200, 'latencyMs preserved on record');
+    const s = t.snapshot();
+    assert(s.recent[0].latencyMs === 3200, 'latencyMs survives snapshot');
+    // hydrate round-trip keeps latency
+    const t2 = new UsageTracker();
+    t2.hydrate(s);
+    assert(t2.lastRequest()?.latencyMs === 3200, 'latencyMs survives hydrate');
+}
+
+// ── 14. formatLatency (v0.7.85) ──
+assert(formatLatency(0) === '0ms', 'formatLatency(0)');
+assert(formatLatency(812) === '812ms', 'formatLatency(812)');
+assert(formatLatency(1000) === '1.0s', 'formatLatency(1000)');
+assert(formatLatency(3200) === '3.2s', 'formatLatency(3200)');
+assert(formatLatency(65_000) === '1m 5s', 'formatLatency(65000)');
+assert(formatLatency(undefined) === '—', 'formatLatency(undefined)');
+assert(formatLatency(-5) === '—', 'formatLatency(negative)');
+assert(formatLatency(NaN) === '—', 'formatLatency(NaN)');
 
 console.log('');
 console.log(`test-usage: ${passed} passed, ${failed} failed`);

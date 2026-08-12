@@ -223,7 +223,7 @@ console.log('\n=== 10. Structured results, retry, verify, parallel ===');
     let attempts = 0;
     const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
         turn++;
-        if (turn === 1) { onToolCalls([{ id: 'c1', name: 'run_terminal', arguments: { command: 'x' } }]); return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' }; }
+        if (turn === 1) { onToolCalls([{ id: 'c1', name: 'run_terminal', arguments: { command: 'ls -la' } }]); return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' }; }
         onText('ok'); return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
     };
     const r1 = await runAgentLoop('retry me', {
@@ -359,6 +359,160 @@ console.log('\n=== 17. Goal evaluator cap ===');
     check('judge cap truncates', result.goalEvaluatorTruncated, `completed=${result.completed}`);
     check('judge stops loop before unbounded', result.toolCalls <= 4, `got ${result.toolCalls}`);
     check('judge ran within cap', evalCalls >= 2 && evalCalls <= 4, `got ${evalCalls}`);
+}
+
+// ── 18. Cancellation propagation (v0.7.85) ────────────────────────────────
+console.log('\n=== 18. Abort propagation ===');
+{
+    let turn = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            throw e;
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', { apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ], transport: mockTransport });
+    check('abort from transport → aborted result', r.aborted === true, `completed=${r.completed}`);
+    check('abort result not completed', r.completed === false);
+}
+{
+    const ac = new AbortController();
+    ac.abort();
+    let transportCalled = false;
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ], signal: ac.signal,
+        transport: async () => { transportCalled = true; return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' }; },
+    });
+    check('pre-aborted signal → aborted with no transport call', r.aborted === true && r.iterations === 0 && !transportCalled);
+}
+
+// ── 19. Permission gate (v0.7.85) ────────────────────────────────────────
+console.log('\n=== 19. Permission gate ===');
+{
+    let turn = 0;
+    let terminalRuns = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            onToolCalls([{ id: 'c1', name: 'run_terminal', arguments: { command: 'rm -rf /' } }]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: DEFAULT_TOOLSET, transport: mockTransport,
+        executor: async () => { terminalRuns++; return 'executed'; },
+    });
+    check('dangerous command blocked by default gate', r.permissionDenied === 1, `got ${r.permissionDenied}`);
+    check('blocked command never executed', terminalRuns === 0, `got ${terminalRuns}`);
+    check('loop still completes after denial', r.completed);
+}
+{
+    let turn = 0;
+    let terminalRuns = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            onToolCalls([{ id: 'c1', name: 'run_terminal', arguments: { command: 'npm test' } }]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: DEFAULT_TOOLSET, transport: mockTransport,
+        executor: async () => { terminalRuns++; return 'all tests pass'; },
+    });
+    check('routine command allowed by default gate', r.permissionDenied === 0 && r.completed);
+    check('routine command executed once', terminalRuns === 1, `got ${terminalRuns}`);
+}
+{
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ],
+        transport: async (request, apiKey, signal, onText) => { onText('done'); return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' }; },
+        executor: async () => 'ran',
+        verifyCommand: 'rm -rf /',
+    });
+    check('blocked verify command not executed', r.verify && r.verify.tag === 'permission', JSON.stringify(r.verify));
+}
+
+// ── 20. Read-only tool result cache (v0.7.85) ────────────────────────────
+console.log('\n=== 20. Read-only tool cache ===');
+{
+    let turn = 0;
+    let readRuns = 0;
+    const logs = [];
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            onToolCalls([
+                { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } },
+                { id: 'c2', name: 'read_file', arguments: { path: 'a.txt' } },
+            ]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ], transport: mockTransport,
+        executor: async () => { readRuns++; return 'file contents'; },
+        onLog: (m) => logs.push(m),
+    });
+    check('identical read calls executed once (cache)', readRuns === 1, `got ${readRuns}`);
+    check('cache hit logged', logs.some((l) => l.includes('cached read_file')), logs.join(' | '));
+    check('loop completed with cache', r.completed);
+}
+{
+    let turn = 0;
+    let readRuns = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            onToolCalls([
+                { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } },
+                { id: 'c2', name: 'read_file', arguments: { path: 'a.txt' } },
+            ]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: [FILE_READ], transport: mockTransport,
+        executor: async () => { readRuns++; return 'file contents'; },
+        toolResultCache: false,
+    });
+    check('cache disabled → both calls executed', readRuns === 2, `got ${readRuns}`);
+    check('loop completed without cache', r.completed);
+}
+{
+    // Terminal commands are never cached (side effects).
+    let turn = 0;
+    let terminalRuns = 0;
+    const mockTransport = async (request, apiKey, signal, onText, onToolCalls) => {
+        turn++;
+        if (turn === 1) {
+            onToolCalls([
+                { id: 'c1', name: 'run_terminal', arguments: { command: 'echo hi' } },
+                { id: 'c2', name: 'run_terminal', arguments: { command: 'echo hi' } },
+            ]);
+            return { receivedContent: false, receivedToolCalls: true, finishReason: 'tool_calls' };
+        }
+        onText('done');
+        return { receivedContent: true, receivedToolCalls: false, finishReason: 'stop' };
+    };
+    const r = await runAgentLoop('x', {
+        apiKey: 'k', cwd: os.tmpdir(), tools: DEFAULT_TOOLSET, transport: mockTransport,
+        executor: async () => { terminalRuns++; return 'hi'; },
+    });
+    check('terminal calls never cached', terminalRuns === 2, `got ${terminalRuns}`);
+    check('loop completed with terminal calls', r.completed);
 }
 
 console.log(`\n===== ${safe} passed, ${failures} failed =====`);

@@ -19,7 +19,7 @@ export interface AgentTool {
     description: string;
     parameters: Record<string, unknown>;
     /** Execute the tool. Must resolve to a string (success or error). */
-    execute(args: Record<string, unknown>, cwd: string): Promise<string>;
+    execute(args: Record<string, unknown>, cwd: string, signal?: AbortSignal): Promise<string>;
 }
 
 function argString(args: Record<string, unknown>, key: string): string {
@@ -127,19 +127,32 @@ export const TERMINAL: AgentTool = {
         properties: { command: { type: 'string' } },
         required: ['command'],
     },
-    execute: async (args, cwd) => {
+    execute: async (args, cwd, signal) => {
         const command = argString(args, 'command');
         return new Promise<string>((resolve) => {
-            cp.exec(command, { cwd, timeout: 30_000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
-                const cap = (s: string): string => (s.length > 8000 ? s.slice(0, 8000) + '...[truncated]' : s);
-                const out = cap(stdout.trim());
-                const errText = cap(stderr.trim());
-                if (err && !out) {
-                    resolve(`[command failed]\n${errText || err.message}`);
-                } else {
-                    resolve(out ? out : (errText || '(no output)'));
+            if (signal?.aborted) {
+                resolve('[command aborted]');
+                return;
+            }
+            const child = cp.exec(
+                command,
+                { cwd, timeout: 30_000, maxBuffer: 2 * 1024 * 1024, signal },
+                (err, stdout, stderr) => {
+                    if (signal?.aborted || (err && err.killed)) {
+                        resolve('[command aborted]');
+                        return;
+                    }
+                    const cap = (s: string): string => (s.length > 8000 ? s.slice(0, 8000) + '...[truncated]' : s);
+                    const out = cap(stdout.trim());
+                    const errText = cap(stderr.trim());
+                    if (err && !out) {
+                        resolve(`[command failed]\n${errText || err.message}`);
+                    } else {
+                        resolve(out ? out : (errText || '(no output)'));
+                    }
                 }
-            });
+            );
+            signal?.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
         });
     },
 };
@@ -153,9 +166,9 @@ export const RUN_TESTS: AgentTool = {
             command: { type: 'string', description: 'The test command to run. Defaults to `npm test`.' },
         },
     },
-    execute: async (args, cwd) => {
+    execute: async (args, cwd, signal) => {
         const command = argString(args, 'command') || 'npm test';
-        return TERMINAL.execute({ command }, cwd);
+        return TERMINAL.execute({ command }, cwd, signal);
     },
 };
 

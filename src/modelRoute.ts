@@ -33,10 +33,20 @@ const INTERNAL_HELPER_KINDS = new Set<RequestKind>([
     'rename-suggestions',
 ]);
 
+/** Heavy agent tasks that benefit from the Pro model (auto mode upgrades these). */
+const HEAVY_AGENT_KINDS = new Set<RequestKind>(['main-agent', 'plan-agent', 'explore-agent']);
+
 /** Known chat-completions family model ids. */
 export const DEEPSEEK_CHAT_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
 /** The cheaper chat-completions model used for internal helpers. */
 export const ROUTE_CHEAP_CHAT_MODEL = 'deepseek-v4-flash';
+/** The stronger chat-completions model used for heavy agent tasks (auto mode). */
+export const ROUTE_STRONG_CHAT_MODEL = 'deepseek-v4-pro';
+/** Minimum tool count that marks a request as "heavy" (auto mode). */
+export const ROUTE_HEAVY_TOOL_THRESHOLD = 10;
+
+/** Router modes (nikas.modelRouterMode). */
+export type ModelRouterMode = 'helpers-only' | 'auto';
 
 export interface RouteDecision {
     /** Alternative model id to use, if routing applies. */
@@ -48,25 +58,48 @@ export interface RouteDecision {
 /**
  * Decide whether to route a request to a different DeepSeek chat model.
  *
- * @param requestKind   the classified request kind
+ * @param requestKind    the classified request kind
  * @param currentModelId the currently selected model id
- * @param enabled       whether the model router is enabled (nikas.modelRouter)
+ * @param enabled        whether the model router is enabled (nikas.modelRouter)
+ * @param mode           'helpers-only' (default): internal helpers → Flash.
+ *                       'auto': helpers → Flash, heavy agent tasks → Pro,
+ *                       quick chats (inline/unknown, no tools) → Flash.
+ * @param toolCount      number of tools in the request (used by auto mode).
  */
 export function decideDeepSeekRoute(
     requestKind: RequestKind,
     currentModelId: string,
-    enabled: boolean
+    enabled: boolean,
+    mode: ModelRouterMode = 'helpers-only',
+    toolCount = 0
 ): RouteDecision {
     if (!enabled) return {};
     // Only consider the chat-completions family — never the Responses model.
     if (!DEEPSEEK_CHAT_MODELS.includes(currentModelId as (typeof DEEPSEEK_CHAT_MODELS)[number])) {
         return {};
     }
-    // Route only internal helpers to the cheap model, and only if we're not
-    // already on the cheap model.
-    if (INTERNAL_HELPER_KINDS.has(requestKind) && currentModelId !== ROUTE_CHEAP_CHAT_MODEL) {
-        return { modelId: ROUTE_CHEAP_CHAT_MODEL, reason: `internal-helper:${requestKind}` };
+
+    // Internal helpers always route to the cheap model when on Pro.
+    if (INTERNAL_HELPER_KINDS.has(requestKind)) {
+        if (currentModelId !== ROUTE_CHEAP_CHAT_MODEL) {
+            return { modelId: ROUTE_CHEAP_CHAT_MODEL, reason: `internal-helper:${requestKind}` };
+        }
+        return {};
     }
+
+    if (mode === 'auto') {
+        // Heavy agent tasks (main/plan/explore with a real toolset) → Pro.
+        const heavy = HEAVY_AGENT_KINDS.has(requestKind) && toolCount >= ROUTE_HEAVY_TOOL_THRESHOLD;
+        if (heavy && currentModelId !== ROUTE_STRONG_CHAT_MODEL) {
+            return { modelId: ROUTE_STRONG_CHAT_MODEL, reason: `heavy-task:${requestKind} (${toolCount} tools)` };
+        }
+        // Quick chats (inline/unknown, no tools) → Flash.
+        const quick = (requestKind === 'inline-agent' || requestKind === 'unknown') && toolCount === 0;
+        if (quick && currentModelId !== ROUTE_CHEAP_CHAT_MODEL) {
+            return { modelId: ROUTE_CHEAP_CHAT_MODEL, reason: `quick-chat:${requestKind} (no tools)` };
+        }
+    }
+
     return {};
 }
 

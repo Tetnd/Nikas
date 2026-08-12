@@ -7,7 +7,7 @@
  * extension.ts via wireUsagePersistence().
  */
 import * as vscode from 'vscode';
-import { usageTracker, formatTokens, formatCost, getCurrentSessionKey, type UsageAggregate, type UsageSnapshot } from '../usage/tracker.js';
+import { usageTracker, formatTokens, formatCost, formatLatency, getCurrentSessionKey, type UsageAggregate, type UsageSnapshot, type UsageRecord } from '../usage/tracker.js';
 
 const STATE_KEY = 'nikas.usageTracker.v1';
 
@@ -54,6 +54,7 @@ export async function showUsage(): Promise<void> {
         });
 
     const current = usageTracker.session(getCurrentSessionKey());
+    const last = s.recent[0];
     const items: vscode.QuickPickItem[] = [
         {
             label: `$(dashboard) Nikas Usage & Cost`,
@@ -65,6 +66,11 @@ export async function showUsage(): Promise<void> {
             description: `current conversation`,
             detail: fmtAgg(current),
         },
+        ...(last ? [{
+            label: '$(clock) Last request',
+            description: new Date(last.timestamp).toLocaleTimeString(),
+            detail: lastRequestDetail(last),
+        } as vscode.QuickPickItem] : []),
         { label: '', kind: vscode.QuickPickItemKind.Separator },
         { label: '$(circuit-board) By provider', kind: vscode.QuickPickItemKind.Separator },
         ...(providerItems.length ? providerItems : [line('  — no requests recorded yet —')]),
@@ -164,9 +170,23 @@ export function updateUsageStatusBar(item: vscode.StatusBarItem): void {
         item.hide();
         return;
     }
-    item.text = `$(graph-line) ${formatTokens(a.totalTokens)} · ${formatCost(a.estimatedCost)}`;
-    item.tooltip = `Nikas usage (this session)\n${fmtAgg(a)}\nClick for the full dashboard.`;
+    const last = usageTracker.lastRequest();
+    const fresh = !!last && Date.now() - last.timestamp < 2 * 60_000;
+    const latency = fresh && last?.latencyMs ? ` ⏱ ${formatLatency(last.latencyMs)}` : '';
+    item.text = `$(graph-line) ${formatTokens(a.totalTokens)} · ${formatCost(a.estimatedCost)}${latency}`;
+    item.tooltip = `Nikas usage (this session)\n${fmtAgg(a)}\n` +
+        (last ? `Last request: ${last.model} · ${formatLatency(last.latencyMs)}\n` : '') +
+        `Click for the full dashboard.`;
     item.show();
+}
+
+function lastRequestDetail(last: UsageRecord): string {
+    return [
+        last.model,
+        `${formatTokens(last.promptTokens)} in · ${formatTokens(last.completionTokens)} out`,
+        `latency ${formatLatency(last.latencyMs)}`,
+        last.sessionLabel ? truncate(last.sessionLabel, 40) : '',
+    ].filter(Boolean).join(' · ');
 }
 
 function providerModelLabel(p: string, s: UsageSnapshot): string {
@@ -188,6 +208,10 @@ export function buildMarkdownReport(s: UsageSnapshot): string {
     rows.push(`- **Completion tokens:** ${s.total.completionTokens.toLocaleString()}`);
     rows.push(`- **Total tokens:** ${s.total.totalTokens.toLocaleString()}`);
     rows.push(`- **Estimated cost:** ~${formatCost(s.total.estimatedCost)}`);
+    const last = s.recent[0];
+    if (last) {
+        rows.push(`- **Last request:** ${last.model} · ${formatTokens(last.promptTokens)} in / ${formatTokens(last.completionTokens)} out · ${formatLatency(last.latencyMs)}`);
+    }
     rows.push('');
     rows.push('## By provider');
     rows.push('');
