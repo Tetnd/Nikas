@@ -1196,7 +1196,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                     version: m.version,
                     maxInputTokens: Math.min(m.maxInputTokens, effectiveInputTokens),
                     maxOutputTokens: Math.min(m.maxOutputTokens, effectiveOutputTokens),
-                    capabilities: withEditTools(m.capabilities) as vscode.LanguageModelChatInformation['capabilities'],
+                    capabilities: m.capabilities as vscode.LanguageModelChatInformation['capabilities'],
                     detail: m.detail,
                 };
 
@@ -1218,7 +1218,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 version: DEEPSEEK_RESPONSES_MODEL.version,
                 maxInputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxInputTokens, effectiveInputTokens),
                 maxOutputTokens: Math.min(DEEPSEEK_RESPONSES_MODEL.maxOutputTokens, effectiveOutputTokens),
-                capabilities: withEditTools(DEEPSEEK_RESPONSES_MODEL.capabilities) as vscode.LanguageModelChatInformation['capabilities'],
+                capabilities: DEEPSEEK_RESPONSES_MODEL.capabilities as vscode.LanguageModelChatInformation['capabilities'],
                 detail: DEEPSEEK_RESPONSES_MODEL.detail,
             };
             responsesModelInfo.configurationSchema = buildThinkingEffortSchema();
@@ -2791,25 +2791,6 @@ function buildThinkingEffortSchema() {
                 description: 'Sampling temperature for this model (0 = deterministic). Per-model override of nikas.temperature.',
             },
         },
-    };
-}
-
-/**
- * A-4 (v0.7.88): advertise the edit tools DeepSeek prefers so Copilot Chat
- * matches the model's strengths. See LanguageModelChatCapabilities.editTools.
- * Cast through a loose type because the `editTools` field is a proposed API
- * that may not be in the compiled vscode.d.ts.
- *
- * REQUIRES the `chatProvider` API proposal in package.json#enabledApiProposals:
- * the extension host throws `CANNOT use API proposal: chatProvider` for any
- * model whose capabilities contain `editTools` unless the extension declares
- * the proposal — which aborts the ENTIRE provider model list (empty picker).
- * See v0.7.91 for the fix that added `"chatProvider"` to enabledApiProposals.
- */
-function withEditTools(capabilities: unknown): unknown {
-    return {
-        ...(capabilities as Record<string, unknown>),
-        editTools: ['find-replace', 'multi-find-replace'],
     };
 }
 
