@@ -139,6 +139,31 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
     check('snake terminal enrichment has caution', enr.includes('Caution:'));
 }
 
+// ── 7b. Screenshot anti-loop guidance (regression) ───────────────────────
+// DeepSeek used to loop calling run_playwright_code to save a screenshot file
+// (which cannot work — the snippet runs in the browser page and can't write
+// files), never using screenshot_page. Assert the descriptions steer it to
+// screenshot_page and forbid file saving.
+console.log('\n=== 7b. Screenshot anti-loop guidance ===');
+{
+    const rpwSnake = augmentToolDescription('run_playwright_code', 'Run playwright');
+    check('run_playwright_code warns no file writes', /CANNOT write files|require, fs, and path/i.test(rpwSnake));
+    check('run_playwright_code points to screenshot_page', rpwSnake.includes('screenshot_page'));
+
+    const rpwCamel = augmentToolDescription('runPlaywrightCode', 'Run playwright');
+    check('runPlaywrightCode warns no file writes', /CANNOT write files|require, fs, and path/i.test(rpwCamel));
+    check('runPlaywrightCode points to screenshot_page', rpwCamel.includes('screenshot_page'));
+
+    const ssSnake = augmentToolDescription('screenshot_page', 'Screenshot');
+    check('screenshot_page returns viewable image', /viewing|return/i.test(ssSnake));
+    check('screenshot_page says no file saving needed', /No file saving|no file saving/i.test(ssSnake));
+    check('screenshot_page prefer forbids save+view_image', ssSnake.includes('never try to save a screenshot file'));
+
+    const ssCamel = augmentToolDescription('screenshotPage', 'Screenshot');
+    check('screenshotPage returns viewable image', /viewing|return/i.test(ssCamel));
+    check('screenshotPage says no file saving needed', /No file saving|no file saving/i.test(ssCamel));
+}
+
 // ── 8. Prefer guidance ────────────────────────────────────────────────────
 console.log('\n=== 8. Prefer guidance ===');
 {

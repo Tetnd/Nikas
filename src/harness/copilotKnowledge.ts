@@ -234,8 +234,9 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     screenshotPage: {
         category: 'browser',
-        enrichedDescription: 'Capture a screenshot of the current browser page.',
-        whenToUse: 'Use to visually confirm layout or rendering.',
+        enrichedDescription: 'Capture a screenshot of the current browser page and RETURN the image directly to you for viewing. The image is shown inline in the conversation — you can see it. No file saving is needed or possible here.',
+        whenToUse: 'Use whenever you want to SEE the current rendered page. This is THE tool for viewing a page visually.',
+        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you.',
     },
     clickElement: {
         category: 'browser',
@@ -264,8 +265,9 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     runPlaywrightCode: {
         category: 'browser',
-        enrichedDescription: 'Run a Playwright code snippet to control the browser page directly.',
-        whenToUse: 'Use for advanced browser control when the higher-level browser tools are insufficient.',
+        enrichedDescription: 'Run a Playwright code snippet to control the browser page directly. The snippet runs inside the browser page context (page.evaluate-style), NOT in Node — so require, fs, path, and file writes are UNAVAILABLE.',
+        whenToUse: 'Use only for advanced browser control (e.g. running page.evaluate) when the higher-level browser tools are insufficient.',
+        caution: 'The snippet executes IN THE BROWSER PAGE: Node APIs like require, fs, and path are NOT defined, and it CANNOT write files to disk. NEVER use it to save a screenshot or any file. To view the page, call screenshot_page/screenshotPage — it returns the image to you directly.',
     },
 
     // ── Built-In: notebook ──────────────────────────────────────────────
@@ -578,8 +580,9 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     screenshot_page: {
         category: 'browser',
-        enrichedDescription: 'Capture a screenshot of the current browser page.',
-        whenToUse: 'Use to visually confirm layout or rendering.',
+        enrichedDescription: 'Capture a screenshot of the current browser page and RETURN the image directly to you for viewing. The image is shown inline in the conversation — you can see it. No file saving is needed or possible here.',
+        whenToUse: 'Use whenever you want to SEE the current rendered page. This is THE tool for viewing a page visually.',
+        prefer: 'MANDATORY: to look at a page, call screenshot_page/screenshotPage — never try to save a screenshot file and view_image it. screenshot_page returns the image straight to you.',
     },
     click_element: {
         category: 'browser',
@@ -608,8 +611,9 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
     },
     run_playwright_code: {
         category: 'browser',
-        enrichedDescription: 'Run a Playwright code snippet to control the browser page directly.',
-        whenToUse: 'Use for advanced browser control when the higher-level browser tools are insufficient.',
+        enrichedDescription: 'Run a Playwright code snippet to control the browser page directly. The snippet runs inside the browser page context (page.evaluate-style), NOT in Node — so require, fs, path, and file writes are UNAVAILABLE.',
+        whenToUse: 'Use only for advanced browser control (e.g. running page.evaluate) when the higher-level browser tools are insufficient.',
+        caution: 'The snippet executes IN THE BROWSER PAGE: Node APIs like require, fs, and path are NOT defined, and it CANNOT write files to disk. NEVER use it to save a screenshot or any file. To view the page, call screenshot_page/screenshotPage — it returns the image to you directly.',
     },
 
     // ── notebook ───────────────────────────────────────────────────────
