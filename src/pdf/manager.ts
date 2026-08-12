@@ -214,6 +214,41 @@ export function extractDiagnosticContext(
     return undefined;
 }
 
+/**
+ * Module-scope identifiers that are safe to introduce into a minified bundle
+ * (Node/JS globals). Everything else must already appear in the bundle or the
+ * injected code will throw at runtime (undefined symbol).
+ */
+const SAFE_GLOBALS = new Set([
+    'Buffer.', 'TextEncoder.', 'TextDecoder.', 'JSON.', 'Math.', 'console.',
+    'Promise.', 'Object.', 'Array.', 'String.', 'Number.', 'Date.', 'Error.',
+    'URL.', 'setTimeout.', 'clearTimeout.', 'setInterval.', 'clearInterval.',
+    'globalThis.', 'process.', 'Symbol.', 'Reflect.', 'RegExp.', 'Boolean.',
+    'BigInt.', 'Map.', 'Set.', 'WeakMap.', 'WeakSet.', 'parseInt.', 'parseFloat.',
+    'isNaN.', 'isFinite.', 'undefined.', 'NaN.', 'Infinity.',
+]);
+
+/**
+ * Return `Ident.` tokens present in `patched` but never in `original` (and not
+ * safe globals). Regex fallbacks may inject code referencing minified module
+ * aliases that a drifted bundle renamed; such injections throw at runtime
+ * (e.g. "Cannot read properties of undefined (reading '...')"). We refuse to
+ * apply them instead of corrupting the bundle.
+ */
+function introducedAliases(original: string, patched: string): string[] {
+    const originalTokens = new Set<string>();
+    const re = /[A-Za-z_$][\w$]*\./g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(original))) originalTokens.add(m[0]);
+
+    const added = new Set<string>();
+    while ((m = re.exec(patched))) {
+        const tok = m[0];
+        if (!originalTokens.has(tok) && !SAFE_GLOBALS.has(tok)) added.add(tok);
+    }
+    return [...added];
+}
+
 function applyOne(content: string, patch: PatchDefinition): { success: boolean; content: string; reason: string } {
     // 1) Exact replacements (preferred — minified files must be edited surgically).
     for (const r of patch.replacements) {
@@ -230,6 +265,14 @@ function applyOne(content: string, patch: PatchDefinition): { success: boolean; 
                 ? content.replace(re, fb.replacement)
                 : content.replace(re, fb.replacement);
             if (replaced !== content) {
+                // Safety net: a fallback that introduces unknown module aliases
+                // would crash at runtime. Refuse it (the patch then reports as
+                // "needs manual review" instead of corrupting the bundle).
+                const bad = introducedAliases(content, replaced);
+                if (bad.length > 0) {
+                    warn(`Refusing regex fallback for ${patch.id}: injected code references aliases never present in this bundle (${bad.join(', ')}). The bundle drifted too far — skipping instead of risking a crash.`);
+                    continue;
+                }
                 return { success: true, content: replaced, reason: '' };
             }
         }

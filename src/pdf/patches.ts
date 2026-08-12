@@ -221,8 +221,12 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
         {
             id: 'P5',
             description: 'Convert Document content parts to LanguageModelDataPart (so Nikas receives the PDF)',
+            // Alias-agnostic marker: matches the injected Document branch in the
+            // OpenAI-mode converter regardless of the minified namespace alias.
+            // Distinct from P10's marker (t.documentData vs a.documentData) so a
+            // P10-only injection is NOT mistaken for P5 being applied.
             appliedMarkers: [
-                `LanguageModelDataPart(new Uint8Array(db)`,
+                `ChatCompletionContentPartKind.Document){let dd=t.documentData`,
             ],
             replacements: [
                 {
@@ -367,8 +371,10 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
         {
             id: 'P10',
             description: 'Forward Document (PDF) parts through kAn so they reach LM providers as data parts',
+            // Alias-agnostic marker: matches the injected Document branch in kAn
+            // no matter what the minifier renamed the namespace alias to.
             appliedMarkers: [
-                `a.type===UL.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData`,
+                `ChatCompletionContentPartKind.Document){let dd=a.documentData`,
             ],
             replacements: [
                 {
@@ -379,10 +385,19 @@ export function buildPatches(options: PatchBuildOptions): PatchDefinition[] {
             regexFallbacks: [
                 {
                     // Version-drift fallback: insert the Document branch right
-                    // before the CacheBreakpoint branch in kAn, preserving the
-                    // matched (possibly renamed) symbol names.
+                    // before the CacheBreakpoint branch in kAn.
+                    //
+                    // IMPORTANT: the injected branch MUST reuse the aliases
+                    // CAPTURED from the matched bundle (the Raw-namespace alias
+                    // and the LanguageModelDataPart alias). Hardcoding aliases
+                    // from one build (e.g. UL / FA) crashes bundles where the
+                    // minifier renamed them — the runtime error was exactly
+                    // "Cannot read properties of undefined (reading
+                    // 'ChatCompletionContentPartKind')" when `UL.Raw` was
+                    // undefined at the injection site.
                     pattern: /else if\(a\.type===([\w$]+)\.Raw\.ChatCompletionContentPartKind\.CacheBreakpoint\)e\.emitCacheBreakpoints&&o\.push\(new ([\w$]+)\.LanguageModelDataPart\(new TextEncoder\(\)\.encode\("ephemeral"\),[\w$]+\.CacheControl\)\);else if\(a\.type===([\w$]+)\.Raw\.ChatCompletionContentPartKind\.Opaque\)\{let s=([\w$]+)\(a\);/,
-                    replacement: (m: string) => `else if(a.type===UL.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData,db=typeof dd.data=="string"?Buffer.from(dd.data,"base64"):Buffer.from(dd.data);o.push(new FA.LanguageModelDataPart(new Uint8Array(db),dd.mediaType||"application/pdf"))}${m}`,
+                    replacement: (_m: string, rawNs: string, lmData: string) =>
+                        `else if(a.type===${rawNs}.Raw.ChatCompletionContentPartKind.Document){let dd=a.documentData,db=typeof dd.data=="string"?Buffer.from(dd.data,"base64"):Buffer.from(dd.data);o.push(new ${lmData}.LanguageModelDataPart(new Uint8Array(db),dd.mediaType||"application/pdf"))}${_m}`,
                 },
             ],
             diagnosticProbes: [

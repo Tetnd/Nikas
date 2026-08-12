@@ -36,3 +36,8 @@ test-copilot-knowledge.js
 analyze-knowledge.js
 ab-thinking.js
 extension.patched.test.js
+test-dedupe.js
+test-stream-retry.js
+test-compact-silent.js
+test-tool-mode.js
+test-tool-results.js

@@ -372,6 +372,48 @@ function buildAssistantToolCallMessage(
 }
 
 /**
+ * Convert one tool-result content part to the text DeepSeek accepts.
+ *
+ * DeepSeek's `tool` role only accepts a string, so every part kind must be
+ * flattened to text. Mirrors Copilot's own ToolResultContentRenderer
+ * (extensions/copilot agentDebug): TextPart → value; PromptTsxPart →
+ * JSON.stringify (nearly ALL Copilot tools return their results as prompt-tsx
+ * JSON — read_file, list_dir, grep, edit results…); DataPart → decoded text
+ * (images → a lean placeholder: DeepSeek tool messages cannot carry image
+ * content, and a base64 data URI would burn tens of thousands of tokens; the
+ * vision pipeline already describes user-attached images separately).
+ */
+function toolResultPartToText(p: unknown): string {
+    if (p instanceof vscode.LanguageModelTextPart) {
+        return p.value;
+    }
+    if (p instanceof vscode.LanguageModelPromptTsxPart) {
+        try {
+            // JSON.stringify(undefined) returns undefined (not a string) —
+            // normalize so callers always get a string.
+            const s = JSON.stringify(p.value, null, 2);
+            return typeof s === 'string' ? s : '';
+        } catch {
+            return '[PromptTsxPart]';
+        }
+    }
+    if (p instanceof vscode.LanguageModelDataPart) {
+        if (p.mimeType.startsWith('image/')) {
+            return `[image: ${p.mimeType}, ${p.data.byteLength} bytes]`;
+        }
+        try {
+            // Fatal decoding (matches Copilot's renderDataPartToString):
+            // invalid UTF-8 bytes fail loudly instead of silently becoming
+            // U+FFFD replacement garbage in the model's context.
+            return new TextDecoder('utf-8', { fatal: true }).decode(p.data);
+        } catch {
+            return `<decode error: ${p.data.byteLength} bytes>`;
+        }
+    }
+    return '';
+}
+
+/**
  * Build one or more role: "tool" messages from LanguageModelToolResultParts.
  * DeepSeek requires each tool result to be its own message with matching tool_call_id.
  */
@@ -383,13 +425,23 @@ function buildToolResultMessages(
     for (const part of parts) {
         if (part instanceof vscode.LanguageModelToolResultPart) {
             const content = part.content
-                .map(p => (p instanceof vscode.LanguageModelTextPart ? p.value : ''))
+                .map(toolResultPartToText)
+                .filter(s => s.length > 0)
                 .join('\n');
+
+            // DeepSeek's tool role has no error flag (OpenAI format), so a
+            // failed tool with empty output would be indistinguishable from a
+            // successful empty result — and the model would confidently
+            // "read" nothing. Mark failures explicitly so it can react.
+            const isError = (part as { isError?: boolean }).isError === true;
+            const marked = isError
+                ? (content ? `[tool error] ${content}` : '[tool error: no output]')
+                : content;
 
             messages.push({
                 role: 'tool',
                 tool_call_id: part.callId,
-                content: content || '',
+                content: marked || '',
             });
         }
         // Non-tool-result parts in a tool-result message are unusual but we include them as user text

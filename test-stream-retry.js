@@ -253,9 +253,27 @@ function sectionConfig() {
     eq(getApiRetriesSafe(NaN), 2, 'NaN → 2');
 }
 
+// ── 2b. reader.read() catch decision (abort vs real interruption) ──
+// Mirrors the read-loop catch in streamDeepSeekChat/streamDeepSeekResponses:
+// aborts rethrow the ORIGINAL error (no ERROR log, never retried); real
+// stream failures get wrapped as "stream interrupted" (retryable).
+function readErrAction(readErr, signal) {
+    if (isAbortError(readErr, signal)) return 'rethrow';
+    return 'wrap';
+}
+function sectionReadErr() {
+    eq(readErrAction(new DOMException('The user aborted a request.', 'AbortError'), { aborted: false }), 'rethrow', 'DOMException AbortError → rethrow (no ERROR log)');
+    eq(readErrAction(new Error('This operation was aborted'), { aborted: false }), 'rethrow', 'abort message → rethrow (no ERROR log)');
+    eq(readErrAction(new Error('x'), { aborted: true }), 'rethrow', 'signal aborted → rethrow');
+    eq(readErrAction(new Error('terminated'), { aborted: false }), 'wrap', 'terminated → wrap (retryable)');
+    eq(readErrAction(new Error('socket hang up'), { aborted: false }), 'wrap', 'socket hang up → wrap');
+    eq(readErrAction(new Error('ECONNRESET'), { aborted: false }), 'wrap', 'ECONNRESET → wrap');
+}
+
 async function main() {
     sectionTransient();
     sectionAbort();
+    sectionReadErr();
     sectionBackoff();
     await sectionRetry();
     sectionConfig();

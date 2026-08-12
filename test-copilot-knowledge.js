@@ -73,6 +73,8 @@ console.log('\n=== 6. Expanded catalog coverage ===');
     check('todo known (task)', getToolKnowledge('todo')?.category === 'task');
     check('browser umbrella known', getToolKnowledge('browser')?.category === 'browser');
     check('containerToolsConfig known', getToolKnowledge('containerToolsConfig')?.category === 'container');
+    check('create_new_workspace known (snake alias)', getToolKnowledge('create_new_workspace')?.category === 'project');
+    check('container-tools_get-config known (kebab alias)', getToolKnowledge('container-tools_get-config')?.category === 'container');
     check('unknown still undefined', getToolKnowledge('zzz_not_a_tool') === undefined);
 
     // Every expanded entry must produce an enriched description with the
@@ -130,6 +132,7 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
         'semantic_search', 'get_vscode_api', 'read_project_structure',
         'search_subagent', 'explore_subagent', 'tool_search', 'task_complete',
         'vscode_renameSymbol', 'vscode_listCodeUsages',
+        'create_new_workspace', 'container-tools_get-config',
     ];
     const missing = realNames.filter(n => !getToolKnowledge(n));
     check('all real bundle snake_case names present', missing.length === 0, 'missing: ' + missing.join(', '));
@@ -137,6 +140,26 @@ console.log('\n=== 7. Snake-case Copilot-agent toolset ===');
     // Enrichment works for a snake_case tool too.
     const enr = augmentToolDescription('run_in_terminal', 'Run a command');
     check('snake terminal enrichment has caution', enr.includes('Caution:'));
+}
+
+// ── 7c. Shell-adaptation guidance (Windows pwsh) ─────────────────────────
+// DeepSeek defaults to bash-isms; the user's terminals run PowerShell on
+// Windows. The terminal tools must tell it to adapt syntax.
+console.log('\n=== 7c. Shell-adaptation guidance ===');
+{
+    const tSnake = augmentToolDescription('run_in_terminal', 'Run a command');
+    check('run_in_terminal teaches PowerShell adaptation', /PowerShell \(pwsh\)/i.test(tSnake));
+    check('run_in_terminal names bash-isms to avoid', /grep|rm -rf|export VAR/i.test(tSnake));
+    check('run_in_terminal names PowerShell equivalents', /Select-String|Get-Content|Remove-Item|\$env:VAR/i.test(tSnake));
+
+    const tCamel = augmentToolDescription('runInTerminal', 'Run a command');
+    check('runInTerminal teaches PowerShell adaptation', /PowerShell \(pwsh\)/i.test(tCamel));
+
+    const ex = augmentToolDescription('execute', 'Execute');
+    check('execute teaches shell adaptation', /PowerShell \(pwsh\)/i.test(ex));
+
+    const rc = augmentToolDescription('runCommand', 'Run a command');
+    check('runCommand teaches shell adaptation', /PowerShell \(pwsh\)/i.test(rc));
 }
 
 // ── 7b. Screenshot anti-loop guidance (regression) ───────────────────────

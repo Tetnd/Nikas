@@ -147,18 +147,20 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Run a shell command in the workspace terminal and return its output. This is how you build, run tests, or execute scripts.',
         whenToUse: 'Use to build, run tests, run the app, or execute shell commands to verify behavior.',
         caution: 'Commands have real side effects (they run in the actual terminal). Prefer read-only commands when you only need information.',
-        prefer: 'For test runs prefer the dedicated runTests/run_task tool over a hand-typed command.',
+        prefer: 'Adapt syntax to the active shell — on Windows the terminal runs PowerShell (pwsh), so bash-isms (grep, cat, rm -rf, export VAR=) fail or differ; use PowerShell equivalents (Select-String, Get-Content, Remove-Item, $env:VAR). For test runs prefer the dedicated runTests/run_task tool over a hand-typed command.',
     },
     execute: {
         category: 'terminal',
         enrichedDescription: 'Execute code and applications on the machine.',
         whenToUse: 'Use to run code, scripts, or applications.',
         caution: 'Executions have real side effects — prefer read-only commands when you only need information.',
+        prefer: 'Adapt syntax to the active shell — on Windows the terminal runs PowerShell (pwsh), not bash.',
     },
     runCommand: {
         category: 'terminal',
         enrichedDescription: 'Run a command in the terminal and return its output.',
         whenToUse: 'Use to build, run, or inspect via the shell.',
+        prefer: 'Adapt syntax to the active shell — on Windows the terminal runs PowerShell (pwsh), not bash.',
     },
     runTests: {
         category: 'terminal',
@@ -335,6 +337,14 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Set up a complete new project structure/workspace scaffold.',
         whenToUse: 'Use when initializing a new project or framework.',
     },
+    // Snake-case alias — Copilot's agent loop passes `create_new_workspace`,
+    // not the camelCase `newWorkspace` above (verified in nikas.log:
+    // enrichment was stuck at 47/51 because this name had no catalog entry).
+    create_new_workspace: {
+        category: 'project',
+        enrichedDescription: 'Set up a complete new project structure/workspace scaffold.',
+        whenToUse: 'Use when initializing a new project or framework.',
+    },
     resolveMemoryFileUri: {
         category: 'vscode',
         enrichedDescription: 'Resolve a memory-file path to its fully qualified URI.',
@@ -370,6 +380,14 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
 
     // ── container group ─────────────────────────────────────────────────
     containerToolsConfig: {
+        category: 'container',
+        enrichedDescription: 'Get the container/orchestrator CLI configuration, including the correct base commands and environment.',
+        whenToUse: 'Use before running any container or compose command, to get the right base command.',
+    },
+    // Kebab-case alias — the live tool name Copilot passes is
+    // `container-tools_get-config` (contributed by ms-azuretools.vscode-containers),
+    // not the camelCase `containerToolsConfig` above.
+    'container-tools_get-config': {
         category: 'container',
         enrichedDescription: 'Get the container/orchestrator CLI configuration, including the correct base commands and environment.',
         whenToUse: 'Use before running any container or compose command, to get the right base command.',
@@ -490,6 +508,7 @@ const DEFAULT_CATALOG: Record<string, ToolKnowledge> = {
         enrichedDescription: 'Run a shell command in the workspace terminal and return its output. This is how you build, run tests, or execute scripts.',
         whenToUse: 'Use to build, run tests, run the app, or execute shell commands to verify behavior.',
         caution: 'Commands have real side effects (they run in the actual terminal). Prefer read-only commands when you only need information.',
+        prefer: 'Adapt syntax to the active shell — on Windows the terminal runs PowerShell (pwsh), so bash-isms (grep, cat, rm -rf, export VAR=) fail or differ; use PowerShell equivalents (Select-String, Get-Content, Remove-Item, $env:VAR).',
     },
     send_to_terminal: {
         category: 'terminal',

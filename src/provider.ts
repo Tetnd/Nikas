@@ -909,6 +909,101 @@ function repairTruncatedSequence(
     return [...systemMessages, ...result];
 }
 
+// ── Duplicate internal-request suppression ───────────────────────────────
+// VS Code/Copilot fires the SAME tiny internal helper request twice ~8ms
+// apart at session start (identical "Sending ..." pairs in nikas.log, e.g.
+// tools=0, ~2KB). Both previously hit the DeepSeek API (2 paid calls + 2
+// thinking-token burns per session). We detect a byte-identical request that
+// is tools=0 and tiny and already in flight within a short window, then
+// REPLAY the first response into the duplicate's progress instead of calling
+// DeepSeek again. Real agent turns (tools>0 or larger bodies) never dedupe.
+interface DedupRun {
+    startedAt: number;
+    bodyBytes: number;
+    parts: vscode.LanguageModelResponsePart[];
+    promise: Promise<void>;
+    done: boolean;
+}
+const dedupRuns = new Map<string, DedupRun>();
+const DEDUP_WINDOW_MS = 2_000;
+const DEDUP_MAX_BODY_BYTES = 4_096;
+
+/** Cheap deterministic hash of the full serialized request (FNV-1a). */
+function dedupFingerprint(request: unknown): string {
+    let h = 0x811c9dc5;
+    const s = safeStringify(request);
+    for (let i = 0; i < s.length; i++) {
+        h = (h ^ s.charCodeAt(i)) * 0x01000193;
+    }
+    return (h >>> 0).toString(16);
+}
+
+/** Only tiny, tool-less internal helper requests are eligible for dedupe. */
+function dedupEligible(toolsCount: number, bodyBytes: number): boolean {
+    return toolsCount === 0 && bodyBytes > 0 && bodyBytes <= DEDUP_MAX_BODY_BYTES;
+}
+
+type DedupResult =
+    | { outcome: 'duplicate' } // caller must return — response already replayed
+    | { outcome: 'primary'; settle: () => void }; // caller must settle() in finally
+
+/**
+ * Register this request as the primary run (wrapping progress to capture every
+ * reported part) — or, if a byte-identical request is already in flight within
+ * the window, await it and replay its captured parts into `progress`.
+ */
+async function beginDedup(
+    key: string | undefined,
+    bodyBytes: number,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>
+): Promise<DedupResult> {
+    if (!key) return { outcome: 'primary', settle: () => {} };
+
+    const now = Date.now();
+    const existing = dedupRuns.get(key);
+    if (existing && existing.bodyBytes === bodyBytes && now - existing.startedAt <= DEDUP_WINDOW_MS) {
+        // Duplicate: await the primary (if still streaming), then replay.
+        if (!existing.done) await existing.promise;
+        for (const part of existing.parts) progress.report(part);
+        return { outcome: 'duplicate' };
+    }
+
+    // Stale or first-seen: become the primary run.
+    dedupRuns.delete(key);
+    // Prune entries older than the window so the map stays bounded.
+    for (const [k, r] of dedupRuns) {
+        if (now - r.startedAt > DEDUP_WINDOW_MS) dedupRuns.delete(k);
+    }
+
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => { resolve = res; });
+    const captured: vscode.LanguageModelResponsePart[] = [];
+    const run: DedupRun = { startedAt: now, bodyBytes, parts: captured, promise, done: false };
+    dedupRuns.set(key, run);
+
+    // Self-heal: if the primary never reaches its finally (pathological early
+    // throw), settle it after the window so a waiting duplicate can never hang
+    // forever. Redundant when settle() runs normally — resolve() is a no-op
+    // on an already-resolved promise.
+    const watchdog = setTimeout(() => {
+        if (!run.done) { run.done = true; resolve(); }
+    }, DEDUP_WINDOW_MS);
+    watchdog.unref?.();
+
+    // Capture every part this request reports so a duplicate can replay it.
+    const progressObj = progress as unknown as { report(p: vscode.LanguageModelResponsePart): void };
+    const originalReport = progressObj.report.bind(progressObj);
+    progressObj.report = (part) => {
+        captured.push(part);
+        originalReport(part);
+    };
+
+    return {
+        outcome: 'primary',
+        settle: () => { run.done = true; resolve(); },
+    };
+}
+
 /**
  * NikasChatProvider — a VS Code LanguageModelChatProvider bringing multiple
  * model families under the single "Nikas" vendor.
@@ -1316,7 +1411,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             request.tools = options.tools.map(mapTool);
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'chat-completions');
-            request.tool_choice = 'auto';
+            // Honor Copilot's toolMode: Required forces the model to call a tool
+            // (stable API — "the provider must implement respecting this").
+            request.tool_choice = resolveToolChoice(options.toolMode);
+            if (request.tool_choice === 'required') {
+                log.info(`Copilot requested toolMode=Required — forcing tool_choice='required' (model must call a tool)`);
+            }
         }
 
         // Note (2026-08-09): the old "thinking+tools may 400" warning was
@@ -1349,6 +1449,23 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Log request summary to nikas.log
         const bodySize = new TextEncoder().encode(safeStringify(request)).length;
+
+        // Duplicate internal-request suppression: Copilot fires the same tiny
+        // helper request twice ~8ms apart at session start. If this is the
+        // duplicate, beginDedup replays the first response into our progress
+        // and we return without calling DeepSeek again.
+        const dedupKey = dedupEligible(options.tools?.length ?? 0, bodySize)
+            ? dedupFingerprint(request)
+            : undefined;
+        const dedup = await beginDedup(dedupKey, bodySize, progress);
+        if (dedup.outcome === 'duplicate') {
+            log.info(
+                `Duplicate internal request (model=${modelId}, tools=0, ` +
+                `${(bodySize / 1024).toFixed(1)}KB) — replayed first response, skipped DeepSeek call`
+            );
+            return;
+        }
+
         log.info(
             `Sending DeepSeek request: model=${modelId}, ` +
             `messages=${deepseekMessages.length}, ` +
@@ -1495,6 +1612,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
             throw wrappedError;
         } finally {
+            dedup.settle();
             cancelDisposable.dispose();
         }
         log.info(
@@ -1635,7 +1753,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             request.tools = options.tools.map(mapResponsesTool);
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'responses');
-            request.tool_choice = 'auto';
+            // Honor Copilot's toolMode: Required forces the model to call a tool
+            // (stable API — "the provider must implement respecting this").
+            request.tool_choice = resolveToolChoice(options.toolMode);
+            if (request.tool_choice === 'required') {
+                log.info(`Copilot requested toolMode=Required — forcing tool_choice='required' (model must call a tool)`);
+            }
         }
 
         // Note (2026-08-09): the old "thinking+tools may 400" warning was
@@ -1650,6 +1773,20 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Log request summary
         const bodySize = new TextEncoder().encode(safeStringify(request)).length;
+
+        // Duplicate internal-request suppression (see chat handler rationale).
+        const dedupKey = dedupEligible(options.tools?.length ?? 0, bodySize)
+            ? dedupFingerprint(request)
+            : undefined;
+        const dedup = await beginDedup(dedupKey, bodySize, progress);
+        if (dedup.outcome === 'duplicate') {
+            log.info(
+                `Duplicate internal request (model=${modelId}, tools=0, ` +
+                `${(bodySize / 1024).toFixed(1)}KB) — replayed first response, skipped DeepSeek call`
+            );
+            return;
+        }
+
         log.info(
             `Sending DeepSeek Responses request: model=${modelId} (api=deepseek-v4-flash), ` +
             `inputItems=${Array.isArray(input) ? input.length : 0}, ` +
@@ -1769,6 +1906,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
             progress.report(new vscode.LanguageModelTextPart(`\n\n❌ ${errorMessage}\n\n`));
             throw wrappedError;
         } finally {
+            dedup.settle();
             cancelDisposable.dispose();
         }
         log.info(
@@ -2112,6 +2250,18 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 .map(part => {
                     if (part instanceof vscode.LanguageModelTextPart) return part.value;
                     if (part instanceof vscode.LanguageModelDataPart) return `[image:${part.mimeType}]`;
+                    // Agent-loop turns carry tool calls + prompt-tsx results;
+                    // count their serialized size so the UI meter stays honest.
+                    if (part instanceof vscode.LanguageModelToolCallPart) {
+                        return safeStringify(part.input);
+                    }
+                    if (part instanceof vscode.LanguageModelPromptTsxPart) {
+                        try {
+                            return JSON.stringify(part.value);
+                        } catch {
+                            return '[PromptTsxPart]';
+                        }
+                    }
                     return '';
                 })
                 .join('');
@@ -2194,6 +2344,21 @@ function validateMessageSequence(messages: DeepSeekMessage[]): string[] {
     }
 
     return issues;
+}
+
+/**
+ * Resolve the DeepSeek `tool_choice` from the VS Code request's tool mode.
+ *
+ * VS Code's stable `ProvideLanguageModelChatResponseOptions.toolMode`
+ * (`LanguageModelChatToolMode`) tells the provider how tool use must be
+ * handled: Auto (1) = the model may call a tool or answer directly (DeepSeek
+ * `tool_choice: 'auto'`); Required (2) = the model MUST call one of the
+ * provided tools (DeepSeek `tool_choice: 'required'`). The official
+ * vscode.d.ts says "The provider must implement respecting this" — Copilot's
+ * agent loop and chat participants with `#tool:` references rely on it.
+ */
+function resolveToolChoice(toolMode: vscode.LanguageModelChatToolMode | undefined): 'auto' | 'required' {
+    return toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
 }
 
 /**

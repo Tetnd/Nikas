@@ -275,6 +275,14 @@ async function streamDeepSeekChatOnce(
             try {
                 readResult = await reader.read();
             } catch (readErr) {
+                // User/VS Code cancellation — a normal Stop, not an error.
+                // Rethrow the ORIGINAL error so the retry wrapper never
+                // retries an abort (isAbortError short-circuits) and the
+                // provider's catch logs its INFO "aborted mid-stream" line
+                // instead of us polluting the log with an ERROR + stack.
+                if (isAbortError(readErr, signal)) {
+                    throw readErr;
+                }
                 // Stream read failure (e.g., connection dropped mid-stream)
                 const cause = readErr instanceof Error ? readErr.message : String(readErr);
                 log.error('DeepSeek API stream interrupted', readErr);
@@ -646,6 +654,11 @@ async function streamDeepSeekResponsesOnce(
             try {
                 readResult = await reader.read();
             } catch (readErr) {
+                // User/VS Code cancellation — a normal Stop, not an error
+                // (see chat stream catch for rationale).
+                if (isAbortError(readErr, signal)) {
+                    throw readErr;
+                }
                 const cause = readErr instanceof Error ? readErr.message : String(readErr);
                 log.error('DeepSeek Responses stream interrupted', readErr);
                 throw new Error(`DeepSeek Responses stream interrupted: ${cause}`);
