@@ -10,6 +10,9 @@ machineid
 # Auto-generated persistent session memory (Nikas extension)
 nikas.md
 
+# QA scratch: screenshots + capture/OCR helper scripts (not source)
+screenshots/
+
 # Read-only reference clone of archived microsoft/vscode-copilot-chat source
 # (pinned 2026-08-12; repo archived read-only 2026-05-20)
 reference/
