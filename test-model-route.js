@@ -140,5 +140,35 @@ check('auto: disabled → no route', () => {
     assert.strictEqual(r.modelId, undefined);
 });
 
+// ── v0.7.86 per-kind overrides ────────────────────────────────────────────
+
+check('override routes a kind to a pinned model', () => {
+    const r = decideDeepSeekRoute('git-commit-message', 'deepseek-v4-pro', true, 'helpers-only', 0, { 'git-commit-message': 'deepseek-v4-flash' });
+    assert.strictEqual(r.modelId, 'deepseek-v4-flash');
+    assert.ok(r.reason && r.reason.startsWith('override'));
+});
+check('override to same model → no change', () => {
+    const r = decideDeepSeekRoute('git-commit-message', 'deepseek-v4-flash', true, 'helpers-only', 0, { 'git-commit-message': 'deepseek-v4-flash' });
+    assert.strictEqual(r.modelId, undefined);
+});
+check('override wins over auto heavy-task logic', () => {
+    // Heavy main-agent normally → Pro; but an override pins it to Flash.
+    const r = decideDeepSeekRoute('main-agent', 'deepseek-v4-pro', true, 'auto', 52, { 'main-agent': 'deepseek-v4-flash' });
+    assert.strictEqual(r.modelId, 'deepseek-v4-flash');
+});
+check('override with invalid (Responses) value ignored', () => {
+    const r = decideDeepSeekRoute('git-commit-message', 'deepseek-v4-pro', true, 'helpers-only', 0, { 'git-commit-message': 'deepseek-v4-flash-responses' });
+    // Invalid value → not an override → falls through to internal-helper routing → Flash.
+    assert.strictEqual(r.modelId, 'deepseek-v4-flash');
+});
+check('override never applies to a foreign current model', () => {
+    const r = decideDeepSeekRoute('git-commit-message', 'some-other-model', true, 'helpers-only', 0, { 'git-commit-message': 'deepseek-v4-flash' });
+    assert.strictEqual(r.modelId, undefined);
+});
+check('override disabled router → no route', () => {
+    const r = decideDeepSeekRoute('git-commit-message', 'deepseek-v4-pro', false, 'helpers-only', 0, { 'git-commit-message': 'deepseek-v4-flash' });
+    assert.strictEqual(r.modelId, undefined);
+});
+
 console.log(`\ntest-model-route: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

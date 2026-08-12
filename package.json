@@ -2,7 +2,7 @@
   "name": "nikas",
   "displayName": "Nikas",
   "description": "DeepSeek language model provider for VS Code Copilot Chat, with configurable vision preprocessing (Gemma 4 via Ollama or Gemini) and automatic restoration of Copilot Chat PDF support",
-  "version": "0.7.85",
+  "version": "0.7.86",
   "publisher": "nikas",
   "icon": "logo.png",
   "license": "MIT",
@@ -152,6 +152,12 @@
         "title": "Run Agent",
         "category": "Nikas",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "nikas.health",
+        "title": "Health Check",
+        "category": "Nikas",
+        "icon": "$(heart)"
       }
     ],
     "menus": {
@@ -485,6 +491,28 @@
           "enum": ["helpers-only", "auto"],
           "default": "helpers-only",
           "description": "Model-router mode (only applies when nikas.modelRouter is on): 'helpers-only' routes internal helpers to Flash; 'auto' additionally routes heavy agent tasks (main/plan/explore with 10+ tools) to Pro and quick chats (inline/unknown, no tools) to Flash."
+        },
+        "nikas.modelRouterKinds": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": { "type": "string" },
+          "description": "Per-kind model overrides for the router (v0.7.86): a map like { \"git-commit-message\": \"deepseek-v4-flash\" } pinning a request kind to a chat-completions model. Values must be deepseek-v4-flash or deepseek-v4-pro — the Responses model is never routed."
+        },
+        "nikas.toolBudget": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tool-description token budget (v0.7.86): when the mapped tool set exceeds nikas.toolBudgetTokens, the longest tool descriptions are trimmed (names and parameters untouched — tool-calling unchanged). Protects the context window in agent mode. Purely additive — disabling turns it off."
+        },
+        "nikas.toolBudgetTokens": {
+          "type": "number",
+          "default": 12000,
+          "minimum": 500,
+          "description": "Total tool-schema budget in tokens (v0.7.86). Above this, the longest tool descriptions are trimmed to fit."
+        },
+        "nikas.pdfExtractCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Cache pdfjs PDF text extraction per content hash (v0.7.86): re-attaching the same PDF is served from memory instead of re-parsed. Bounded (16 entries, results > 500K chars skipped)."
         },
         "nikas.harnessPermissionGate": {
           "type": "boolean",

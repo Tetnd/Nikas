@@ -1,5 +1,11 @@
 import * as zlib from 'zlib';
 import { log } from '../log.js';
+import {
+    isPdfExtractCacheEnabled,
+    pdfExtractCacheKey,
+    pdfExtractCacheGet,
+    pdfExtractCacheSet,
+} from './extractCache.js';
 
 /**
  * PDF text extraction for DeepSeek content parts.
@@ -152,6 +158,18 @@ export async function extractPdfTextWithPdfjs(
     options?: PdfExtractOptions,
 ): Promise<PdfExtractResult> {
     const empty: PdfExtractResult = { text: '', totalPages: 0, pagesIncluded: 0, truncated: false };
+
+    // v0.7.86 extraction cache: the same PDF payload (content hash) + options
+    // is parsed once and served from memory on re-attachment.
+    const cacheKey = isPdfExtractCacheEnabled() ? pdfExtractCacheKey(data, options) : undefined;
+    if (cacheKey) {
+        const cached = pdfExtractCacheGet(cacheKey);
+        if (cached) {
+            log.info(`[PDF] extraction served from cache (${cached.pagesIncluded}/${cached.totalPages} pages)`);
+            return { ...cached };
+        }
+    }
+
     const api = loadPdfJs();
     if (!api) return empty;
 
@@ -188,12 +206,16 @@ export async function extractPdfTextWithPdfjs(
         }
         const text = chunks.join('\n').trim();
         const pagesIncluded = end - start + 1;
-        return {
+        const result: PdfExtractResult = {
             text,
             totalPages,
             pagesIncluded,
             truncated: pagesIncluded < totalPages,
         };
+        if (cacheKey && text.length > 0) {
+            pdfExtractCacheSet(cacheKey, result);
+        }
+        return result;
     } catch (err) {
         // Log the real reason — this is where the extension host has been
         // failing silently (v0.7.19/v0.7.20), producing garbage from the

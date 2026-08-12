@@ -3,7 +3,7 @@ import { NikasChatProvider } from './provider.js';
 import { chooseProvider } from './commands/chooseProvider.js';
 import { checkForUpdates, scheduleAutoUpdateCheck } from './commands/updateExtension.js';
 import { runPatchCycle, logBundleState } from './pdf/manager.js';
-import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled, getUsageTracking, getAgentCommand } from './config.js';
+import { VISION_MODELS, getConfig, getOllamaBaseUrl, getVisionModelKey, DEEPSEEK_MODELS, CONTEXT_WINDOW_PRESETS, getContextWindowPreset, MAX_TOKENS_PRESETS, getMaxTokensPreset, LOG_LEVELS, getLogLevelSetting, getAutoPatchEnabled, getAutoReloadAfterPatch, REMOVED_SETTINGS, getAgentEffortsEnabled, getUsageTracking, getAgentCommand, getPdfExtractCache } from './config.js';
 import { setLogLevel, log } from './log.js';
 import { visionLog } from './vision/log.js';
 import { listVSCodeVisionModels } from './vision/sources/vscode-lm.js';
@@ -16,9 +16,11 @@ import {
 } from './commands/setup.js';
 import { showUsage, resetUsage, wireUsagePersistence, updateUsageStatusBar } from './commands/usage.js';
 import { setUsageTrackingEnabled } from './usage/tracker.js';
+import { setPdfExtractCacheEnabled } from './pdf/extractCache.js';
 import { wireMemoryPersistence, memoryStore, describeMemoryState } from './memory/manager.js';
 import { showMemory, resetMemory } from './commands/memory.js';
 import { runAgentCommand } from './commands/agent.js';
+import { runHealthCheck } from './commands/health.js';
 
 /**
  * Nikas VS Code Extension — language model provider for Copilot Chat.
@@ -132,8 +134,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 setUsageTrackingEnabled(getUsageTracking());
                 updateUsageStatusBar(usageStatusBar);
             }
+            if (e.affectsConfiguration('nikas.pdfExtractCache')) {
+                setPdfExtractCacheEnabled(getPdfExtractCache());
+            }
         })
     );
+
+    // PDF text-extraction cache flag (v0.7.86) — synced so the pure extract
+    // module never needs to import vscode.
+    setPdfExtractCacheEnabled(getPdfExtractCache());
 
     // Persistent session memory — compaction summaries survive restarts via a
     // per-workspace nikas.md + globalState. Additive; never affects requests.
@@ -180,6 +189,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('nikas.toggleAgentEfforts', () => toggleAgentEfforts()),
         vscode.commands.registerCommand('nikas.usage', () => showUsage()),
         vscode.commands.registerCommand('nikas.resetUsage', () => resetUsage()),
+        vscode.commands.registerCommand('nikas.health', () => runHealthCheck(context)),
         vscode.commands.registerCommand('nikas.memory', () => showMemory()),
         getAgentCommand() ? vscode.commands.registerCommand('nikas.runAgent', () => runAgentCommand(context)) : new vscode.Disposable(() => {}),
         vscode.commands.registerCommand('nikas.manage', () => {
@@ -266,6 +276,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         description: 'Token and estimated-cost dashboard (this session + all time)',
                     },
                     {
+                        label: '$(heart) Health Check',
+                        description: 'One-shot diagnostics: keys, model/router, patches, usage, log',
+                    },
+                    {
                         label: '$(archive) Persistent Memory',
                         description: 'Inspect / clear the session memory saved to nikas.md (survives restarts)',
                     },
@@ -340,6 +354,9 @@ export async function activate(context: vscode.ExtensionContext) {
                         break;
                     case '$(graph-line) Usage & Cost':
                         vscode.commands.executeCommand('nikas.usage');
+                        break;
+                    case '$(heart) Health Check':
+                        vscode.commands.executeCommand('nikas.health');
                         break;
                     case '$(archive) Persistent Memory':
                         showMemory();

@@ -51,6 +51,20 @@ export interface StreamRetryOptions {
 }
 
 /**
+ * Usage reported at stream end (v0.7.86 adds prompt-cache telemetry).
+ *
+ * - Chat completions: `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`.
+ * - Responses API:   `input_tokens_details.cached_tokens` (mapped to
+ *   cacheHitTokens; cacheMissTokens = input - cached).
+ */
+export interface StreamUsage {
+    promptTokens: number;
+    completionTokens: number;
+    cacheHitTokens?: number;
+    cacheMissTokens?: number;
+}
+
+/**
  * Log the full request details for debugging.
  */
 function logRequestDetails(request: DeepSeekRequest): void {
@@ -169,7 +183,7 @@ export async function streamDeepSeekChat(
     signal: AbortSignal,
     onText: (text: string) => void,
     onToolCalls: (toolCalls: CompletedToolCall[]) => void,
-    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void,
+    onComplete: (usage?: StreamUsage) => void,
     retryOptions?: StreamRetryOptions
 ): Promise<StreamResult> {
     let emitted = false;
@@ -195,7 +209,7 @@ async function streamDeepSeekChatOnce(
     signal: AbortSignal,
     onText: (text: string) => void,
     onToolCalls: (toolCalls: CompletedToolCall[]) => void,
-    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void
+    onComplete: (usage?: StreamUsage) => void
 ): Promise<StreamResult> {
     // Ensure stream options are set
     const streamRequest: DeepSeekRequest = {
@@ -267,7 +281,7 @@ async function streamDeepSeekChatOnce(
     // Some OpenAI-compatible providers emit usage on every streaming chunk.
     // Keep only the LATEST value and report it ONCE when the stream completes
     // (upstream #145 — reporting each chunk produced duplicate usage parts).
-    let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
+    let latestUsage: StreamUsage | undefined;
 
     try {
         while (true) {
@@ -355,6 +369,8 @@ async function streamDeepSeekChatOnce(
                         latestUsage = {
                             promptTokens: parsed.usage.prompt_tokens,
                             completionTokens: parsed.usage.completion_tokens,
+                            cacheHitTokens: parsed.usage.prompt_cache_hit_tokens,
+                            cacheMissTokens: parsed.usage.prompt_cache_miss_tokens,
                         };
                     }
                 } catch {
@@ -399,6 +415,8 @@ async function streamDeepSeekChatOnce(
                             latestUsage = {
                                 promptTokens: parsed.usage.prompt_tokens,
                                 completionTokens: parsed.usage.completion_tokens,
+                                cacheHitTokens: parsed.usage.prompt_cache_hit_tokens,
+                                cacheMissTokens: parsed.usage.prompt_cache_miss_tokens,
                             };
                         }
                     } catch {
@@ -437,7 +455,7 @@ export async function streamDeepSeekResponses(
     signal: AbortSignal,
     onText: (text: string) => void,
     onToolCalls: (toolCalls: CompletedToolCall[]) => void,
-    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void,
+    onComplete: (usage?: StreamUsage) => void,
     retryOptions?: StreamRetryOptions
 ): Promise<StreamResult> {
     let emitted = false;
@@ -475,7 +493,7 @@ async function streamDeepSeekResponsesOnce(
     signal: AbortSignal,
     onText: (text: string) => void,
     onToolCalls: (toolCalls: CompletedToolCall[]) => void,
-    onComplete: (usage?: { promptTokens: number; completionTokens: number }) => void
+    onComplete: (usage?: StreamUsage) => void
 ): Promise<StreamResult> {
     const streamRequest: DeepSeekResponsesRequest = {
         ...request,
@@ -531,7 +549,7 @@ async function streamDeepSeekResponsesOnce(
     let reasoningText = '';
     // Latest usage value; reported exactly once at stream end (dedupe fix,
     // upstream #145).
-    let latestUsage: { promptTokens: number; completionTokens: number } | undefined;
+    let latestUsage: StreamUsage | undefined;
 
     /**
      * Process one `data:` payload (a single Responses SSE event).
@@ -630,9 +648,12 @@ async function streamDeepSeekResponsesOnce(
                 const usage = resp?.usage;
                 if (usage) {
                     // Keep the latest value; reported once at stream end.
+                    const cached = usage.input_tokens_details?.cached_tokens;
                     latestUsage = {
                         promptTokens: usage.input_tokens,
                         completionTokens: usage.output_tokens,
+                        cacheHitTokens: cached,
+                        cacheMissTokens: typeof cached === 'number' ? Math.max(0, usage.input_tokens - cached) : undefined,
                     };
                 }
                 break;

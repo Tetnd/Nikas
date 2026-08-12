@@ -7,6 +7,8 @@ CachedProfilesData/
 logs/
 machineid
 .tmp/
+# Auto-generated persistent session memory (Nikas extension)
+nikas.md
 
 # Read-only reference clone of archived microsoft/vscode-copilot-chat source
 # (pinned 2026-08-12; repo archived read-only 2026-05-20)

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SecretStore } from './secrets.js';
-import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter, getModelRouterMode } from './config.js';
+import { DEEPSEEK_MODELS, DEEPSEEK_RESPONSES_MODEL, getConfig, getSelectedModel, getMaxTokens, getTemperature, ThinkingEffort, getThinkingEffort, getContextWindowTokens, getContextWindowPreset, getContextReliabilityLimit, getVisionModelKey, getVisionSource, VisionSource, getConcisePrompt, CONCISE_PROMPT_DIRECTIVE, getCopilotKnowledge, getContextBudget, getContextWarnThreshold, getContextCriticalThreshold, getModelRouter, getModelRouterMode, getModelRouterKinds, getToolBudget, getToolBudgetTokens } from './config.js';
 import { augmentToolDescription, getToolKnowledge } from './harness/copilotKnowledge.js';
 import { vscodeMessagesToDeepSeek, deepseekMessagesToResponsesInput } from './transform/messages.js';
 import { streamDeepSeekChat, streamDeepSeekResponses } from './api/deepseek.js';
@@ -9,7 +9,9 @@ import { resolveImageMessages, resolveSparsePdfVision, resolveVisionDescriber } 
 import { VSCodeLanguageModelVisionDescriber, findAutoVisionModel } from './vision/sources/vscode-lm.js';
 import { createReplayMarkerPart, hasImageParts } from './vision/replay.js';
 import { classifyProviderRequest, resolveAgentEffort, requestKindToAgentKind } from './routing.js';
-import { decideDeepSeekRoute } from './modelRoute.js';import { assertToolsWithinLimit } from './tools/request.js';
+import { decideDeepSeekRoute } from './modelRoute.js';
+import { assertToolsWithinLimit } from './tools/request.js';
+import { trimToolDescriptions, estimateToolTokens } from './tools/budget.js';
 import { getOrCreateSummary, MIN_COMPACT_BLOCK, SUMMARY_MAX_TOKENS } from './context/compact.js';
 import { dropLowValueToolOutput } from './context/budget.js';
 import { usageTracker, setCurrentSessionKey } from './usage/tracker.js';
@@ -1444,7 +1446,7 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         // by default). Auto mode (nikas.modelRouterMode) additionally routes
         // heavy agent tasks to Pro and quick chats to Flash. Never routes the
         // Responses model id to /chat/completions.
-        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter(), getModelRouterMode(), options.tools?.length ?? 0);
+        const route = decideDeepSeekRoute(requestKind, modelId, getModelRouter(), getModelRouterMode(), options.tools?.length ?? 0, getModelRouterKinds());
         if (route.modelId && route.modelId !== modelId) {
             getOutputChannel().appendLine(`[Nikas] Model router: ${modelId} → ${route.modelId} (${route.reason})`);
             modelId = route.modelId;
@@ -1510,6 +1512,19 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (options.tools && options.tools.length > 0) {
             logKnowledgeSummary(options.tools);
             request.tools = options.tools.map(mapTool);
+            // v0.7.86 tool-description budget: in agent mode the tool schemas
+            // are the biggest hidden context cost — trim long descriptions to
+            // fit the budget (names/parameters untouched, tool-calling intact).
+            if (getToolBudget()) {
+                const trimmed = trimToolDescriptions(request.tools, { budgetTokens: getToolBudgetTokens() });
+                if (trimmed.trimmed > 0) {
+                    log.info(
+                        `[tool-budget] trimmed ${trimmed.trimmed} description(s) ` +
+                        `(~${trimmed.savedTokens} tokens freed; ${trimmed.totalTokens.toLocaleString()} → ${estimateToolTokens(trimmed.tools).toLocaleString()})`
+                    );
+                    request.tools = trimmed.tools;
+                }
+            }
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'chat-completions');
             // Honor Copilot's toolMode: Required forces the model to call a tool
@@ -1580,6 +1595,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
 
         // Create an AbortController for cancellation
         const abortController = new AbortController();
+        // v0.7.86 TTFT: time of the first emitted text/tool chunk.
+        let firstChunkAt: number | undefined;
         const cancelDisposable = token.onCancellationRequested(() => {
             // Log whether the stop came from VS Code/Copilot (agent loop) vs a
             // user Stop. A silent mid-turn stop is otherwise indistinguishable
@@ -1598,10 +1615,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 abortController.signal,
                 // onText
                 (text: string) => {
+                    firstChunkAt ??= Date.now();
                     progress.report(new vscode.LanguageModelTextPart(text));
                 },
                 // onToolCalls
                 (toolCalls) => {
+                    firstChunkAt ??= Date.now();
                     // Passive observation: log which native tools DeepSeek actually
                     // requested so we can measure whether the knowledge enrichment
                     // steers it toward Copilot's tools. Read-only — never intercepts
@@ -1641,6 +1660,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             completionTokens: usage.completionTokens,
                             timestamp: Date.now(),
                             latencyMs: Date.now() - startedAt,
+                            ttftMs: firstChunkAt ? firstChunkAt - startedAt : undefined,
+                            cacheHitTokens: usage.cacheHitTokens,
+                            cacheMissTokens: usage.cacheMissTokens,
                             sessionKey,
                             sessionLabel,
                         });
@@ -1875,6 +1897,17 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         if (options.tools && options.tools.length > 0) {
             logKnowledgeSummary(options.tools);
             request.tools = options.tools.map(mapResponsesTool);
+            // v0.7.86 tool-description budget (see chat-completions site).
+            if (getToolBudget()) {
+                const trimmed = trimToolDescriptions(request.tools, { budgetTokens: getToolBudgetTokens() });
+                if (trimmed.trimmed > 0) {
+                    log.info(
+                        `[tool-budget] trimmed ${trimmed.trimmed} description(s) ` +
+                        `(~${trimmed.savedTokens} tokens freed; ${trimmed.totalTokens.toLocaleString()} → ${estimateToolTokens(trimmed.tools).toLocaleString()})`
+                    );
+                    request.tools = trimmed.tools;
+                }
+            }
             // DeepSeek supports at most 128 functions per request (upstream #77).
             assertToolsWithinLimit(request.tools, 'responses');
             // Honor Copilot's toolMode: Required forces the model to call a tool
@@ -1927,6 +1960,8 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
         );
 
         const abortController = new AbortController();
+        // v0.7.86 TTFT: time of the first emitted text/tool chunk.
+        let firstChunkAt: number | undefined;
         const cancelDisposable = token.onCancellationRequested(() => {
             // Log whether the stop came from VS Code/Copilot (agent loop) vs a
             // user Stop. A silent mid-turn stop is otherwise indistinguishable
@@ -1945,10 +1980,12 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                 abortController.signal,
                 // onText
                 (text: string) => {
+                    firstChunkAt ??= Date.now();
                     progress.report(new vscode.LanguageModelTextPart(text));
                 },
                 // onToolCalls
                 (toolCalls) => {
+                    firstChunkAt ??= Date.now();
                     // Passive observation: log which native tools DeepSeek actually
                     // requested so we can measure whether the knowledge enrichment
                     // steers it toward Copilot's tools. Read-only — never intercepts
@@ -1987,6 +2024,9 @@ export class NikasChatProvider implements vscode.LanguageModelChatProvider<vscod
                             completionTokens: usage.completionTokens,
                             timestamp: Date.now(),
                             latencyMs: Date.now() - startedAt,
+                            ttftMs: firstChunkAt ? firstChunkAt - startedAt : undefined,
+                            cacheHitTokens: usage.cacheHitTokens,
+                            cacheMissTokens: usage.cacheMissTokens,
                             sessionKey,
                             sessionLabel,
                         });

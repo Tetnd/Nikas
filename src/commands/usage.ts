@@ -7,17 +7,19 @@
  * extension.ts via wireUsagePersistence().
  */
 import * as vscode from 'vscode';
-import { usageTracker, formatTokens, formatCost, formatLatency, getCurrentSessionKey, type UsageAggregate, type UsageSnapshot, type UsageRecord } from '../usage/tracker.js';
+import { usageTracker, formatTokens, formatCost, formatLatency, formatCacheRate, getCurrentSessionKey, type UsageAggregate, type UsageSnapshot, type UsageRecord } from '../usage/tracker.js';
 
 const STATE_KEY = 'nikas.usageTracker.v1';
 
 function fmtAgg(a: UsageAggregate): string {
+    const cache = formatCacheRate(a.cacheHitTokens, a.cacheMissTokens);
     return [
         `${a.requests} request${a.requests === 1 ? '' : 's'}`,
         `${formatTokens(a.promptTokens)} in`,
         `${formatTokens(a.completionTokens)} out`,
         `${formatTokens(a.totalTokens)} total`,
         `~${formatCost(a.estimatedCost)}`,
+        ...(cache !== '—' ? [`cache ${cache}`] : []),
     ].join(' · ');
 }
 
@@ -181,10 +183,12 @@ export function updateUsageStatusBar(item: vscode.StatusBarItem): void {
 }
 
 function lastRequestDetail(last: UsageRecord): string {
+    const cache = formatCacheRate(last.cacheHitTokens, last.cacheMissTokens);
     return [
         last.model,
         `${formatTokens(last.promptTokens)} in · ${formatTokens(last.completionTokens)} out`,
-        `latency ${formatLatency(last.latencyMs)}`,
+        `TTFT ${formatLatency(last.ttftMs)} · total ${formatLatency(last.latencyMs)}`,
+        ...(cache !== '—' ? [`cache ${cache}`] : []),
         last.sessionLabel ? truncate(last.sessionLabel, 40) : '',
     ].filter(Boolean).join(' · ');
 }
@@ -208,9 +212,13 @@ export function buildMarkdownReport(s: UsageSnapshot): string {
     rows.push(`- **Completion tokens:** ${s.total.completionTokens.toLocaleString()}`);
     rows.push(`- **Total tokens:** ${s.total.totalTokens.toLocaleString()}`);
     rows.push(`- **Estimated cost:** ~${formatCost(s.total.estimatedCost)}`);
+    const cache = formatCacheRate(s.total.cacheHitTokens, s.total.cacheMissTokens);
+    if (cache !== '—') {
+        rows.push(`- **Prompt-cache hit rate:** ${cache} (${(s.total.cacheHitTokens ?? 0).toLocaleString()} hit / ${(s.total.cacheMissTokens ?? 0).toLocaleString()} miss tokens)`);
+    }
     const last = s.recent[0];
     if (last) {
-        rows.push(`- **Last request:** ${last.model} · ${formatTokens(last.promptTokens)} in / ${formatTokens(last.completionTokens)} out · ${formatLatency(last.latencyMs)}`);
+        rows.push(`- **Last request:** ${last.model} · ${formatTokens(last.promptTokens)} in / ${formatTokens(last.completionTokens)} out · TTFT ${formatLatency(last.ttftMs)} · total ${formatLatency(last.latencyMs)}`);
     }
     rows.push('');
     rows.push('## By provider');

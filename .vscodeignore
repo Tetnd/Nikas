@@ -49,3 +49,6 @@ test-pdf-vision-cache.js
 test-model-route.js
 test-permission.js
 test-image-vision.js
+test-tool-budget.js
+test-pdf-extract-cache.js
+test-health.js

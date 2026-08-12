@@ -26,6 +26,12 @@ export interface UsageRecord {
     timestamp: number;
     /** Wall-clock duration of the request in ms (v0.7.85 latency telemetry). */
     latencyMs?: number;
+    /** Time to first text/tool chunk in ms (v0.7.86 TTFT telemetry). */
+    ttftMs?: number;
+    /** DeepSeek prompt-cache hit tokens (v0.7.86 cache telemetry). */
+    cacheHitTokens?: number;
+    /** DeepSeek prompt-cache miss tokens (v0.7.86 cache telemetry). */
+    cacheMissTokens?: number;
     /** Content-derived per-conversation key (optional — empty for unkeyed calls). */
     sessionKey?: string;
     /** Human-readable first-user-message preview, for the per-session view. */
@@ -40,6 +46,10 @@ export interface UsageAggregate {
     /** Estimated USD cost (per-provider pricing applied). */
     estimatedCost: number;
     lastUsed: number;
+    /** DeepSeek prompt-cache hit tokens (v0.7.86). */
+    cacheHitTokens?: number;
+    /** DeepSeek prompt-cache miss tokens (v0.7.86). */
+    cacheMissTokens?: number;
 }
 
 export interface UsageSnapshot {
@@ -139,6 +149,12 @@ export class UsageTracker {
                 a.totalTokens += rec.promptTokens + rec.completionTokens;
                 a.estimatedCost += cost;
                 a.lastUsed = rec.timestamp;
+                if (typeof rec.cacheHitTokens === 'number') {
+                    a.cacheHitTokens = (a.cacheHitTokens ?? 0) + rec.cacheHitTokens;
+                }
+                if (typeof rec.cacheMissTokens === 'number') {
+                    a.cacheMissTokens = (a.cacheMissTokens ?? 0) + rec.cacheMissTokens;
+                }
                 return a;
             };
 
@@ -245,6 +261,15 @@ export function formatLatency(ms: number | undefined): string {
     const m = Math.floor(ms / 60_000);
     const s = Math.round((ms % 60_000) / 1000);
     return `${m}m ${s}s`;
+}
+
+/**
+ * Format a DeepSeek prompt-cache rate as a percent string (v0.7.86).
+ * Returns '—' when there is no cache data.
+ */
+export function formatCacheRate(hit: number | undefined, miss: number | undefined): string {
+    if (typeof hit !== 'number' || typeof miss !== 'number' || hit + miss <= 0) return '—';
+    return `${Math.round((hit / (hit + miss)) * 100)}%`;
 }
 
 // ---------------------------------------------------------------------------

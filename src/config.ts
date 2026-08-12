@@ -603,6 +603,50 @@ export function getModelRouterMode(): 'helpers-only' | 'auto' {
 }
 
 /**
+ * Per-kind model overrides for the router (v0.7.86): a settings map like
+ * `{ "git-commit-message": "deepseek-v4-flash" }`. Keys are request kinds;
+ * values are validated against the chat-completions family at decision time
+ * (never the Responses model). Returns {} when unset or malformed.
+ */
+export function getModelRouterKinds(): Record<string, string> {
+    try {
+        const raw = getConfig().get<Record<string, string>>('modelRouterKinds');
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(raw)) {
+            if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+        }
+        return out;
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * Whether the tool-description budget is active (v0.7.86): when the mapped
+ * tool set exceeds `nikas.toolBudgetTokens`, the longest descriptions are
+ * trimmed (names/parameters untouched). Purely additive — disabling turns it
+ * off. Default true.
+ */
+export function getToolBudget(): boolean {
+    return getConfig().get<boolean>('toolBudget') ?? true;
+}
+
+/** Total tool-schema budget in tokens (v0.7.86). Default 12_000. */
+export function getToolBudgetTokens(): number {
+    const v = getConfig().get<number>('toolBudgetTokens');
+    return typeof v === 'number' && v >= 500 ? Math.floor(v) : 12_000;
+}
+
+/**
+ * Whether pdfjs PDF text extraction is cached per content hash (v0.7.86), so
+ * re-attaching the same PDF never re-parses it. Default true.
+ */
+export function getPdfExtractCache(): boolean {
+    return getConfig().get<boolean>('pdfExtractCache') ?? true;
+}
+
+/**
  * Whether the harness (Nikas: Run Agent) gates terminal commands with the
  * fail-closed permission classifier (v0.7.85). Default true.
  */

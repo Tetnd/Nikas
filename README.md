@@ -31,6 +31,12 @@ Nikas is a fork of the [Nika](https://github.com/alive2/nika) extension. It adds
 - **⏹️ Cancellation propagation** — the agent harness now stops cleanly on abort: abort-aware retries, no new tool calls after cancel, and an `aborted` result instead of a thrown error
 - **🔍 Structured image extraction** — image attachments are described with a structured OCR/layout prompt (verbatim text, tables as markdown, no invented content), and large image sets are described in sequential batches under the vision model's per-call image cap
 - **⏱️ Latency telemetry** — per-request wall-clock latency is recorded and surfaced: the usage status bar shows the last request's latency, and the dashboard/report include a “Last request” breakdown
+- **💾 Prompt-cache telemetry** — DeepSeek prompt-cache hit/miss tokens are tracked and shown as a cache-hit % in the usage dashboard and report, so you can see real savings from prompt caching
+- **🚀 Time-to-first-token (TTFT)** — per-request TTFT is measured alongside total latency and shown in the “Last request” breakdown
+- **🧠 Tool-description budget** — in agent mode (where tool schemas are the biggest hidden context cost) the longest tool descriptions are trimmed to fit a token budget (names/parameters untouched), protecting the context window
+- **⚡ PDF extraction cache** — pdfjs text extraction is cached per content hash, so re-attaching the same PDF is served from memory instead of re-parsed (bounded, oversized results skipped)
+- **🎛️ Router per-kind overrides** — pin any request kind (e.g. `git-commit-message`) to a specific model via `nikas.modelRouterKinds`
+- **💓 Health Check** — `Nikas: Health Check` gives a one-shot read-only diagnostics report (keys, model/router, patches, usage, log) in an output channel + QuickPick
 - **Local-first vision** — Gemma 4 runs on your own machine via Ollama, no cloud API key needed
 
 ## Quick Start
@@ -167,6 +173,7 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `Nikas: Reset Usage Stats` | Clear all recorded usage (with confirmation) |
 | `Nikas: Persistent Memory` | Inspect the session memory saved to `nikas.md` (survives restarts) |
 | `Nikas: Run Agent` | Run a task through the built-in agent harness loop in the current workspace, streaming to an output channel |
+| `Nikas: Health Check` | One-shot read-only diagnostics: keys, model/router, PDF patches, usage + cache, log |
 | `Manage Nikas Models` | Manage API keys, model selection, vision provider, Ollama host, and PDF patches |
 
 ## Settings
@@ -201,6 +208,10 @@ The API key is stored in `%USERPROFILE%\.nikas-claude-key` (never in a committed
 | `nikas.harnessToolCache` | `true` | Cache read-only tool results within a single harness run (identical calls execute once) |
 | `nikas.visionStructured` | `true` | Use the structured image-extraction prompt (OCR, tables as markdown, layout — no invented content) |
 | `nikas.maxImagesPerVisionCall` | `8` | Max images per vision-model call; larger sets are described in sequential batches and combined |
+| `nikas.modelRouterKinds` | `{}` | Per-kind model overrides for the router, e.g. `{ "git-commit-message": "deepseek-v4-flash" }` (values must be a chat-completions model) |
+| `nikas.toolBudget` | `true` | Tool-description token budget: trims long descriptions to fit the budget when the tool set is large |
+| `nikas.toolBudgetTokens` | `12000` | Total tool-schema token budget above which descriptions are trimmed |
+| `nikas.pdfExtractCache` | `true` | Cache pdfjs PDF text extraction per content hash (re-attachments are served from memory) |
 | `nikas.applyAgentModelsOnActivate` | `true` | On activation, apply recommended Copilot agent model assignments (Explore, Plan, Inline Chat → `nikas/deepseek-v4-flash-responses`) for agents the user hasn't configured. Never overrides an existing choice |
 
 ## How It Works

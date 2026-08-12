@@ -65,17 +65,30 @@ export interface RouteDecision {
  *                       'auto': helpers → Flash, heavy agent tasks → Pro,
  *                       quick chats (inline/unknown, no tools) → Flash.
  * @param toolCount      number of tools in the request (used by auto mode).
+ * @param overrides      per-kind model overrides (nikas.modelRouterKinds).
+ *                       Applied first; values must be chat-completions family
+ *                       ids (never the Responses model).
  */
 export function decideDeepSeekRoute(
     requestKind: RequestKind,
     currentModelId: string,
     enabled: boolean,
     mode: ModelRouterMode = 'helpers-only',
-    toolCount = 0
+    toolCount = 0,
+    overrides: Record<string, string> = {}
 ): RouteDecision {
     if (!enabled) return {};
     // Only consider the chat-completions family — never the Responses model.
     if (!DEEPSEEK_CHAT_MODELS.includes(currentModelId as (typeof DEEPSEEK_CHAT_MODELS)[number])) {
+        return {};
+    }
+
+    // Per-kind overrides (v0.7.86): user-pinned request kinds win.
+    const override = overrides[requestKind];
+    if (override && DEEPSEEK_CHAT_MODELS.includes(override as (typeof DEEPSEEK_CHAT_MODELS)[number])) {
+        if (override !== currentModelId) {
+            return { modelId: override, reason: `override:${requestKind}` };
+        }
         return {};
     }
 

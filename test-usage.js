@@ -7,7 +7,7 @@
 // formatTokens / formatCost, the enabled flag, and the "record() never throws"
 // guarantee that keeps the request path safe.
 
-const { UsageTracker, formatTokens, formatCost, formatLatency, setUsageTrackingEnabled, isUsageTrackingEnabled } =
+const { UsageTracker, formatTokens, formatCost, formatLatency, formatCacheRate, setUsageTrackingEnabled, isUsageTrackingEnabled } =
     require('./out/usage/tracker.js');
 
 let passed = 0;
@@ -236,6 +236,31 @@ assert(formatLatency(65_000) === '1m 5s', 'formatLatency(65000)');
 assert(formatLatency(undefined) === '—', 'formatLatency(undefined)');
 assert(formatLatency(-5) === '—', 'formatLatency(negative)');
 assert(formatLatency(NaN) === '—', 'formatLatency(NaN)');
+
+// ── 15. formatCacheRate (v0.7.86) ──
+assert(formatCacheRate(6000, 4000) === '60%', 'formatCacheRate 60%');
+assert(formatCacheRate(10, 0) === '100%', 'formatCacheRate all-hit');
+assert(formatCacheRate(0, 10) === '0%', 'formatCacheRate all-miss');
+assert(formatCacheRate(undefined, undefined) === '—', 'formatCacheRate no data');
+assert(formatCacheRate(0, 0) === '—', 'formatCacheRate zero total');
+
+// ── 16. cache + TTFT aggregation (v0.7.86) ──
+{
+    const t = new UsageTracker();
+    t.record({ provider: 'deepseek', model: 'm', promptTokens: 100, completionTokens: 10, timestamp: 1, cacheHitTokens: 60, cacheMissTokens: 40, ttftMs: 200 });
+    t.record({ provider: 'deepseek', model: 'm', promptTokens: 100, completionTokens: 10, timestamp: 2, cacheHitTokens: 80, cacheMissTokens: 20, ttftMs: 150 });
+    const s = t.snapshot();
+    assert(s.total.cacheHitTokens === 140, 'total cacheHitTokens summed');
+    assert(s.total.cacheMissTokens === 60, 'total cacheMissTokens summed');
+    assert(formatCacheRate(s.total.cacheHitTokens, s.total.cacheMissTokens) === '70%', 'aggregate cache rate 70%');
+    const last = t.lastRequest();
+    assert(last && last.ttftMs === 150, 'ttftMs preserved on lastRequest');
+    // hydrate round-trip keeps cache + ttft
+    const t2 = new UsageTracker();
+    t2.hydrate(s);
+    assert(t2.total.cacheHitTokens === 140, 'cache survives hydrate');
+    assert(t2.lastRequest()?.ttftMs === 150, 'ttft survives hydrate');
+}
 
 console.log('');
 console.log(`test-usage: ${passed} passed, ${failed} failed`);
