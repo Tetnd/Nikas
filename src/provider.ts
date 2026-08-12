@@ -2782,6 +2782,12 @@ function buildThinkingEffortSchema() {
  * matches the model's strengths. See LanguageModelChatCapabilities.editTools.
  * Cast through a loose type because the `editTools` field is a proposed API
  * that may not be in the compiled vscode.d.ts.
+ *
+ * REQUIRES the `chatProvider` API proposal in package.json#enabledApiProposals:
+ * the extension host throws `CANNOT use API proposal: chatProvider` for any
+ * model whose capabilities contain `editTools` unless the extension declares
+ * the proposal — which aborts the ENTIRE provider model list (empty picker).
+ * See v0.7.91 for the fix that added `"chatProvider"` to enabledApiProposals.
  */
 function withEditTools(capabilities: unknown): unknown {
     return {
